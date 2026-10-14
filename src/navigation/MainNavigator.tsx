@@ -5,28 +5,27 @@ import { MainTabParamList } from '../types/navigation';
 import { MapScreen } from '../screens/main/MapScreen';
 import { MissionScreen } from '../screens/main/MissionScreen';
 import { Colors } from '../constants/theme';
-import { Map, ClipboardList, AlertTriangle, Monitor, AlertCircle } from 'lucide-react-native';
+import { Map, Plus, Bell, Users, Settings } from 'lucide-react-native';
 
 const Tab = createBottomTabNavigator<MainTabParamList>();
 
-// Placeholder screens for tabs not yet designed
 const AlertScreen = () => (
   <View style={styles.placeholder}>
-    <AlertTriangle size={40} color={Colors.warning} />
+    <Bell size={40} color={Colors.warning} />
     <Text style={styles.placeholderText}>Cảnh báo</Text>
   </View>
 );
 
-const MonitorScreen = () => (
+const DensityScreen = () => (
   <View style={styles.placeholder}>
-    <Monitor size={40} color={Colors.primary} />
-    <Text style={styles.placeholderText}>Màn độ</Text>
+    <Users size={40} color={Colors.primary} />
+    <Text style={styles.placeholderText}>Mật độ</Text>
   </View>
 );
 
 const ErrorScreen = () => (
   <View style={styles.placeholder}>
-    <AlertCircle size={40} color={Colors.error} />
+    <Settings size={40} color={Colors.error} />
     <Text style={styles.placeholderText}>Lỗi hệ thống</Text>
   </View>
 );
@@ -36,8 +35,8 @@ export function MainNavigator() {
     <Tab.Navigator
       screenOptions={{
         headerShown: false,
-        tabBarActiveTintColor: Colors.teal,
-        tabBarInactiveTintColor: Colors.textMuted,
+        tabBarActiveTintColor: Colors.primary,
+        tabBarInactiveTintColor: '#94A3B8',
         tabBarStyle: {
           backgroundColor: Colors.surface,
           borderTopColor: Colors.border,
@@ -46,8 +45,9 @@ export function MainNavigator() {
           paddingTop: 6,
         },
         tabBarLabelStyle: {
-          fontSize: 11,
-          fontWeight: '600',
+          fontSize: 10,
+          fontWeight: '700',
+          textTransform: 'uppercase',
         },
       }}
     >
@@ -64,7 +64,15 @@ export function MainNavigator() {
         component={MissionScreen}
         options={{
           tabBarLabel: 'Nhiệm vụ',
-          tabBarIcon: ({ color, size }) => <ClipboardList size={size} color={color} />,
+          tabBarIcon: ({ color, size }) => <Plus size={size} color={color} />,
+        }}
+      />
+      <Tab.Screen
+        name="Favorites"
+        component={AlertScreen}
+        options={{
+          tabBarLabel: 'Cảnh báo',
+          tabBarIcon: ({ color, size }) => <Bell size={size} color={color} />,
           tabBarBadge: 2,
           tabBarBadgeStyle: {
             backgroundColor: '#EF4444',
@@ -74,19 +82,11 @@ export function MainNavigator() {
         }}
       />
       <Tab.Screen
-        name="Favorites"
-        component={AlertScreen}
-        options={{
-          tabBarLabel: 'Cảnh báo',
-          tabBarIcon: ({ color, size }) => <AlertTriangle size={size} color={color} />,
-        }}
-      />
-      <Tab.Screen
         name="Profile"
-        component={MonitorScreen}
+        component={DensityScreen}
         options={{
-          tabBarLabel: 'Màn độ',
-          tabBarIcon: ({ color, size }) => <Monitor size={size} color={color} />,
+          tabBarLabel: 'Mật độ',
+          tabBarIcon: ({ color, size }) => <Users size={size} color={color} />,
         }}
       />
       <Tab.Screen
@@ -94,7 +94,7 @@ export function MainNavigator() {
         component={ErrorScreen}
         options={{
           tabBarLabel: 'Lỗi',
-          tabBarIcon: ({ color, size }) => <AlertCircle size={size} color={color} />,
+          tabBarIcon: ({ color, size }) => <Settings size={size} color={color} />,
         }}
       />
     </Tab.Navigator>

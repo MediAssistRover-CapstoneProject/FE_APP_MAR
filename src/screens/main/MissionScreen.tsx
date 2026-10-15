@@ -11,7 +11,9 @@ import {
   Alert,
 } from 'react-native';
 import { Colors, Spacing, BorderRadius, Typography, Shadows } from '../../constants/theme';
-import { ScanLine, Camera, ChevronDown, ArrowRight } from 'lucide-react-native';
+import { ScanLine, Camera, ChevronDown, ArrowRight, Check } from 'lucide-react-native';
+import { QRScannerModal, QRItemInfo } from '../../components/scanning/QRScannerModal';
+import { FaceScanModal } from '../../components/scanning/FaceScanModal';
 
 // ===== Kiểu dữ liệu =====
 type TaskType =
@@ -54,6 +56,12 @@ export const MissionScreen: React.FC = () => {
   const [priority, setPriority] = useState<PriorityLevel>('high');
   const [deadline, setDeadline] = useState('');
   const [notes, setNotes] = useState('');
+
+  // Modal states
+  const [showQRScanner, setShowQRScanner] = useState(false);
+  const [showFaceScan, setShowFaceScan] = useState(false);
+  const [scannedItem, setScannedItem] = useState<QRItemInfo | null>(null);
+  const [faceVerified, setFaceVerified] = useState(false);
 
   // ===== Handlers =====
   const toggleTask = useCallback((id: TaskType) => {
@@ -119,11 +127,42 @@ export const MissionScreen: React.FC = () => {
               <Text style={styles.sectionLabel}>QUÉT QR VẬT PHẨM</Text>
               <Text style={styles.sectionCaption}>Quét mã để đăng ký vào đơn vận chuyển robot</Text>
             </View>
-            <TouchableOpacity style={styles.outlineBtn} activeOpacity={0.8}>
-              <ScanLine size={14} color={Colors.teal} />
-              <Text style={styles.outlineBtnText}>Quét</Text>
+            <TouchableOpacity
+              style={[styles.outlineBtn, scannedItem && styles.outlineBtnSuccess]}
+              onPress={() => setShowQRScanner(true)}
+              activeOpacity={0.8}
+            >
+              {scannedItem ? (
+                <>
+                  <Check size={14} color="#10B981" />
+                  <Text style={[styles.outlineBtnText, { color: '#10B981' }]}>Đã quét</Text>
+                </>
+              ) : (
+                <>
+                  <ScanLine size={14} color={Colors.teal} />
+                  <Text style={styles.outlineBtnText}>Quét</Text>
+                </>
+              )}
             </TouchableOpacity>
           </View>
+
+          {/* Hiển thị thông tin vật phẩm đã quét */}
+          {scannedItem && (
+            <View style={styles.scannedItemBox}>
+              <View style={styles.scannedItemRow}>
+                <Text style={styles.scannedItemLabel}>Vật phẩm:</Text>
+                <Text style={styles.scannedItemValue}>{scannedItem.code}</Text>
+              </View>
+              <View style={styles.scannedItemRow}>
+                <Text style={styles.scannedItemLabel}>Serial:</Text>
+                <Text style={styles.scannedItemValue}>{scannedItem.serialNumber}</Text>
+              </View>
+              <View style={styles.scannedItemRow}>
+                <Text style={styles.scannedItemLabel}>Số lượng:</Text>
+                <Text style={styles.scannedItemValue}>{scannedItem.quantity}</Text>
+              </View>
+            </View>
+          )}
 
           <View style={styles.twoCol}>
             <View style={[styles.fieldGroup, { flex: 2 }]}>
@@ -237,11 +276,36 @@ export const MissionScreen: React.FC = () => {
           {/* Face Recognition Extra UI */}
           {securityLevel === 'face' && (
             <View style={styles.faceRegisterBox}>
-              <Text style={styles.faceRegisterTitle}>Đăng ký khuôn mặt người nhận</Text>
-              <TouchableOpacity style={styles.photoBtn} activeOpacity={0.85}>
-                <Camera size={20} color={Colors.textInverse} />
-                <Text style={styles.photoBtnText}>Chụp ảnh đăng ký</Text>
-              </TouchableOpacity>
+              <Text style={styles.faceRegisterTitle}>
+                Đăng ký khuôn mặt người nhận:{' '}
+                <Text style={{ color: Colors.primary }}>{receiver}</Text>
+              </Text>
+              {faceVerified ? (
+                <View style={styles.faceVerifiedRow}>
+                  <View style={styles.faceVerifiedBadge}>
+                    <Check size={14} color="#10B981" strokeWidth={3} />
+                    <Text style={styles.faceVerifiedText}>Đã xác minh khuôn mặt</Text>
+                  </View>
+                  <TouchableOpacity
+                    onPress={() => {
+                      setFaceVerified(false);
+                      setShowFaceScan(true);
+                    }}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={styles.retakeFaceText}>Chụp lại</Text>
+                  </TouchableOpacity>
+                </View>
+              ) : (
+                <TouchableOpacity
+                  style={styles.photoBtn}
+                  onPress={() => setShowFaceScan(true)}
+                  activeOpacity={0.85}
+                >
+                  <Camera size={20} color={Colors.textInverse} />
+                  <Text style={styles.photoBtnText}>Chụp ảnh đăng ký khuôn mặt</Text>
+                </TouchableOpacity>
+              )}
             </View>
           )}
         </View>
@@ -326,6 +390,28 @@ export const MissionScreen: React.FC = () => {
           <ArrowRight size={18} color="#FFF" strokeWidth={2.5} />
         </TouchableOpacity>
       </ScrollView>
+
+      {/* ===== QR SCANNER MODAL ===== */}
+      <QRScannerModal
+        visible={showQRScanner}
+        onClose={() => setShowQRScanner(false)}
+        onConfirm={(item) => {
+          setScannedItem(item);
+          setItemName(item.code);
+          setShowQRScanner(false);
+        }}
+      />
+
+      {/* ===== FACE SCAN MODAL ===== */}
+      <FaceScanModal
+        visible={showFaceScan}
+        receiverName={receiver}
+        onClose={() => setShowFaceScan(false)}
+        onConfirm={() => {
+          setFaceVerified(true);
+          setShowFaceScan(false);
+        }}
+      />
     </KeyboardAvoidingView>
   );
 };
@@ -427,6 +513,30 @@ const styles = StyleSheet.create({
     backgroundColor: '#F59E0B', borderRadius: BorderRadius.md, height: 46,
   },
   photoBtnText: { fontSize: 14, fontWeight: '700', color: '#FFF' },
+  // Face verified
+  faceVerifiedRow: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 4,
+  },
+  faceVerifiedBadge: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    backgroundColor: '#D1FAE5', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6,
+  },
+  faceVerifiedText: { fontSize: 13, fontWeight: '700', color: '#10B981' },
+  retakeFaceText: { fontSize: 12, fontWeight: '600', color: Colors.primary },
+  // QR scanned item box
+  scannedItemBox: {
+    backgroundColor: '#F0FDF4', borderRadius: BorderRadius.md, padding: 12,
+    marginTop: 10, borderWidth: 1, borderColor: '#BBF7D0',
+  },
+  scannedItemRow: {
+    flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 3,
+  },
+  scannedItemLabel: { fontSize: 12, color: Colors.textSecondary },
+  scannedItemValue: { fontSize: 12, fontWeight: '700', color: Colors.textPrimary },
+  // QR outline button success state
+  outlineBtnSuccess: {
+    borderColor: '#10B981', backgroundColor: '#F0FDF4',
+  },
   // Priority
   priorityItem: {
     flex: 1, paddingVertical: 9, borderRadius: BorderRadius.md,

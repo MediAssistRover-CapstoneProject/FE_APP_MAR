@@ -4,17 +4,11 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { MainTabParamList } from '../types/navigation';
 import { MapScreen } from '../screens/main/MapScreen';
 import { MissionScreen } from '../screens/main/MissionScreen';
+import { AlertScreen } from '../screens/main/AlertScreen';
 import { Colors } from '../constants/theme';
-import { Map, Plus, Bell, Users, Settings } from 'lucide-react-native';
+import { Map, Plus, Bell, Users, AlertOctagon } from 'lucide-react-native';
 
 const Tab = createBottomTabNavigator<MainTabParamList>();
-
-const AlertScreen = () => (
-  <View style={styles.placeholder}>
-    <Bell size={40} color={Colors.warning} />
-    <Text style={styles.placeholderText}>Cảnh báo</Text>
-  </View>
-);
 
 const DensityScreen = () => (
   <View style={styles.placeholder}>
@@ -23,10 +17,10 @@ const DensityScreen = () => (
   </View>
 );
 
-const ErrorScreen = () => (
+const IncidentScreen = () => (
   <View style={styles.placeholder}>
-    <Settings size={40} color={Colors.error} />
-    <Text style={styles.placeholderText}>Lỗi hệ thống</Text>
+    <AlertOctagon size={40} color={Colors.error} />
+    <Text style={styles.placeholderText}>Sự cố</Text>
   </View>
 );
 
@@ -91,10 +85,10 @@ export function MainNavigator() {
       />
       <Tab.Screen
         name="Errors"
-        component={ErrorScreen}
+        component={IncidentScreen}
         options={{
-          tabBarLabel: 'Lỗi',
-          tabBarIcon: ({ color, size }) => <Settings size={size} color={color} />,
+          tabBarLabel: 'Sự cố',
+          tabBarIcon: ({ color, size }) => <AlertOctagon size={size} color={color} />,
         }}
       />
     </Tab.Navigator>

@@ -10,6 +10,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AppText } from '../../components/ui';
 import { LogisticsStepper } from '../../components/LogisticsStepper';
+import { robotApiService } from '../../services/api';
 
 export type NoAuthStage =
   | 'arrived' // Ảnh 1: Robot đã đến P. Điều dưỡng (Đang chờ người nhận · Thùng vẫn khóa)
@@ -28,6 +29,32 @@ export function NoAuthDeliveryMissionScreen() {
   const [closeCountdown, setCloseCountdown] = useState(29);
   const [isSearching, setIsSearching] = useState(false);
 
+  // Live Railway API Connection Status
+  const [apiStatus, setApiStatus] = useState<{
+    connected: boolean;
+    latencyMs: number;
+    lastCall?: string;
+    lastResult?: string;
+    loading: boolean;
+  }>({
+    connected: false,
+    latencyMs: 0,
+    loading: false,
+  });
+
+  // Check live API reachability on mount
+  useEffect(() => {
+    robotApiService.pingServer().then((res) => {
+      setApiStatus((prev) => ({
+        ...prev,
+        connected: res.ok,
+        latencyMs: res.latencyMs,
+        lastCall: 'GET /api/v1/public/zones',
+        lastResult: res.ok ? `200 OK (${res.latencyMs}ms)` : res.error || 'Lỗi kết nối',
+      }));
+    });
+  }, []);
+
   // Countdown timer for searching state (58s)
   useEffect(() => {
     if (stage !== 'searching') return;
@@ -45,6 +72,104 @@ export function NoAuthDeliveryMissionScreen() {
     }, 1000);
     return () => clearInterval(interval);
   }, [stage]);
+
+  // Real API Calls for Unhappy cases and lifecycle
+  const handleTriggerObstacleApi = async () => {
+    setStage('obstacle');
+    setApiStatus((prev) => ({ ...prev, loading: true }));
+    try {
+      const res = await robotApiService.reportStepError(
+        'step-vt001-03',
+        'OBSTACLE_BLOCKED',
+        { distanceM: 1.2, sensor: 'LIDAR_ULTRASONIC', action: 'SEARCHING_REROUTE' },
+      );
+      setApiStatus((prev) => ({
+        ...prev,
+        loading: false,
+        lastCall: 'POST /api/v1/pi/job-steps/step-vt001-03/errors',
+        lastResult: JSON.stringify(res || { status: 'ERROR_RECORDED' }),
+      }));
+    } catch (err: unknown) {
+      setApiStatus((prev) => ({
+        ...prev,
+        loading: false,
+        lastCall: 'POST /api/v1/pi/job-steps/step-vt001-03/errors',
+        lastResult: err instanceof Error ? err.message : String(err),
+      }));
+    }
+  };
+
+  const handleTriggerSearchingApi = async () => {
+    setSearchCountdown(58);
+    setStage('searching');
+    setApiStatus((prev) => ({ ...prev, loading: true }));
+    try {
+      const res = await robotApiService.reportStepStarted('step-vt001-04', 'job-vt001');
+      setApiStatus((prev) => ({
+        ...prev,
+        loading: false,
+        lastCall: 'POST /api/v1/pi/job-steps/step-vt001-04/started',
+        lastResult: JSON.stringify(res || { status: 'STARTED' }),
+      }));
+    } catch (err: unknown) {
+      setApiStatus((prev) => ({
+        ...prev,
+        loading: false,
+        lastCall: 'POST /api/v1/pi/job-steps/step-vt001-04/started',
+        lastResult: err instanceof Error ? err.message : String(err),
+      }));
+    }
+  };
+
+  const handleTriggerReturnApi = async () => {
+    setStage('returning');
+    setApiStatus((prev) => ({ ...prev, loading: true }));
+    try {
+      const res = await robotApiService.reportJobError(
+        'job-vt001',
+        'TASK_CANCELLED_BY_STAFF',
+        'Staff xác nhận hủy nhiệm vụ tại P. Điều dưỡng',
+        { returnDestination: 'Kho vật tư - Zone A' },
+      );
+      setApiStatus((prev) => ({
+        ...prev,
+        loading: false,
+        lastCall: 'POST /api/v1/pi/jobs/job-vt001/errors',
+        lastResult: JSON.stringify(res || { status: 'RETURNING_TO_BASE' }),
+      }));
+    } catch (err: unknown) {
+      setApiStatus((prev) => ({
+        ...prev,
+        loading: false,
+        lastCall: 'POST /api/v1/pi/jobs/job-vt001/errors',
+        lastResult: err instanceof Error ? err.message : String(err),
+      }));
+    }
+  };
+
+  const handleTriggerArrivedApi = async () => {
+    setStage('arrived');
+    setApiStatus((prev) => ({ ...prev, loading: true }));
+    try {
+      const res = await robotApiService.reportStepResult('step-vt001-04', {
+        arrivedAt: new Date().toISOString(),
+        location: 'P. Điều dưỡng - Zone A',
+      });
+      setApiStatus((prev) => ({
+        ...prev,
+        loading: false,
+        lastCall: 'POST /api/v1/pi/job-steps/step-vt001-04/result',
+        lastResult: JSON.stringify(res || { status: 'STEP_COMPLETED' }),
+      }));
+    } catch (err: unknown) {
+      setApiStatus((prev) => ({
+        ...prev,
+        loading: false,
+        lastCall: 'POST /api/v1/pi/job-steps/step-vt001-04/result',
+        lastResult: err instanceof Error ? err.message : String(err),
+      }));
+    }
+  };
 
   // Countdown timer for warning close (29s)
   useEffect(() => {
@@ -695,51 +820,77 @@ export function NoAuthDeliveryMissionScreen() {
 
           <View style={styles.simButtonsGrid}>
             <Pressable
-              onPress={() => setStage('obstacle')}
+              onPress={handleTriggerObstacleApi}
               style={[
                 styles.simBtn,
                 stage === 'obstacle' && styles.simBtnActiveWarning,
               ]}
             >
               <Ionicons name="warning-outline" size={14} color="#D97706" />
-              <AppText style={styles.simBtnText}>1. API: Bị chặn đường (Ảnh 3)</AppText>
+              <AppText style={styles.simBtnText}>1. Gọi API: Bị chặn đường (Ảnh 3)</AppText>
             </Pressable>
 
             <Pressable
-              onPress={() => {
-                setSearchCountdown(58);
-                setStage('searching');
-              }}
+              onPress={handleTriggerSearchingApi}
               style={[
                 styles.simBtn,
                 stage === 'searching' && styles.simBtnActiveOrange,
               ]}
             >
               <Ionicons name="person-outline" size={14} color="#0284C7" />
-              <AppText style={styles.simBtnText}>2. API: Tìm người nhận (Ảnh 4)</AppText>
+              <AppText style={styles.simBtnText}>2. Gọi API: Tìm người nhận (Ảnh 4)</AppText>
             </Pressable>
 
             <Pressable
-              onPress={() => setStage('returning')}
+              onPress={handleTriggerReturnApi}
               style={[
                 styles.simBtn,
                 stage === 'returning' && styles.simBtnActiveRed,
               ]}
             >
               <Ionicons name="return-up-back-outline" size={14} color="#DC2626" />
-              <AppText style={styles.simBtnText}>3. API: Staff hủy quay về (Ảnh 2)</AppText>
+              <AppText style={styles.simBtnText}>3. Gọi API: Staff hủy quay về (Ảnh 2)</AppText>
             </Pressable>
 
             <Pressable
-              onPress={() => setStage('arrived')}
+              onPress={handleTriggerArrivedApi}
               style={[
                 styles.simBtn,
                 stage === 'arrived' && styles.simBtnActiveBlue,
               ]}
             >
               <Ionicons name="checkmark-done-outline" size={14} color="#059669" />
-              <AppText style={styles.simBtnText}>4. API: Đến nơi bình thường (Ảnh 1)</AppText>
+              <AppText style={styles.simBtnText}>4. Gọi API: Đến nơi bình thường (Ảnh 1)</AppText>
             </Pressable>
+          </View>
+
+          {/* Live API Console / Inspector */}
+          <View style={styles.liveConsoleBox}>
+            <View style={styles.consoleHeader}>
+              <View
+                style={[
+                  styles.statusCircle,
+                  { backgroundColor: apiStatus.connected ? '#10B981' : '#F59E0B' },
+                ]}
+              />
+              <AppText style={styles.consoleTitle}>
+                {apiStatus.connected
+                  ? `Railway Live Server (${apiStatus.latencyMs}ms)`
+                  : 'Đang kết nối Máy chủ Railway...'}
+              </AppText>
+              {apiStatus.loading && (
+                <AppText style={styles.consoleLoadingText}>Đang gửi...</AppText>
+              )}
+            </View>
+
+            {apiStatus.lastCall && (
+              <View style={styles.consoleDetails}>
+                <AppText style={styles.consoleEndpointText}>{apiStatus.lastCall}</AppText>
+                <AppText style={styles.consoleResultText} numberOfLines={2}>
+                  {apiStatus.lastResult}
+                </AppText>
+              </View>
+            )}
           </View>
         </View>
 
@@ -1616,6 +1767,52 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '700',
     color: '#1E293B',
+  },
+  // Live Console Box
+  liveConsoleBox: {
+    backgroundColor: '#0F172A',
+    borderRadius: 12,
+    padding: 10,
+    marginTop: 6,
+    gap: 6,
+  },
+  consoleHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  statusCircle: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  consoleTitle: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#E2E8F0',
+    flex: 1,
+  },
+  consoleLoadingText: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: '#38BDF8',
+  },
+  consoleDetails: {
+    backgroundColor: '#1E293B',
+    borderRadius: 8,
+    padding: 8,
+    gap: 3,
+  },
+  consoleEndpointText: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: '#38BDF8',
+    fontFamily: 'monospace',
+  },
+  consoleResultText: {
+    fontSize: 9,
+    color: '#94A3B8',
+    fontFamily: 'monospace',
   },
   // Control Box
   controlBox: {

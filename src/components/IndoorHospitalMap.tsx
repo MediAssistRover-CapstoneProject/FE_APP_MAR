@@ -6,9 +6,10 @@ import { colors } from '../theme';
 
 interface Props {
   targetRoom?: string;
+  targetSubText?: string;
 }
 
-export function IndoorHospitalMap({ targetRoom = 'P. 102' }: Props) {
+export function IndoorHospitalMap({ targetRoom = 'P. 102', targetSubText = 'Nội TH' }: Props) {
   return (
     <View style={styles.container}>
       <View style={styles.mapCanvas}>
@@ -22,7 +23,7 @@ export function IndoorHospitalMap({ targetRoom = 'P. 102' }: Props) {
               <Ionicons name="medical" size={10} color="#FFFFFF" />
             </View>
             <AppText style={[styles.roomText, styles.targetRoomText]}>{targetRoom}</AppText>
-            <AppText style={styles.targetSubText}>Nội TH</AppText>
+            <AppText style={styles.targetSubText}>{targetSubText}</AppText>
           </View>
         </View>
 

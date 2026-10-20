@@ -9,3 +9,4 @@ coverage/
 .cache/
 qa/
 .DS_Store
+scratch/

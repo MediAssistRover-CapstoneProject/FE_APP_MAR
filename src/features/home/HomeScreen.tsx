@@ -15,7 +15,7 @@ type AppTab = 'patient' | 'qrDelivery' | 'face' | 'noAuth';
 
 export function HomeScreen(props: Props) {
   const insets = useSafeAreaInsets();
-  const [activeTab, setActiveTab] = useState<AppTab>('noAuth'); // Default to newly created screen for fast preview
+  const [activeTab, setActiveTab] = useState<AppTab>('patient');
 
   return (
     <View style={styles.container}>

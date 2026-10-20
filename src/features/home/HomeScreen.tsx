@@ -5,24 +5,24 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../app/navigation';
 import { PatientHubScreen } from '../patient/PatientHubScreen';
-import { PickupWorkflowScreen } from '../logistics/PickupWorkflowScreen';
+import { QrDeliveryMissionScreen } from '../logistics/QrDeliveryMissionScreen';
 import { FaceVerificationScreen } from '../logistics/FaceVerificationScreen';
 import { HandoverWorkflowScreen } from '../logistics/HandoverWorkflowScreen';
 import { AppText } from '../../components/ui';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Home'>;
-type AppTab = 'patient' | 'pickup' | 'face' | 'handover';
+type AppTab = 'patient' | 'qrDelivery' | 'face' | 'handover';
 
 export function HomeScreen(props: Props) {
   const insets = useSafeAreaInsets();
-  const [activeTab, setActiveTab] = useState<AppTab>('handover');
+  const [activeTab, setActiveTab] = useState<AppTab>('qrDelivery');
 
   return (
     <View style={styles.container}>
       {/* Active Screen View */}
       <View style={styles.screenArea}>
         {activeTab === 'patient' && <PatientHubScreen {...props} />}
-        {activeTab === 'pickup' && <PickupWorkflowScreen />}
+        {activeTab === 'qrDelivery' && <QrDeliveryMissionScreen />}
         {activeTab === 'face' && <FaceVerificationScreen />}
         {activeTab === 'handover' && <HandoverWorkflowScreen />}
       </View>
@@ -51,24 +51,24 @@ export function HomeScreen(props: Props) {
             </AppText>
           </Pressable>
 
-          {/* Tab 2: Nạp hàng */}
+          {/* Tab 2: Vận chuyển QR (Mới) */}
           <Pressable
             accessibilityRole="button"
-            onPress={() => setActiveTab('pickup')}
-            style={[styles.dockTab, activeTab === 'pickup' && styles.dockTabActive]}
+            onPress={() => setActiveTab('qrDelivery')}
+            style={[styles.dockTab, activeTab === 'qrDelivery' && styles.dockTabActive]}
           >
             <Ionicons
-              name={activeTab === 'pickup' ? 'cube' : 'cube-outline'}
+              name={activeTab === 'qrDelivery' ? 'qr-code' : 'qr-code-outline'}
               size={13}
-              color={activeTab === 'pickup' ? '#FFFFFF' : '#94A3B8'}
+              color={activeTab === 'qrDelivery' ? '#FFFFFF' : '#94A3B8'}
             />
             <AppText
               style={[
                 styles.dockLabel,
-                activeTab === 'pickup' && styles.dockLabelActive,
+                activeTab === 'qrDelivery' && styles.dockLabelActive,
               ]}
             >
-              Nạp hàng
+              V/C Thuốc (QR)
             </AppText>
           </Pressable>
 
@@ -93,7 +93,7 @@ export function HomeScreen(props: Props) {
             </AppText>
           </Pressable>
 
-          {/* Tab 4: Bàn giao (Mới) */}
+          {/* Tab 4: Bàn giao */}
           <Pressable
             accessibilityRole="button"
             onPress={() => setActiveTab('handover')}
@@ -153,7 +153,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    paddingHorizontal: 9,
+    paddingHorizontal: 8,
     paddingVertical: 7,
     borderRadius: 24,
   },

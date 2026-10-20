@@ -8,6 +8,7 @@ interface Props {
   currentStep: number; // 1 to 6
   steps?: string[];
   warningStep?: number;
+  returnStep?: number;
 }
 
 const DEFAULT_STEPS = [
@@ -19,16 +20,18 @@ const DEFAULT_STEPS = [
   'Hoàn\nthành',
 ];
 
-export function LogisticsStepper({ currentStep, steps = DEFAULT_STEPS, warningStep }: Props) {
+export function LogisticsStepper({ currentStep, steps = DEFAULT_STEPS, warningStep, returnStep }: Props) {
   const stepList = steps;
   return (
     <View style={styles.container}>
       <View style={styles.stepperRow}>
         {stepList.map((step, idx) => {
           const stepNum = idx + 1;
-          const isDone = stepNum < currentStep && warningStep !== stepNum;
+          const isDone = stepNum < currentStep && warningStep !== stepNum && returnStep !== stepNum;
           const isWarning = warningStep === stepNum;
-          const isActive = stepNum === currentStep && !isWarning;
+          const isReturn = returnStep === stepNum;
+          const isAlert = isWarning || isReturn;
+          const isActive = stepNum === currentStep && !isAlert;
 
           return (
             <React.Fragment key={idx}>
@@ -38,7 +41,7 @@ export function LogisticsStepper({ currentStep, steps = DEFAULT_STEPS, warningSt
                   style={[
                     styles.connector,
                     stepNum <= currentStep ? styles.connectorActive : styles.connectorInactive,
-                    isWarning && styles.connectorWarning,
+                    isAlert && styles.connectorWarning,
                   ]}
                 />
               )}
@@ -50,11 +53,13 @@ export function LogisticsStepper({ currentStep, steps = DEFAULT_STEPS, warningSt
                     styles.circle,
                     isDone && styles.circleDone,
                     isActive && styles.circleActive,
-                    isWarning && styles.circleWarning,
-                    !isDone && !isActive && !isWarning && styles.circleUpcoming,
+                    isAlert && styles.circleWarning,
+                    !isDone && !isActive && !isAlert && styles.circleUpcoming,
                   ]}
                 >
-                  {isWarning ? (
+                  {isReturn ? (
+                    <Ionicons name="arrow-undo" size={12} color="#FFFFFF" />
+                  ) : isWarning ? (
                     <AppText style={styles.warningExclamation}>!</AppText>
                   ) : isDone ? (
                     <Ionicons name="checkmark" size={12} color="#FFFFFF" />
@@ -68,7 +73,7 @@ export function LogisticsStepper({ currentStep, steps = DEFAULT_STEPS, warningSt
                   style={[
                     styles.label,
                     isActive && styles.labelActive,
-                    isWarning && styles.labelWarning,
+                    isAlert && styles.labelWarning,
                     isDone && styles.labelDone,
                   ]}
                 >

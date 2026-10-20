@@ -7,15 +7,15 @@ import { RootStackParamList } from '../../app/navigation';
 import { PatientHubScreen } from '../patient/PatientHubScreen';
 import { QrDeliveryMissionScreen } from '../logistics/QrDeliveryMissionScreen';
 import { FaceVerificationScreen } from '../logistics/FaceVerificationScreen';
-import { HandoverWorkflowScreen } from '../logistics/HandoverWorkflowScreen';
+import { NoAuthDeliveryMissionScreen } from '../logistics/NoAuthDeliveryMissionScreen';
 import { AppText } from '../../components/ui';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Home'>;
-type AppTab = 'patient' | 'qrDelivery' | 'face' | 'handover';
+type AppTab = 'patient' | 'qrDelivery' | 'face' | 'noAuth';
 
 export function HomeScreen(props: Props) {
   const insets = useSafeAreaInsets();
-  const [activeTab, setActiveTab] = useState<AppTab>('qrDelivery');
+  const [activeTab, setActiveTab] = useState<AppTab>('noAuth'); // Default to newly created screen for fast preview
 
   return (
     <View style={styles.container}>
@@ -24,7 +24,7 @@ export function HomeScreen(props: Props) {
         {activeTab === 'patient' && <PatientHubScreen {...props} />}
         {activeTab === 'qrDelivery' && <QrDeliveryMissionScreen />}
         {activeTab === 'face' && <FaceVerificationScreen />}
-        {activeTab === 'handover' && <HandoverWorkflowScreen />}
+        {activeTab === 'noAuth' && <NoAuthDeliveryMissionScreen />}
       </View>
 
       {/* Mode Switcher Navigation Dock (Floating Pill at Bottom) */}
@@ -51,7 +51,7 @@ export function HomeScreen(props: Props) {
             </AppText>
           </Pressable>
 
-          {/* Tab 2: Vận chuyển QR (Mới) */}
+          {/* Tab 2: Vận chuyển QR */}
           <Pressable
             accessibilityRole="button"
             onPress={() => setActiveTab('qrDelivery')}
@@ -68,7 +68,7 @@ export function HomeScreen(props: Props) {
                 activeTab === 'qrDelivery' && styles.dockLabelActive,
               ]}
             >
-              V/C Thuốc (QR)
+              V/C QR
             </AppText>
           </Pressable>
 
@@ -93,24 +93,24 @@ export function HomeScreen(props: Props) {
             </AppText>
           </Pressable>
 
-          {/* Tab 4: Bàn giao */}
+          {/* Tab 4: Vận chuyển không quét (Kèm Unhappy cases) */}
           <Pressable
             accessibilityRole="button"
-            onPress={() => setActiveTab('handover')}
-            style={[styles.dockTab, activeTab === 'handover' && styles.dockTabActive]}
+            onPress={() => setActiveTab('noAuth')}
+            style={[styles.dockTab, activeTab === 'noAuth' && styles.dockTabActive]}
           >
             <Ionicons
-              name={activeTab === 'handover' ? 'hand-left' : 'hand-left-outline'}
+              name={activeTab === 'noAuth' ? 'shield-checkmark' : 'shield-checkmark-outline'}
               size={13}
-              color={activeTab === 'handover' ? '#FFFFFF' : '#94A3B8'}
+              color={activeTab === 'noAuth' ? '#FFFFFF' : '#94A3B8'}
             />
             <AppText
               style={[
                 styles.dockLabel,
-                activeTab === 'handover' && styles.dockLabelActive,
+                activeTab === 'noAuth' && styles.dockLabelActive,
               ]}
             >
-              Bàn giao
+              V/C Thường
             </AppText>
           </Pressable>
         </View>

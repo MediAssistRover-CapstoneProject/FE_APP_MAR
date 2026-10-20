@@ -7,6 +7,7 @@ import { colors } from '../theme';
 interface Props {
   currentStep: number; // 1 to 6
   steps?: string[];
+  warningStep?: number;
 }
 
 const DEFAULT_STEPS = [
@@ -18,15 +19,16 @@ const DEFAULT_STEPS = [
   'Hoàn\nthành',
 ];
 
-export function LogisticsStepper({ currentStep, steps = DEFAULT_STEPS }: Props) {
+export function LogisticsStepper({ currentStep, steps = DEFAULT_STEPS, warningStep }: Props) {
   const stepList = steps;
   return (
     <View style={styles.container}>
       <View style={styles.stepperRow}>
         {stepList.map((step, idx) => {
           const stepNum = idx + 1;
-          const isDone = stepNum < currentStep;
-          const isActive = stepNum === currentStep;
+          const isDone = stepNum < currentStep && warningStep !== stepNum;
+          const isWarning = warningStep === stepNum;
+          const isActive = stepNum === currentStep && !isWarning;
 
           return (
             <React.Fragment key={idx}>
@@ -36,6 +38,7 @@ export function LogisticsStepper({ currentStep, steps = DEFAULT_STEPS }: Props) 
                   style={[
                     styles.connector,
                     stepNum <= currentStep ? styles.connectorActive : styles.connectorInactive,
+                    isWarning && styles.connectorWarning,
                   ]}
                 />
               )}
@@ -47,10 +50,13 @@ export function LogisticsStepper({ currentStep, steps = DEFAULT_STEPS }: Props) 
                     styles.circle,
                     isDone && styles.circleDone,
                     isActive && styles.circleActive,
-                    !isDone && !isActive && styles.circleUpcoming,
+                    isWarning && styles.circleWarning,
+                    !isDone && !isActive && !isWarning && styles.circleUpcoming,
                   ]}
                 >
-                  {isDone ? (
+                  {isWarning ? (
+                    <AppText style={styles.warningExclamation}>!</AppText>
+                  ) : isDone ? (
                     <Ionicons name="checkmark" size={12} color="#FFFFFF" />
                   ) : isActive ? (
                     <View style={styles.activeDot} />
@@ -62,6 +68,7 @@ export function LogisticsStepper({ currentStep, steps = DEFAULT_STEPS }: Props) 
                   style={[
                     styles.label,
                     isActive && styles.labelActive,
+                    isWarning && styles.labelWarning,
                     isDone && styles.labelDone,
                   ]}
                 >
@@ -104,6 +111,9 @@ const styles = StyleSheet.create({
   connectorActive: {
     backgroundColor: '#0284C7',
   },
+  connectorWarning: {
+    backgroundColor: '#F59E0B',
+  },
   connectorInactive: {
     backgroundColor: '#E2E8F0',
   },
@@ -122,6 +132,17 @@ const styles = StyleSheet.create({
     backgroundColor: '#0284C7',
     borderWidth: 3,
     borderColor: '#BAE6FD',
+  },
+  circleWarning: {
+    backgroundColor: '#F59E0B',
+    borderWidth: 3,
+    borderColor: '#FDE68A',
+  },
+  warningExclamation: {
+    color: '#FFFFFF',
+    fontWeight: '900',
+    fontSize: 13,
+    lineHeight: 15,
   },
   circleUpcoming: {
     backgroundColor: '#F1F5F9',
@@ -148,6 +169,10 @@ const styles = StyleSheet.create({
   },
   labelActive: {
     color: '#0284C7',
+    fontWeight: '700',
+  },
+  labelWarning: {
+    color: '#D97706',
     fontWeight: '700',
   },
   labelDone: {

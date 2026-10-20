@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Alert,
   Pressable,
@@ -11,12 +11,30 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AppText } from '../../components/ui';
 import { LogisticsStepper } from '../../components/LogisticsStepper';
 
-type QrStage = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10;
+type QrStage = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14;
 
 export function QrDeliveryMissionScreen() {
   const insets = useSafeAreaInsets();
-  const [stage, setStage] = useState<QrStage>(6); // Default to the newly added flow for fast preview
+  const [stage, setStage] = useState<QrStage>(11); // Default to stage 11 to immediately preview the 3 new final screens
   const [staffNotified, setStaffNotified] = useState(false);
+  const [countdown, setCountdown] = useState(29);
+  const [isCounting, setIsCounting] = useState(true);
+
+  // Countdown timer for stage 12 (Thùng sắp tự đóng)
+  useEffect(() => {
+    if (stage !== 12 || !isCounting) return;
+    const interval = setInterval(() => {
+      setCountdown((prev) => {
+        if (prev <= 1) {
+          clearInterval(interval);
+          setStage(13); // Auto close when countdown hits 0
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [stage, isCounting]);
 
   const handleNotifyStaff = () => {
     setStaffNotified(true);
@@ -50,7 +68,15 @@ export function QrDeliveryMissionScreen() {
     if (stage >= 2 && stage <= 8) return 2;
     if (stage === 9) return 3; // Đang vận chuyển
     if (stage === 10) return 4; // Đến nơi
+    if (stage >= 11 && stage <= 13) return 5; // Bàn giao
+    if (stage === 14) return 6; // Hoàn thành
     return 2;
+  };
+
+  // Warning step for step 5 when in stage 12 (Thùng sắp tự đóng)
+  const getWarningStep = (): number | undefined => {
+    if (stage === 12) return 5;
+    return undefined;
   };
 
   return (
@@ -89,26 +115,30 @@ export function QrDeliveryMissionScreen() {
         <View
           style={[
             styles.tagItem,
-            stage >= 8
+            stage === 14 || (stage >= 8 && stage <= 10)
               ? styles.tagItemLocked
-              : stage >= 4 && stage <= 5
+              : stage === 13
+              ? styles.tagItemTeal
+              : (stage >= 11 && stage <= 12) || (stage >= 4 && stage <= 5)
               ? styles.tagItemOrange
               : styles.tagItemDefault,
           ]}
         >
           <Ionicons
             name={
-              stage >= 8
+              stage === 14 || (stage >= 8 && stage <= 10) || stage === 13
                 ? 'lock-closed-outline'
-                : stage >= 4 && stage <= 5
+                : (stage >= 11 && stage <= 12) || (stage >= 4 && stage <= 5)
                 ? 'lock-open-outline'
                 : 'cube-outline'
             }
             size={13}
             color={
-              stage >= 8
+              stage === 14 || (stage >= 8 && stage <= 10)
                 ? '#059669'
-                : stage >= 4 && stage <= 5
+                : stage === 13
+                ? '#0D9488'
+                : (stage >= 11 && stage <= 12) || (stage >= 4 && stage <= 5)
                 ? '#D97706'
                 : '#475569'
             }
@@ -116,14 +146,22 @@ export function QrDeliveryMissionScreen() {
           <AppText
             style={[
               styles.tagText,
-              stage >= 8
+              stage === 14 || (stage >= 8 && stage <= 10)
                 ? { color: '#059669' }
-                : stage >= 4 && stage <= 5
+                : stage === 13
+                ? { color: '#0F766E' }
+                : (stage >= 11 && stage <= 12) || (stage >= 4 && stage <= 5)
                 ? { color: '#B45309' }
                 : undefined,
             ]}
           >
-            {stage >= 8
+            {stage === 14
+              ? 'Thùng đã khóa'
+              : stage === 13
+              ? 'Thùng: Đang đóng'
+              : stage >= 11 && stage <= 12
+              ? 'Thùng: Đang mở'
+              : stage >= 8
               ? 'Thùng đã khóa'
               : stage >= 6
               ? 'Đã nạp vật phẩm'
@@ -144,6 +182,7 @@ export function QrDeliveryMissionScreen() {
         {/* 4. Stepper 6 bước */}
         <LogisticsStepper
           currentStep={getCurrentStep()}
+          warningStep={getWarningStep()}
           steps={stepperLabels}
         />
 
@@ -648,16 +687,210 @@ export function QrDeliveryMissionScreen() {
               </AppText>
             </View>
 
-            <Pressable onPress={() => setStage(1)} style={styles.actionBtnBlue}>
-              <Ionicons name="refresh" size={18} color="#FFFFFF" />
-              <AppText style={styles.actionBtnText}>Bắt đầu lại chu trình nhiệm vụ</AppText>
+            {/* Chuyển tiếp: Quét mã QR thành công */}
+            <Pressable onPress={() => setStage(11)} style={styles.actionBtnBlue}>
+              <Ionicons name="qr-code-outline" size={18} color="#FFFFFF" />
+              <AppText style={styles.actionBtnText}>Xác minh QR thành công → Mở thùng</AppText>
+            </Pressable>
+
+            <Pressable
+              onPress={() => setStage(1)}
+              style={styles.secondaryActionBtn}
+            >
+              <AppText style={styles.secondaryActionBtnText}>Bắt đầu lại chu trình</AppText>
             </Pressable>
           </View>
         )}
 
-        {/* 15. THANH ĐIỀU KHIỂN CHỌN XEM NHANH 10 GIAI ĐOẠN */}
+        {/* 15. GIAI ĐOẠN 11 (Ảnh 1 mới): VUI LÒNG LẤY VẬT PHẨM */}
+        {stage === 11 && (
+          <View style={styles.stateContainer}>
+            <View style={styles.heroIconBoxHands}>
+              <Ionicons name="hand-left-outline" size={38} color="#D97706" />
+            </View>
+            <View style={styles.statusPillOrange}>
+              <View style={[styles.dot, { backgroundColor: '#D97706' }]} />
+              <AppText style={[styles.statusPillText, { color: '#B45309' }]}>
+                ĐANG CHỜ NGƯỜI NHẬN LẤY VẬT PHẨM
+              </AppText>
+            </View>
+            <AppText style={styles.heroTitle}>Vui lòng lấy vật phẩm</AppText>
+
+            {/* Card vật tư & cảm biến */}
+            <View style={styles.handoverCard}>
+              <AppText style={styles.handoverItemTitle}>Vật tư y tế thông thường</AppText>
+              <View style={styles.handoverSensorRow}>
+                <View style={[styles.dot, { backgroundColor: '#D97706' }]} />
+                <AppText style={styles.handoverSensorText}>
+                  Cảm biến: Vật phẩm vẫn còn trong thùng
+                </AppText>
+              </View>
+              <AppText style={styles.autoCloseNote}>
+                Thùng tự đóng nếu không lấy trong 30s
+              </AppText>
+            </View>
+
+            {/* 2 Nút thao tác: ✓ Đã lấy vật phẩm / Chưa lấy được */}
+            <View style={styles.twoButtonsRow}>
+              <Pressable
+                onPress={() => setStage(13)}
+                style={styles.greenActionBtn}
+              >
+                <AppText style={styles.greenActionBtnText}>✓ Đã lấy vật phẩm</AppText>
+              </Pressable>
+
+              <Pressable
+                onPress={() => {
+                  setCountdown(29);
+                  setIsCounting(true);
+                  setStage(12);
+                }}
+                style={styles.beigeActionBtn}
+              >
+                <AppText style={styles.beigeActionBtnText}>Chưa lấy được</AppText>
+              </Pressable>
+            </View>
+          </View>
+        )}
+
+        {/* 16. GIAI ĐOẠN 12 (Ảnh 2 mới): THÙNG SẮP TỰ ĐÓNG (CẢNH BÁO 29S) */}
+        {stage === 12 && (
+          <View style={styles.stateContainer}>
+            <View style={styles.heroIconBoxWarning}>
+              <Ionicons name="warning" size={42} color="#DC2626" />
+            </View>
+            <View style={styles.statusPillOrange}>
+              <View style={[styles.dot, { backgroundColor: '#D97706' }]} />
+              <AppText style={[styles.statusPillText, { color: '#B45309' }]}>
+                VẬT PHẨM CHƯA ĐƯỢC LẤY
+              </AppText>
+            </View>
+            <AppText style={styles.heroTitle}>Thùng sắp tự đóng</AppText>
+            <AppText style={styles.countdownBigNumber}>{countdown}s</AppText>
+
+            {/* Card thông báo đếm ngược */}
+            <View style={styles.warningCard}>
+              <AppText style={styles.warningCardNotice}>
+                Cảm biến xác nhận vật phẩm vẫn còn trong thùng. Robot sẽ đóng khóa thùng khi hết giờ.
+              </AppText>
+              {/* Progress Bar đếm ngược */}
+              <View style={styles.countdownProgressTrack}>
+                <View
+                  style={[
+                    styles.countdownProgressFill,
+                    { width: `${Math.max(5, (countdown / 30) * 100)}%` },
+                  ]}
+                />
+              </View>
+            </View>
+
+            {/* 2 Nút: Đã lấy vật phẩm / Đóng thùng và báo Staff */}
+            <View style={styles.fullButtonsColumn}>
+              <Pressable
+                onPress={() => setStage(13)}
+                style={styles.fullGreenBtn}
+              >
+                <AppText style={styles.greenActionBtnText}>✓ Đã lấy vật phẩm</AppText>
+              </Pressable>
+
+              <Pressable
+                onPress={() => {
+                  Alert.alert(
+                    'Đã gửi cảnh báo Staff',
+                    'Đã ghi nhận sự cố chưa lấy vật phẩm tại P. Tim mạch và thông báo đến Điều dưỡng phụ trách.',
+                    [{ text: 'Đóng thùng ngay', onPress: () => setStage(13) }]
+                  );
+                }}
+                style={styles.fullRedOutlineBtn}
+              >
+                <AppText style={styles.redOutlineBtnText}>Đóng thùng và báo Staff</AppText>
+              </Pressable>
+            </View>
+          </View>
+        )}
+
+        {/* 17. GIAI ĐOẠN 13 (Ảnh 3 mới): ĐANG ĐÓNG THÙNG... */}
+        {stage === 13 && (
+          <View style={styles.stateContainer}>
+            <View style={styles.heroIconBoxTeal}>
+              <Ionicons name="settings-outline" size={42} color="#0D9488" />
+            </View>
+            <View style={styles.statusPillTeal}>
+              <View style={[styles.dot, { backgroundColor: '#0D9488' }]} />
+              <AppText style={[styles.statusPillText, { color: '#0F766E' }]}>
+                ĐANG ĐÓNG VÀ KHÓA THÙNG
+              </AppText>
+            </View>
+            <AppText style={styles.heroTitle}>Đang đóng thùng...</AppText>
+            <View style={styles.dotsRow}>
+              <View style={[styles.animDot, { backgroundColor: '#0D9488' }]} />
+              <View style={[styles.animDot, { backgroundColor: '#0D9488', opacity: 0.8 }]} />
+              <View style={[styles.animDot, { backgroundColor: '#0D9488', opacity: 0.6 }]} />
+            </View>
+            <AppText style={styles.subNoteTeal}>Tự động chuyển sang 'Đã bàn giao'</AppText>
+
+            <Pressable onPress={() => setStage(14)} style={[styles.actionBtnBlue, { marginTop: 12 }]}>
+              <Ionicons name="checkmark-done" size={18} color="#FFFFFF" />
+              <AppText style={styles.actionBtnText}>Xác nhận hoàn tất bàn giao →</AppText>
+            </Pressable>
+          </View>
+        )}
+
+        {/* 18. GIAI ĐOẠN 14: HOÀN TẤT NHIỆM VỤ / ĐÃ BÀN GIAO */}
+        {stage === 14 && (
+          <View style={styles.stateContainer}>
+            <View style={styles.heroIconBoxGreen}>
+              <Ionicons name="checkmark-circle" size={46} color="#10B981" />
+            </View>
+            <View style={styles.statusPillGreen}>
+              <View style={[styles.dot, { backgroundColor: '#10B981' }]} />
+              <AppText style={[styles.statusPillText, { color: '#047857' }]}>
+                NHIỆM VỤ HOÀN THÀNH
+              </AppText>
+            </View>
+            <AppText style={styles.heroTitle}>Đã bàn giao thành công</AppText>
+            <AppText style={styles.heroSubtitle}>
+              Biên bản bàn giao số điện tử đã được lưu vào hệ thống bệnh viện
+            </AppText>
+
+            <View style={styles.completedReceiptCard}>
+              <View style={styles.receiptRow}>
+                <AppText style={styles.receiptLabel}>MÃ NHIỆM VỤ</AppText>
+                <AppText style={styles.receiptValueBold}>#TH02</AppText>
+              </View>
+              <View style={styles.receiptDivider} />
+              <View style={styles.receiptRow}>
+                <AppText style={styles.receiptLabel}>VẬT PHẨM</AppText>
+                <AppText style={styles.receiptValue}>Đơn thuốc #BN2047</AppText>
+              </View>
+              <View style={styles.receiptRow}>
+                <AppText style={styles.receiptLabel}>ĐIỂM GIAO</AppText>
+                <AppText style={styles.receiptValue}>P. Tim mạch (BS. Trần Thị Lan)</AppText>
+              </View>
+              <View style={styles.receiptRow}>
+                <AppText style={styles.receiptLabel}>XÁC THỰC</AppText>
+                <AppText style={[styles.receiptValue, { color: '#0284C7' }]}>
+                  ✓ Quét mã QR thành công
+                </AppText>
+              </View>
+              <View style={styles.receiptRow}>
+                <AppText style={styles.receiptLabel}>CẢM BIẾN</AppText>
+                <AppText style={[styles.receiptValue, { color: '#10B981' }]}>
+                  ✓ Thùng trống, đã khóa an toàn
+                </AppText>
+              </View>
+            </View>
+
+            <Pressable onPress={() => setStage(1)} style={styles.actionBtnBlue}>
+              <Ionicons name="refresh" size={18} color="#FFFFFF" />
+              <AppText style={styles.actionBtnText}>Bắt đầu chu trình nhiệm vụ mới</AppText>
+            </Pressable>
+          </View>
+        )}
+
+        {/* 19. THANH ĐIỀU KHIỂN CHỌN XEM NHANH TOÀN BỘ 14 GIAI ĐOẠN */}
         <View style={styles.controlBox}>
-          <AppText style={styles.controlTitle}>CHỌN XEM NHANH TOÀN BỘ 10 GIAI ĐOẠN ĐƠN THUỐC:</AppText>
+          <AppText style={styles.controlTitle}>CHỌN XEM NHANH TOÀN BỘ 14 GIAI ĐOẠN VẬN CHUYỂN QR:</AppText>
           <View style={styles.stepTabsRow}>
             {([1, 2, 3, 4, 5] as QrStage[]).map((s) => (
               <Pressable
@@ -681,6 +914,26 @@ export function QrDeliveryMissionScreen() {
               >
                 <AppText style={[styles.stepTabLabel, stage === s && styles.stepTabLabelActive]}>
                   {['6. Kiểm tra', '7. Đã nhận', '8. Khóa', '9. Xe chạy', '10. Đến đích'][s - 6]}
+                </AppText>
+              </Pressable>
+            ))}
+          </View>
+
+          <View style={[styles.stepTabsRow, { marginTop: 4 }]}>
+            {([11, 12, 13, 14] as QrStage[]).map((s) => (
+              <Pressable
+                key={s}
+                onPress={() => {
+                  if (s === 12) {
+                    setCountdown(29);
+                    setIsCounting(true);
+                  }
+                  setStage(s);
+                }}
+                style={[styles.stepTab, stage === s && styles.stepTabActive]}
+              >
+                <AppText style={[styles.stepTabLabel, stage === s && styles.stepTabLabelActive]}>
+                  {['11. Lấy thuốc', '12. Cảnh báo 29s', '13. Đóng thùng', '14. Hoàn tất'][s - 11]}
                 </AppText>
               </Pressable>
             ))}
@@ -820,6 +1073,9 @@ const styles = StyleSheet.create({
   tagItemLocked: {
     backgroundColor: '#ECFDF5',
   },
+  tagItemTeal: {
+    backgroundColor: '#CCFBF1',
+  },
   tagItemHighlight: {
     backgroundColor: '#E0F2FE',
   },
@@ -874,6 +1130,28 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     borderWidth: 1,
     borderColor: '#99F6E4',
+    marginVertical: 4,
+  },
+  heroIconBoxHands: {
+    width: 76,
+    height: 76,
+    borderRadius: 22,
+    backgroundColor: '#FFF7ED',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#FFEDD5',
+    marginVertical: 4,
+  },
+  heroIconBoxWarning: {
+    width: 76,
+    height: 76,
+    borderRadius: 22,
+    backgroundColor: '#FEF2F2',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#FECACA',
     marginVertical: 4,
   },
   heroIconBoxRedCar: {
@@ -1546,6 +1824,201 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 14,
     fontWeight: '800',
+  },
+  countdownBigNumber: {
+    fontSize: 44,
+    fontWeight: '900',
+    color: '#F59E0B',
+    lineHeight: 48,
+    marginVertical: 2,
+  },
+  subNoteTeal: {
+    fontSize: 12,
+    color: '#0F766E',
+    fontWeight: '500',
+  },
+  // Handover Card
+  handoverCard: {
+    backgroundColor: '#FFF7ED',
+    borderRadius: 18,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#FFEDD5',
+    width: '100%',
+    alignItems: 'center',
+    gap: 6,
+    shadowColor: '#EA580C',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 6,
+    elevation: 2,
+  },
+  handoverItemTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#0F172A',
+  },
+  handoverSensorRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 2,
+  },
+  handoverSensorText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#D97706',
+  },
+  autoCloseNote: {
+    fontSize: 11,
+    color: '#9A3412',
+    opacity: 0.8,
+  },
+  greenActionBtn: {
+    flex: 1.2,
+    backgroundColor: '#0D9488',
+    borderRadius: 14,
+    paddingVertical: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#0D9488',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 8,
+    elevation: 3,
+  },
+  greenActionBtnText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  beigeActionBtn: {
+    flex: 1,
+    backgroundColor: '#FEF3C7',
+    borderRadius: 14,
+    paddingVertical: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#FDE68A',
+  },
+  beigeActionBtnText: {
+    color: '#B45309',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  // Warning Card
+  warningCard: {
+    backgroundColor: '#FFFBEB',
+    borderRadius: 18,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#FDE68A',
+    width: '100%',
+    gap: 12,
+  },
+  warningCardNotice: {
+    fontSize: 12,
+    color: '#B45309',
+    lineHeight: 18,
+    fontWeight: '500',
+    textAlign: 'center',
+  },
+  countdownProgressTrack: {
+    height: 8,
+    backgroundColor: '#FDE68A',
+    borderRadius: 4,
+    overflow: 'hidden',
+    width: '100%',
+  },
+  countdownProgressFill: {
+    height: '100%',
+    backgroundColor: '#F59E0B',
+    borderRadius: 4,
+  },
+  fullButtonsColumn: {
+    width: '100%',
+    gap: 10,
+    marginTop: 8,
+  },
+  fullGreenBtn: {
+    backgroundColor: '#0D9488',
+    borderRadius: 14,
+    paddingVertical: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#0D9488',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 8,
+    elevation: 3,
+  },
+  fullRedOutlineBtn: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 14,
+    paddingVertical: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1.5,
+    borderColor: '#EF4444',
+  },
+  redOutlineBtnText: {
+    color: '#DC2626',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  completedReceiptCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 18,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    width: '100%',
+    gap: 10,
+    shadowColor: '#0F172A',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.04,
+    shadowRadius: 6,
+    elevation: 2,
+  },
+  receiptRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  receiptLabel: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#64748B',
+  },
+  receiptValue: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#0F172A',
+  },
+  receiptValueBold: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#0F172A',
+  },
+  receiptDivider: {
+    height: 1,
+    backgroundColor: '#F1F5F9',
+    marginVertical: 4,
+  },
+  secondaryActionBtn: {
+    backgroundColor: '#F1F5F9',
+    borderRadius: 14,
+    paddingVertical: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '100%',
+    marginTop: 8,
+  },
+  secondaryActionBtnText: {
+    color: '#64748B',
+    fontSize: 13,
+    fontWeight: '600',
   },
   // Control Box
   controlBox: {

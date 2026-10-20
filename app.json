@@ -1,0 +1,33 @@
+{
+  "expo": {
+    "name": "MediAssist • Trợ lý bệnh viện",
+    "slug": "mediassist-rover",
+    "version": "1.0.0",
+    "orientation": "default",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.mediassist.rover",
+      "infoPlist": {
+        "NSCameraUsageDescription": "Ứng dụng cần quyền camera để xác thực khuôn mặt nhận hàng y tế."
+      }
+    },
+    "android": {
+      "package": "com.mediassist.rover",
+      "permissions": ["android.permission.CAMERA"]
+    },
+    "web": {
+      "bundler": "metro"
+    },
+    "plugins": [
+      "expo-font",
+      "expo-status-bar",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Ứng dụng cần quyền camera để xác thực khuôn mặt nhận hàng y tế."
+        }
+      ]
+    ]
+  }
+}

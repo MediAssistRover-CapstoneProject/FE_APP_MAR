@@ -73,6 +73,56 @@ export interface SosPayload {
   yM?: number;
 }
 
+export interface IncidentResponse {
+  incidentId: string;
+  robotId?: string;
+  mapId?: string;
+  endpointId?: string;
+  acknowledgedByAccountId?: string;
+  resolvedByAccountId?: string;
+  incidentType?: string;
+  severity?: 'WARNING' | 'CRITICAL';
+  status: 'REPORTED' | 'ACKNOWLEDGED' | 'RESOLVED' | 'CLOSED';
+  description?: string;
+  xM?: number;
+  yM?: number;
+  occurredAt?: string;
+  acknowledgedAt?: string;
+  resolvedAt?: string;
+  closedAt?: string;
+  rowVersion?: number;
+}
+
+export interface SosResponse {
+  incident?: IncidentResponse;
+  serviceRequestId?: string;
+  alertId?: string;
+  jobId?: string;
+  receivedAt?: string;
+}
+
+export interface DeviceIncidentStatusResponse {
+  incidentId: string;
+  robotId?: string;
+  mapId?: string;
+  endpointId?: string;
+  severity?: string;
+  status: 'REPORTED' | 'ACKNOWLEDGED' | 'RESOLVED' | 'CLOSED';
+  description?: string;
+  xM?: number;
+  yM?: number;
+  occurredAt?: string;
+  acknowledgedAt?: string;
+  resolvedAt?: string;
+  closedAt?: string;
+  serviceRequestId?: string;
+  requestStatus?: string;
+  alertId?: string;
+  alertStatus?: string;
+  jobId?: string;
+  jobStatus?: string;
+}
+
 export interface JobErrorPayload {
   errorCode: string;
   failureReason?: string;

@@ -10,15 +10,259 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AppText } from '../../components/ui';
 import { LogisticsStepper } from '../../components/LogisticsStepper';
+import { robotApiService } from '../../services/api';
 
 type QrStage = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14;
 
+const JOB_ID = 'JOB-VT02-MED';
+
 export function QrDeliveryMissionScreen() {
   const insets = useSafeAreaInsets();
-  const [stage, setStage] = useState<QrStage>(11); // Default to stage 11 to immediately preview the 3 new final screens
+  const [stage, setStage] = useState<QrStage>(1); // Default to stage 1 to follow complete mission flow
   const [staffNotified, setStaffNotified] = useState(false);
   const [countdown, setCountdown] = useState(29);
   const [isCounting, setIsCounting] = useState(true);
+
+  // Live Railway API Connection Status & Telemetry Console
+  const [showApiConsole, setShowApiConsole] = useState(false);
+  const [apiStatus, setApiStatus] = useState<{
+    connected: boolean;
+    latencyMs: number;
+    loading: boolean;
+    lastCall?: string;
+    lastResult?: string;
+  }>({
+    connected: false,
+    latencyMs: 0,
+    loading: false,
+    lastCall: 'GET /api/v1/public/zones',
+    lastResult: 'Khởi tạo kết nối máy chủ Railway...',
+  });
+
+  // Ping test on mount
+  useEffect(() => {
+    robotApiService.pingServer().then((res) => {
+      setApiStatus((prev) => ({
+        ...prev,
+        connected: res.ok,
+        latencyMs: res.latencyMs,
+        lastResult: res.ok
+          ? `200 OK (${res.latencyMs}ms) · Server Railway sẵn sàng`
+          : 'Chế độ Hybrid Bệnh viện',
+      }));
+    });
+  }, []);
+
+  // API Stage Transition Handler
+  const transitionToStage = async (nextStage: QrStage) => {
+    setStage(nextStage);
+    setApiStatus((prev) => ({ ...prev, loading: true }));
+    const start = Date.now();
+
+    try {
+      if (nextStage === 1) {
+        // Bước 1: Nhận nhiệm vụ
+        await robotApiService.reportJobStarted(JOB_ID);
+        await robotApiService.reportStepStarted('step-qr-01-receive', JOB_ID);
+        setApiStatus((prev) => ({
+          ...prev,
+          loading: false,
+          lastCall: `POST /api/v1/pi/jobs/${JOB_ID}/started`,
+          lastResult: '200 OK · Bắt đầu thực thi nhiệm vụ vận chuyển thuốc #BN2047',
+          latencyMs: Date.now() - start,
+        }));
+      } else if (nextStage === 2) {
+        // Bước di chuyển đến nơi nhận (Nhà thuốc)
+        await robotApiService.reportStepStarted('step-qr-02-transit-pharmacy', JOB_ID);
+        await robotApiService.sendLocation(10.5, 3.2, 0);
+        setApiStatus((prev) => ({
+          ...prev,
+          loading: false,
+          lastCall: 'POST /api/v1/pi/job-steps/step-qr-02-transit-pharmacy/started',
+          lastResult: '200 OK · Đang di chuyển đến Nhà thuốc (tốc độ 0.8 m/s)',
+          latencyMs: Date.now() - start,
+        }));
+      } else if (nextStage === 3) {
+        // Đến nơi gửi (Nhà thuốc)
+        await robotApiService.reportStepResult(
+          'step-qr-02-transit-pharmacy',
+          { arrivedAt: 'Nhà thuốc Bệnh viện' },
+          JOB_ID
+        );
+        setApiStatus((prev) => ({
+          ...prev,
+          loading: false,
+          lastCall: 'POST /api/v1/pi/job-steps/step-qr-02-transit-pharmacy/result',
+          lastResult: '200 OK · Robot đã đến Nhà thuốc, chờ nạp thuốc',
+          latencyMs: Date.now() - start,
+        }));
+      } else if (nextStage === 4) {
+        // Mở thùng
+        await robotApiService.reportStepStarted('step-qr-03-open-compartment', JOB_ID);
+        setApiStatus((prev) => ({
+          ...prev,
+          loading: false,
+          lastCall: 'POST /api/v1/pi/job-steps/step-qr-03-open-compartment/started',
+          lastResult: '200 OK · Đang mở thùng bảo quản...',
+          latencyMs: Date.now() - start,
+        }));
+      } else if (nextStage === 5) {
+        // Thùng đã mở
+        await robotApiService.reportStepResult(
+          'step-qr-03-open-compartment',
+          { compartmentStatus: 'OPEN' },
+          JOB_ID
+        );
+        setApiStatus((prev) => ({
+          ...prev,
+          loading: false,
+          lastCall: 'POST /api/v1/pi/job-steps/step-qr-03-open-compartment/result',
+          lastResult: '200 OK · Thùng đã mở hoàn toàn, chờ đặt đơn thuốc',
+          latencyMs: Date.now() - start,
+        }));
+      } else if (nextStage === 6) {
+        // Đang kiểm tra vật phẩm
+        await robotApiService.reportStepStarted('step-qr-04-verify-item', JOB_ID);
+        setApiStatus((prev) => ({
+          ...prev,
+          loading: false,
+          lastCall: 'POST /api/v1/pi/job-steps/step-qr-04-verify-item/started',
+          lastResult: '200 OK · Cảm biến LiDAR/Trọng lượng nhận diện vật phẩm',
+          latencyMs: Date.now() - start,
+        }));
+      } else if (nextStage === 7) {
+        // Xác nhận vật phẩm đúng
+        await robotApiService.reportStepResult(
+          'step-qr-04-verify-item',
+          { verifiedItem: 'MED-BN2047-0904', quantity: 1, correct: true },
+          JOB_ID
+        );
+        setApiStatus((prev) => ({
+          ...prev,
+          loading: false,
+          lastCall: 'POST /api/v1/pi/job-steps/step-qr-04-verify-item/result',
+          lastResult: '200 OK · Đã xác nhận đúng Đơn thuốc #BN2047',
+          latencyMs: Date.now() - start,
+        }));
+      } else if (nextStage === 8) {
+        // Khóa thùng
+        await robotApiService.reportStepStarted('step-qr-05-lock-compartment', JOB_ID);
+        setApiStatus((prev) => ({
+          ...prev,
+          loading: false,
+          lastCall: 'POST /api/v1/pi/job-steps/step-qr-05-lock-compartment/started',
+          lastResult: '200 OK · Đang đóng và kích hoạt khóa điện tử...',
+          latencyMs: Date.now() - start,
+        }));
+      } else if (nextStage === 9) {
+        // Vận chuyển đến P. Tim mạch
+        await robotApiService.reportStepResult(
+          'step-qr-05-lock-compartment',
+          { compartmentStatus: 'LOCKED_SECURE' },
+          JOB_ID
+        );
+        await robotApiService.reportStepStarted('step-qr-06-transit-cardiology', JOB_ID);
+        await robotApiService.sendLocation(16.8, 8.4, 0);
+        setApiStatus((prev) => ({
+          ...prev,
+          loading: false,
+          lastCall: 'POST /api/v1/pi/job-steps/step-qr-06-transit-cardiology/started',
+          lastResult: '200 OK · Đang vận chuyển thuốc sang P. Tim mạch (0.9 m/s)',
+          latencyMs: Date.now() - start,
+        }));
+      } else if (nextStage === 10) {
+        // Đến nơi - Chờ quét QR
+        await robotApiService.reportStepResult(
+          'step-qr-06-transit-cardiology',
+          { arrivedLocation: 'Phòng Khám Tim mạch - Zone A' },
+          JOB_ID
+        );
+        await robotApiService.reportStepStarted('step-qr-07-qr-verification', JOB_ID);
+        setApiStatus((prev) => ({
+          ...prev,
+          loading: false,
+          lastCall: 'POST /api/v1/pi/job-steps/step-qr-07-qr-verification/started',
+          lastResult: '200 OK · Đã đến điểm giao, chờ quét mã QR xác thực BS. Lan',
+          latencyMs: Date.now() - start,
+        }));
+      } else if (nextStage === 11) {
+        // Xác minh QR thành công, mở thùng bàn giao
+        await robotApiService.reportStepResult(
+          'step-qr-07-qr-verification',
+          { authMethod: 'QR_CODE', verifiedStaff: 'BS. Trần Thị Lan', role: 'Bác sĩ điều trị' },
+          JOB_ID
+        );
+        await robotApiService.reportStepStarted('step-qr-08-item-retrieval', JOB_ID);
+        setApiStatus((prev) => ({
+          ...prev,
+          loading: false,
+          lastCall: 'POST /api/v1/pi/job-steps/step-qr-07-qr-verification/result',
+          lastResult: '200 OK · Quét QR thành công! Thùng mở, chờ lấy thuốc',
+          latencyMs: Date.now() - start,
+        }));
+      } else if (nextStage === 12) {
+        // Cảnh báo 29s
+        await robotApiService.reportStepError(
+          'step-qr-08-item-takeout',
+          'TIMEOUT_WARNING',
+          { remainingSeconds: 29 },
+          true,
+          JOB_ID
+        );
+        setApiStatus((prev) => ({
+          ...prev,
+          loading: false,
+          lastCall: 'POST /api/v1/pi/job-steps/step-qr-08-item-takeout/errors',
+          lastResult: '200 OK · Cảnh báo: Thuốc chưa được lấy, đếm ngược 29s tự đóng',
+          latencyMs: Date.now() - start,
+        }));
+      } else if (nextStage === 13) {
+        // Đã lấy thuốc xong, đóng thùng
+        await robotApiService.reportStepResult(
+          'step-qr-08-item-retrieval',
+          { itemRetrieved: true, emptyBoxConfirmed: true },
+          JOB_ID
+        );
+        await robotApiService.reportStepStarted('step-qr-09-final-lock', JOB_ID);
+        setApiStatus((prev) => ({
+          ...prev,
+          loading: false,
+          lastCall: 'POST /api/v1/pi/job-steps/step-qr-09-final-lock/started',
+          lastResult: '200 OK · Cảm biến xác nhận thùng trống, đang khóa an toàn',
+          latencyMs: Date.now() - start,
+        }));
+      } else if (nextStage === 14) {
+        // Hoàn tất toàn bộ Job
+        await robotApiService.reportStepResult(
+          'step-qr-09-final-lock',
+          { compartmentStatus: 'LOCKED_EMPTY' },
+          JOB_ID
+        );
+        await robotApiService.reportJobResult(JOB_ID, {
+          status: 'COMPLETED',
+          receiptNumber: 'REC-TH02-2026',
+          deliveredTo: 'BS. Trần Thị Lan',
+          totalDurationSec: 360,
+          deliveredAt: new Date().toISOString(),
+        });
+        await robotApiService.sendHeartbeat('IDLE', 78);
+        setApiStatus((prev) => ({
+          ...prev,
+          loading: false,
+          lastCall: `POST /api/v1/pi/jobs/${JOB_ID}/result`,
+          lastResult: '200 OK · Hoàn tất toàn bộ Job vận chuyển, tạo biên bản số điện tử',
+          latencyMs: Date.now() - start,
+        }));
+      }
+    } catch (err) {
+      setApiStatus((prev) => ({
+        ...prev,
+        loading: false,
+        lastResult: `Hybrid Mode: ${err instanceof Error ? err.message : String(err)}`,
+        latencyMs: Date.now() - start,
+      }));
+    }
+  };
 
   // Countdown timer for stage 12 (Thùng sắp tự đóng)
   useEffect(() => {
@@ -27,7 +271,7 @@ export function QrDeliveryMissionScreen() {
       setCountdown((prev) => {
         if (prev <= 1) {
           clearInterval(interval);
-          setStage(13); // Auto close when countdown hits 0
+          transitionToStage(13); // Auto close when countdown hits 0
           return 0;
         }
         return prev - 1;
@@ -86,10 +330,28 @@ export function QrDeliveryMissionScreen() {
         <View style={styles.topBarLeft}>
           <Ionicons name="hardware-chip" size={16} color="#0284C7" />
           <AppText style={styles.robotNameText}>MediRover #001</AppText>
-          <View style={styles.onlineBadge}>
-            <View style={styles.onlineDot} />
-            <AppText style={styles.onlineText}>Online</AppText>
-          </View>
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => setShowApiConsole(!showApiConsole)}
+            style={styles.apiStatusPill}
+          >
+            <View
+              style={[
+                styles.onlineDot,
+                { backgroundColor: apiStatus.connected ? '#10B981' : '#F59E0B' },
+              ]}
+            />
+            <AppText style={styles.apiStatusPillText}>
+              {apiStatus.connected
+                ? `Railway Live (${apiStatus.latencyMs}ms)`
+                : 'Chế độ Hybrid'}
+            </AppText>
+            <Ionicons
+              name={showApiConsole ? 'chevron-up' : 'chevron-down'}
+              size={12}
+              color="#0284C7"
+            />
+          </Pressable>
         </View>
         <View style={styles.topBarRight}>
           <Ionicons name="battery-charging" size={16} color="#10B981" />
@@ -97,6 +359,33 @@ export function QrDeliveryMissionScreen() {
           <AppText style={styles.headerTimeText}>20:07</AppText>
         </View>
       </View>
+
+      {/* Collapsible API Inspector Console */}
+      {showApiConsole && (
+        <View style={styles.apiConsoleBox}>
+          <View style={styles.apiConsoleHeader}>
+            <Ionicons name="terminal-outline" size={14} color="#38BDF8" />
+            <AppText style={styles.apiConsoleTitle}>LIVE RAILWAY API CONSOLE • JOB PROTOCOL</AppText>
+            <Pressable onPress={() => setShowApiConsole(false)}>
+              <Ionicons name="close" size={16} color="#94A3B8" />
+            </Pressable>
+          </View>
+          <View style={styles.apiConsoleRow}>
+            <AppText style={styles.apiConsoleLabel}>MÃ NHIỆM VỤ:</AppText>
+            <AppText style={styles.apiConsoleVal}>{JOB_ID}</AppText>
+          </View>
+          <View style={styles.apiConsoleRow}>
+            <AppText style={styles.apiConsoleLabel}>ENDPOINT:</AppText>
+            <AppText style={styles.apiConsoleEndpoint}>{apiStatus.lastCall}</AppText>
+          </View>
+          <View style={styles.apiConsoleRow}>
+            <AppText style={styles.apiConsoleLabel}>KẾT QUẢ:</AppText>
+            <AppText style={styles.apiConsoleRes} numberOfLines={2}>
+              {apiStatus.lastResult}
+            </AppText>
+          </View>
+        </View>
+      )}
 
       {/* 2. Task Banner */}
       <View style={styles.taskBanner}>
@@ -241,7 +530,7 @@ export function QrDeliveryMissionScreen() {
               </View>
             </View>
 
-            <Pressable onPress={() => setStage(2)} style={styles.actionBtnBlue}>
+            <Pressable onPress={() => transitionToStage(2)} style={styles.actionBtnBlue}>
               <AppText style={styles.actionBtnText}>Bắt đầu di chuyển đến Nhà thuốc →</AppText>
             </Pressable>
           </View>
@@ -315,7 +604,7 @@ export function QrDeliveryMissionScreen() {
               </View>
             </View>
 
-            <Pressable onPress={() => setStage(3)} style={styles.actionBtnBlue}>
+            <Pressable onPress={() => transitionToStage(3)} style={styles.actionBtnBlue}>
               <AppText style={styles.actionBtnText}>Robot đã đến Nhà thuốc →</AppText>
             </Pressable>
           </View>
@@ -365,7 +654,7 @@ export function QrDeliveryMissionScreen() {
               </AppText>
             </Pressable>
 
-            <Pressable onPress={() => setStage(4)} style={styles.actionBtnBlue}>
+            <Pressable onPress={() => transitionToStage(4)} style={styles.actionBtnBlue}>
               <AppText style={styles.actionBtnText}>Tiến hành mở thùng nạp thuốc →</AppText>
             </Pressable>
           </View>
@@ -391,7 +680,7 @@ export function QrDeliveryMissionScreen() {
             </View>
             <AppText style={styles.subNote}>Tự động chuyển khi thùng đã mở</AppText>
 
-            <Pressable onPress={() => setStage(5)} style={styles.actionBtnBlue}>
+            <Pressable onPress={() => transitionToStage(5)} style={styles.actionBtnBlue}>
               <AppText style={styles.actionBtnText}>Thùng đã mở hoàn toàn →</AppText>
             </Pressable>
           </View>
@@ -437,7 +726,7 @@ export function QrDeliveryMissionScreen() {
               <AppText style={styles.sensorHintText}>Cảm biến tự động phát hiện vật phẩm</AppText>
             </View>
 
-            <Pressable onPress={() => setStage(6)} style={styles.actionBtnBlue}>
+            <Pressable onPress={() => transitionToStage(6)} style={styles.actionBtnBlue}>
               <AppText style={styles.actionBtnText}>Cảm biến phát hiện → Kiểm tra vật phẩm</AppText>
             </Pressable>
           </View>
@@ -482,7 +771,7 @@ export function QrDeliveryMissionScreen() {
             {/* 2 Nút: Vật phẩm đúng / Sai vật phẩm */}
             <View style={styles.twoButtonsRow}>
               <Pressable
-                onPress={() => setStage(7)}
+                onPress={() => transitionToStage(7)}
                 style={styles.greenHalfBtn}
               >
                 <Ionicons name="checkmark" size={18} color="#FFFFFF" />
@@ -539,7 +828,7 @@ export function QrDeliveryMissionScreen() {
               </View>
             </View>
 
-            <Pressable onPress={() => setStage(8)} style={styles.actionBtnBlue}>
+            <Pressable onPress={() => transitionToStage(8)} style={styles.actionBtnBlue}>
               <AppText style={styles.actionBtnText}>Tiến hành đóng và khóa thùng →</AppText>
             </Pressable>
           </View>
@@ -564,7 +853,7 @@ export function QrDeliveryMissionScreen() {
               <View style={[styles.animDot, { backgroundColor: '#0D9488', opacity: 0.6 }]} />
             </View>
 
-            <Pressable onPress={() => setStage(9)} style={styles.actionBtnBlue}>
+            <Pressable onPress={() => transitionToStage(9)} style={styles.actionBtnBlue}>
               <AppText style={styles.actionBtnText}>Bắt đầu vận chuyển đến P. Tim mạch →</AppText>
             </Pressable>
           </View>
@@ -630,7 +919,7 @@ export function QrDeliveryMissionScreen() {
               </View>
             </View>
 
-            <Pressable onPress={() => setStage(10)} style={styles.actionBtnBlue}>
+            <Pressable onPress={() => transitionToStage(10)} style={styles.actionBtnBlue}>
               <AppText style={styles.actionBtnText}>Robot đã đến P. Tim mạch →</AppText>
             </Pressable>
           </View>
@@ -688,13 +977,13 @@ export function QrDeliveryMissionScreen() {
             </View>
 
             {/* Chuyển tiếp: Quét mã QR thành công */}
-            <Pressable onPress={() => setStage(11)} style={styles.actionBtnBlue}>
+            <Pressable onPress={() => transitionToStage(11)} style={styles.actionBtnBlue}>
               <Ionicons name="qr-code-outline" size={18} color="#FFFFFF" />
               <AppText style={styles.actionBtnText}>Xác minh QR thành công → Mở thùng</AppText>
             </Pressable>
 
             <Pressable
-              onPress={() => setStage(1)}
+              onPress={() => transitionToStage(1)}
               style={styles.secondaryActionBtn}
             >
               <AppText style={styles.secondaryActionBtnText}>Bắt đầu lại chu trình</AppText>
@@ -733,7 +1022,7 @@ export function QrDeliveryMissionScreen() {
             {/* 2 Nút thao tác: ✓ Đã lấy vật phẩm / Chưa lấy được */}
             <View style={styles.twoButtonsRow}>
               <Pressable
-                onPress={() => setStage(13)}
+                onPress={() => transitionToStage(13)}
                 style={styles.greenActionBtn}
               >
                 <AppText style={styles.greenActionBtnText}>✓ Đã lấy vật phẩm</AppText>
@@ -743,7 +1032,7 @@ export function QrDeliveryMissionScreen() {
                 onPress={() => {
                   setCountdown(29);
                   setIsCounting(true);
-                  setStage(12);
+                  transitionToStage(12);
                 }}
                 style={styles.beigeActionBtn}
               >
@@ -787,7 +1076,7 @@ export function QrDeliveryMissionScreen() {
             {/* 2 Nút: Đã lấy vật phẩm / Đóng thùng và báo Staff */}
             <View style={styles.fullButtonsColumn}>
               <Pressable
-                onPress={() => setStage(13)}
+                onPress={() => transitionToStage(13)}
                 style={styles.fullGreenBtn}
               >
                 <AppText style={styles.greenActionBtnText}>✓ Đã lấy vật phẩm</AppText>
@@ -798,7 +1087,7 @@ export function QrDeliveryMissionScreen() {
                   Alert.alert(
                     'Đã gửi cảnh báo Staff',
                     'Đã ghi nhận sự cố chưa lấy vật phẩm tại P. Tim mạch và thông báo đến Điều dưỡng phụ trách.',
-                    [{ text: 'Đóng thùng ngay', onPress: () => setStage(13) }]
+                    [{ text: 'Đóng thùng ngay', onPress: () => transitionToStage(13) }]
                   );
                 }}
                 style={styles.fullRedOutlineBtn}
@@ -829,7 +1118,7 @@ export function QrDeliveryMissionScreen() {
             </View>
             <AppText style={styles.subNoteTeal}>Tự động chuyển sang 'Đã bàn giao'</AppText>
 
-            <Pressable onPress={() => setStage(14)} style={[styles.actionBtnBlue, { marginTop: 12 }]}>
+            <Pressable onPress={() => transitionToStage(14)} style={[styles.actionBtnBlue, { marginTop: 12 }]}>
               <Ionicons name="checkmark-done" size={18} color="#FFFFFF" />
               <AppText style={styles.actionBtnText}>Xác nhận hoàn tất bàn giao →</AppText>
             </Pressable>
@@ -881,7 +1170,7 @@ export function QrDeliveryMissionScreen() {
               </View>
             </View>
 
-            <Pressable onPress={() => setStage(1)} style={styles.actionBtnBlue}>
+            <Pressable onPress={() => transitionToStage(1)} style={styles.actionBtnBlue}>
               <Ionicons name="refresh" size={18} color="#FFFFFF" />
               <AppText style={styles.actionBtnText}>Bắt đầu chu trình nhiệm vụ mới</AppText>
             </Pressable>
@@ -895,7 +1184,7 @@ export function QrDeliveryMissionScreen() {
             {([1, 2, 3, 4, 5] as QrStage[]).map((s) => (
               <Pressable
                 key={s}
-                onPress={() => setStage(s)}
+                onPress={() => transitionToStage(s)}
                 style={[styles.stepTab, stage === s && styles.stepTabActive]}
               >
                 <AppText style={[styles.stepTabLabel, stage === s && styles.stepTabLabelActive]}>
@@ -909,7 +1198,7 @@ export function QrDeliveryMissionScreen() {
             {([6, 7, 8, 9, 10] as QrStage[]).map((s) => (
               <Pressable
                 key={s}
-                onPress={() => setStage(s)}
+                onPress={() => transitionToStage(s)}
                 style={[styles.stepTab, stage === s && styles.stepTabActive]}
               >
                 <AppText style={[styles.stepTabLabel, stage === s && styles.stepTabLabelActive]}>
@@ -928,7 +1217,7 @@ export function QrDeliveryMissionScreen() {
                     setCountdown(29);
                     setIsCounting(true);
                   }
-                  setStage(s);
+                  transitionToStage(s);
                 }}
                 style={[styles.stepTab, stage === s && styles.stepTabActive]}
               >
@@ -977,6 +1266,71 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     paddingVertical: 2,
     borderRadius: 12,
+  },
+  apiStatusPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#EFF6FF',
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 12,
+  },
+  apiStatusPillText: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: '#0066CC',
+  },
+  apiConsoleBox: {
+    backgroundColor: '#0F172A',
+    padding: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#1E293B',
+    gap: 3,
+  },
+  apiConsoleHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 2,
+  },
+  apiConsoleTitle: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: '#38BDF8',
+    letterSpacing: 0.5,
+  },
+  apiConsoleRow: {
+    flexDirection: 'row',
+    gap: 6,
+    alignItems: 'flex-start',
+  },
+  apiConsoleLabel: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: '#64748B',
+    width: 80,
+  },
+  apiConsoleVal: {
+    fontSize: 9,
+    color: '#E2E8F0',
+    flex: 1,
+    fontFamily: 'monospace',
+  },
+  apiConsoleEndpoint: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: '#34D399',
+    flex: 1,
+    fontFamily: 'monospace',
+  },
+  apiConsoleRes: {
+    fontSize: 9,
+    color: '#94A3B8',
+    flex: 1,
+    fontFamily: 'monospace',
   },
   onlineDot: {
     width: 6,

@@ -14,6 +14,8 @@ import {
   RobotStatusCode,
   RoomResponse,
   SosPayload,
+  SosResponse,
+  DeviceIncidentStatusResponse,
   StepErrorPayload,
   StepResultPayload,
   ZoneResponse,
@@ -124,7 +126,7 @@ class RobotApiService {
     xM = 12.5,
     yM = 4.2,
     mapId?: string,
-  ): Promise<AckResponse> {
+  ): Promise<SosResponse> {
     const payload: SosPayload = {
       mapId,
       severity,
@@ -135,10 +137,14 @@ class RobotApiService {
     const envelope = createPiEnvelope('INCIDENT_SOS', payload, {
       robotId: apiClient.getRobotId() || undefined,
     });
-    return apiClient.request<AckResponse>('/api/v1/pi/incidents/sos', {
+    return apiClient.request<SosResponse>('/api/v1/pi/incidents/sos', {
       method: 'POST',
       body: envelope,
     });
+  }
+
+  public async getIncidentStatus(incidentId: string): Promise<DeviceIncidentStatusResponse> {
+    return apiClient.request<DeviceIncidentStatusResponse>(`/api/v1/pi/incidents/${incidentId}`);
   }
 
   /**

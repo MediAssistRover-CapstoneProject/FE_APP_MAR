@@ -42,8 +42,8 @@ export function AssistantScreen() {
   const requestInProgress = useRef(false);
   const mounted = useRef(true);
   const nextMessageId = useRef(1);
-  const conversation = useRef<ScrollView>(null);
-  const input = useRef<TextInput>(null);
+  const conversation = useRef<React.ElementRef<typeof ScrollView>>(null);
+  const input = useRef<React.ElementRef<typeof TextInput>>(null);
 
   useEffect(() => {
     mounted.current = true;

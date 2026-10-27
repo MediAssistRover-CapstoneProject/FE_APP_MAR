@@ -187,20 +187,31 @@ export interface PageResponse<T> {
 }
 
 export interface RoomResponse {
-  id: string;
-  code: string;
-  name: string;
+  id?: string;
+  roomId?: string;
+  code?: string;
+  roomCode?: string;
+  name?: string;
+  roomName?: string;
   roomType?: string;
   zoneId?: string;
   floorId?: string;
+  departmentCode?: string;
+  description?: string;
   active?: boolean;
 }
 
 export interface ZoneResponse {
-  id: string;
-  code: string;
-  name: string;
+  id?: string;
+  zoneId?: string;
+  code?: string;
+  zoneCode?: string;
+  name?: string;
+  zoneName?: string;
   floorId?: string;
+  mapId?: string;
+  zoneType?: string;
+  description?: string;
   active?: boolean;
 }
 

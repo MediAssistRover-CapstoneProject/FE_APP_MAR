@@ -875,8 +875,8 @@ export function NoAuthDeliveryMissionScreen() {
               />
               <AppText style={styles.consoleTitle}>
                 {apiStatus.connected
-                  ? `Railway Live Server (${apiStatus.latencyMs}ms)`
-                  : 'Đang kết nối Máy chủ Railway...'}
+                  ? `Local Backend Server (${apiStatus.latencyMs}ms)`
+                  : 'Đang kết nối Máy chủ Local...'}
               </AppText>
               {apiStatus.loading && (
                 <AppText style={styles.consoleLoadingText}>Đang gửi...</AppText>

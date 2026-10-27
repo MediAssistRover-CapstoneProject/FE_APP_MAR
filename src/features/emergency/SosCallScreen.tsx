@@ -65,7 +65,7 @@ export function SosCallScreen({ navigation }: Props) {
           'CRITICAL',
           14.2,
           5.8,
-          '7099373b-9dc2-4ae0-9ac0-e837ecd16353'
+          'dee53b44-a8ef-446a-947e-c42aa14ce9c2'
         );
 
         const latency = Date.now() - start;

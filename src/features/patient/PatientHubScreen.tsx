@@ -16,6 +16,7 @@ import { IndoorHospitalMap } from '../../components/IndoorHospitalMap';
 import { AudioWaveform } from '../../components/AudioWaveform';
 import { colors } from '../../theme';
 import { robotApiService } from '../../services/api';
+import { API_BASE_URL, DEFAULT_ROBOT_CODE } from '../../services/api/config';
 import { RoomResponse } from '../../services/api/types';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Home'>;
@@ -116,7 +117,7 @@ const DEFAULT_HOSPITAL_ROOMS: ClinicDestination[] = [
   },
 ];
 
-const DEFAULT_MAP_ID = '7099373b-9dc2-4ae0-9ac0-e837ecd16353';
+const DEFAULT_MAP_ID = 'dee53b44-a8ef-446a-947e-c42aa14ce9c2';
 
 export function PatientHubScreen({ navigation }: Props) {
   const insets = useSafeAreaInsets();
@@ -141,7 +142,7 @@ export function PatientHubScreen({ navigation }: Props) {
   // Trạng thái khẩn cấp SOS
   const [isTriggeringSos, setIsTriggeringSos] = useState<boolean>(false);
 
-  // Live Railway API Connection Status & Inspector Console
+  // Live Local Backend API Connection Status & Inspector Console
   const [showApiConsole, setShowApiConsole] = useState<boolean>(false);
   const [apiStatus, setApiStatus] = useState<{
     connected: boolean;
@@ -156,8 +157,8 @@ export function PatientHubScreen({ navigation }: Props) {
     connected: false,
     latencyMs: 0,
     loading: false,
-    serverUrl: 'https://bemar-production.up.railway.app',
-    robotCode: 'MAR-GAZEBO-01',
+    serverUrl: API_BASE_URL,
+    robotCode: DEFAULT_ROBOT_CODE,
     mapId: DEFAULT_MAP_ID,
   });
 
@@ -202,35 +203,40 @@ export function PatientHubScreen({ navigation }: Props) {
           : ping.error || 'Mất kết nối Railway',
       }));
 
-      // 2. Fetch Public Rooms from Railway
+      // 2. Fetch Public Rooms from Local Backend
       try {
         const roomsRes = await robotApiService.getPublicRooms(0, 50);
         if (alive && roomsRes && Array.isArray(roomsRes.content) && roomsRes.content.length > 0) {
           // Map backend rooms into ClinicDestination format
-          const mapped: ClinicDestination[] = roomsRes.content.map((r: RoomResponse, index: number) => ({
-            id: r.id || `live-room-${index}`,
-            roomCode: r.code || `P. ${100 + index}`,
-            name: r.name || `Phòng khám ${index + 1}`,
-            category: r.roomType?.toLowerCase().includes('lab') ? 'lab' : 'clinic',
-            doctor: 'Bác sĩ chuyên khoa',
-            location: `Tầng 1 · ${r.code || 'Khu A'}`,
-            eta: `~${2 + index} phút`,
-            distance: `~${80 + index * 30}m`,
-            queueNumber: `B0${40 + index}`,
-            estimatedWait: `Còn ~${10 + index * 5} phút`,
-            aheadCount: index + 1,
-          }));
+          const mapped: ClinicDestination[] = roomsRes.content.map((r: RoomResponse, index: number) => {
+            const id = r.roomId || r.id || `live-room-${index}`;
+            const code = r.roomCode || r.code || `P. ${100 + index}`;
+            const name = r.roomName || r.name || `Phòng khám ${index + 1}`;
+            return {
+              id,
+              roomCode: code,
+              name,
+              category: (r.roomType?.toLowerCase().includes('lab') || r.roomType?.toLowerCase().includes('pharmacy')) ? 'lab' : 'clinic',
+              doctor: r.description || 'Bác sĩ chuyên khoa',
+              location: `Tầng 1 · ${code}`,
+              eta: `~${2 + index} phút`,
+              distance: `~${50 + index * 20}m`,
+              queueNumber: `B0${40 + index}`,
+              estimatedWait: `Còn ~${5 + index * 5} phút`,
+              aheadCount: index + 1,
+            };
+          });
           if (mapped.length > 0 && mapped[0]) {
             setDestinations(mapped);
             setSelectedRoomId(mapped[0].id);
             setApiStatus((prev) => ({
               ...prev,
               lastCall: 'GET /api/v1/public/rooms',
-              lastResult: `200 OK · Đã tải ${mapped.length} phòng khám từ máy chủ`,
+              lastResult: `200 OK · Đã tải ${mapped.length} phòng khám từ máy chủ local`,
             }));
           }
         } else {
-          // Live table is currently empty in Railway DB -> Smooth fallback to high-fidelity hospital directory
+          // Live table is currently empty -> Smooth fallback
           setApiStatus((prev) => ({
             ...prev,
             lastCall: 'GET /api/v1/public/rooms',
@@ -242,7 +248,7 @@ export function PatientHubScreen({ navigation }: Props) {
         setApiStatus((prev) => ({
           ...prev,
           lastCall: 'GET /api/v1/public/rooms',
-          lastResult: `Dùng Catalog Bệnh viện nội bộ (${err instanceof Error ? err.message : String(err)})`,
+          lastResult: `Local Fallback: ${err instanceof Error ? err.message : String(err)}`,
         }));
       }
     }
@@ -275,16 +281,18 @@ export function PatientHubScreen({ navigation }: Props) {
     setActiveRequestId(reqId);
 
     try {
-      // Send live Escort request to Railway Backend
+      // Send live Escort request to Local Backend
       const res = await robotApiService.requestEscort({
         mapId: DEFAULT_MAP_ID,
-        destinationRoomId: selectedRoom.id,
+        destinationEndpointId: '370a77bb-02fd-4008-92f1-d11253a693ab',
+        destinationRoomId: selectedRoom.id.includes('-') && selectedRoom.id.length === 36 ? selectedRoom.id : undefined,
         targetMode: 'ENDPOINT',
         escortMode: 'GUIDED',
         walkingSpeedMps: 0.25,
+        confirmationTimeoutSec: 60,
         patientReference: selectedRoom.queueNumber,
         escortNote: `Bệnh nhân yêu cầu dẫn đường đến ${selectedRoom.name} (${selectedRoom.roomCode})`,
-        priority: 10,
+        priority: 80,
       });
 
       // Send busy telemetry heartbeat
@@ -443,7 +451,7 @@ export function PatientHubScreen({ navigation }: Props) {
             />
             <AppText style={styles.connectionPillText}>
               {apiStatus.connected
-                ? `Railway Live (${apiStatus.latencyMs}ms) · Hybrid`
+                ? `Local Backend (${apiStatus.latencyMs}ms)`
                 : 'Chế độ Hybrid Bệnh viện'}
             </AppText>
             <Ionicons

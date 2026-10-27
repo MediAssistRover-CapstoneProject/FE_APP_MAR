@@ -72,6 +72,7 @@ class RobotApiService {
     batteryRaw = 79,
     mapId?: string,
   ): Promise<AckResponse> {
+    await apiClient.ensureDeviceToken();
     const payload: HeartbeatPayload = {
       status,
       batteryRaw,
@@ -99,6 +100,7 @@ class RobotApiService {
     yawRad = 0,
     mapId?: string,
   ): Promise<AckResponse> {
+    await apiClient.ensureDeviceToken();
     const payload: LocationPayload = {
       mapId,
       xM,
@@ -127,14 +129,16 @@ class RobotApiService {
     yM = 4.2,
     mapId?: string,
   ): Promise<SosResponse> {
+    await apiClient.ensureDeviceToken();
     const payload: SosPayload = {
       mapId,
+      endpointId: undefined,
       severity,
       description,
       xM,
       yM,
     };
-    const envelope = createPiEnvelope('INCIDENT_SOS', payload, {
+    const envelope = createPiEnvelope('EMERGENCY_SOS', payload, {
       robotId: apiClient.getRobotId() || undefined,
     });
     return apiClient.request<SosResponse>('/api/v1/pi/incidents/sos', {

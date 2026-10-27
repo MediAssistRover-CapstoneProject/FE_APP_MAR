@@ -23,7 +23,7 @@ export function QrDeliveryMissionScreen() {
   const [countdown, setCountdown] = useState(29);
   const [isCounting, setIsCounting] = useState(true);
 
-  // Live Railway API Connection Status & Telemetry Console
+  // Live Local Backend API Connection Status & Telemetry Console
   const [showApiConsole, setShowApiConsole] = useState(false);
   const [apiStatus, setApiStatus] = useState<{
     connected: boolean;
@@ -36,7 +36,7 @@ export function QrDeliveryMissionScreen() {
     latencyMs: 0,
     loading: false,
     lastCall: 'GET /api/v1/public/zones',
-    lastResult: 'Khởi tạo kết nối máy chủ Railway...',
+    lastResult: 'Khởi tạo kết nối máy chủ Local...',
   });
 
   // Ping test on mount
@@ -47,7 +47,7 @@ export function QrDeliveryMissionScreen() {
         connected: res.ok,
         latencyMs: res.latencyMs,
         lastResult: res.ok
-          ? `200 OK (${res.latencyMs}ms) · Server Railway sẵn sàng`
+          ? `200 OK (${res.latencyMs}ms) · Local Server sẵn sàng`
           : 'Chế độ Hybrid Bệnh viện',
       }));
     });
@@ -343,7 +343,7 @@ export function QrDeliveryMissionScreen() {
             />
             <AppText style={styles.apiStatusPillText}>
               {apiStatus.connected
-                ? `Railway Live (${apiStatus.latencyMs}ms)`
+                ? `Local Backend (${apiStatus.latencyMs}ms)`
                 : 'Chế độ Hybrid'}
             </AppText>
             <Ionicons
@@ -365,7 +365,7 @@ export function QrDeliveryMissionScreen() {
         <View style={styles.apiConsoleBox}>
           <View style={styles.apiConsoleHeader}>
             <Ionicons name="terminal-outline" size={14} color="#38BDF8" />
-            <AppText style={styles.apiConsoleTitle}>LIVE RAILWAY API CONSOLE • JOB PROTOCOL</AppText>
+            <AppText style={styles.apiConsoleTitle}>LOCAL BACKEND API CONSOLE • JOB PROTOCOL</AppText>
             <Pressable onPress={() => setShowApiConsole(false)}>
               <Ionicons name="close" size={16} color="#94A3B8" />
             </Pressable>

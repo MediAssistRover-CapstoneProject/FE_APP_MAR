@@ -1,44 +1,117 @@
 /**
- * Danh sách toàn bộ Endpoint của hệ thống MediAssistRover
- * Quản lý tập trung tại một nơi duy nhất để dễ bảo trì khi Backend đổi URL.
+ * Danh sách toàn bộ Endpoint của hệ thống MediAssistRover Backend (Railway)
+ * Quản lý tập trung, khớp 100% với Swagger Backend API
  */
 
 export const ENDPOINTS = {
-  // Xác thực & Tài khoản
+  // 1. Xác thực & Tài khoản
   AUTH: {
     LOGIN: '/auth/login',
+    CHANGE_PASSWORD: '/auth/change-password',
+    REFRESH: '/auth/refresh',
     LOGOUT: '/auth/logout',
-    SEND_OTP: '/auth/forgot-password/send-otp',
-    VERIFY_OTP: '/auth/forgot-password/verify-otp',
-    RESET_PASSWORD: '/auth/forgot-password/reset',
-    PROFILE: '/auth/me',
+    ME: '/auth/me',
   },
 
-  // Robot & Trạng thái điều khiển
-  ROBOT: {
-    STATUS: '/robots/status',                    // Lấy battery, kết nối, zone hiện tại
-    TELEMETRY: '/robots/telemetry',              // Tọa độ x, y, góc quay của robot trên bản đồ
-    PAUSE: '/robots/pause',                      // Tạm dừng nhiệm vụ robot
-    RESUME: '/robots/resume',                    // Tiếp tục di chuyển
-    EMERGENCY_STOP: '/robots/emergency-stop',    // Dừng khẩn cấp
-    MANUAL_CONTROL: '/robots/manual-control',    // Lệnh điều khiển thủ công (tiến, lùi, rẽ)
+  // 2. Thông tin nhân viên & Ca trực (Staff Profile & Shifts)
+  STAFF: {
+    ME: '/staff/me',
+    PROFILE: '/staff/profile',
+    SHIFTS: '/staff/shifts',
+    SHIFT_DETAIL: (shiftId: string) => `/staff/shifts/${shiftId}`,
   },
 
-  // Nhiệm vụ (Mission / Tasks)
-  MISSION: {
-    CREATE: '/missions',                         // Giao nhiệm vụ mới cho robot
-    GET_QUEUE: '/missions/queue',                // Lấy danh sách hàng đợi (3 items trong figma)
-    GET_ACTIVE: '/missions/active',              // Lấy nhiệm vụ đang thực hiện hiện tại
-    GET_TIMELINE: (id: string | number) => `/missions/${id}/timeline`, // Lấy 19 bước tiến trình
-    STAFF_ACTION: (id: string | number) => `/missions/${id}/staff-action`, // Tạm dừng, trả hàng, chờ thêm, xác minh lại
-    SCAN_QR: '/missions/scan-qr',                // Quét mã QR vật phẩm
-    REGISTER_FACE: '/missions/register-face',    // Đăng ký khuôn mặt người nhận
+  // 3. Robot & Điều khiển
+  ROBOTS: {
+    LIST: '/robots',
+    DETAIL: (id: string) => `/robots/${id}`,
+    MAINTENANCE: (id: string) => `/robots/${id}/maintenance`,
+    RECONCILE: (id: string) => `/robots/${id}/reconcile`,
   },
 
-  // Bản đồ số bệnh viện (Digital Twin Map)
-  MAP: {
-    GET_MAP_DATA: '/map/digital-twin',           // Danh sách phòng, tọa độ các zone
-    GET_OBSTACLES: '/map/obstacles',             // Các điểm chặn, đông người, SOS
-    REPORT_SOS: '/map/report-sos',               // Kích hoạt báo động SOS tại khu vực
+  // 4. Bản đồ, Tầng, Phòng, Zone, Endpoint & Thông tin bệnh viện (Staff Operations)
+  FACILITY: {
+    FLOORS: '/floors',
+    FLOOR_DETAIL: (id: string) => `/floors/${id}`,
+    ROOMS: '/rooms',
+    ROOM_DETAIL: (id: string) => `/rooms/${id}`,
+    ZONES: '/zones',
+    ZONE_DETAIL: (id: string) => `/zones/${id}`,
+    MAPS: '/maps',
+    MAP_DETAIL: (id: string) => `/maps/${id}`,
+    ENDPOINTS: '/endpoints',
+    ENDPOINT_DETAIL: (id: string) => `/endpoints/${id}`,
+    ENDPOINT_GROUPS: '/endpoint-groups',
+    ENDPOINT_GROUP_DETAIL: (id: string) => `/endpoint-groups/${id}`,
+    HOSPITAL_INFO: '/hospital-information',
+    HOSPITAL_INFO_DETAIL: (id: string) => `/hospital-information/${id}`,
+    HOSPITAL_ARTICLES: (hospitalId: string) => `/hospital-information/${hospitalId}/articles`,
+    HOSPITAL_ARTICLE_DETAIL: (hospitalId: string, articleId: string) => `/hospital-information/${hospitalId}/articles/${articleId}`,
+  },
+
+  // 5. Nhiệm vụ & Giao hàng (Jobs & Delivery)
+  JOBS: {
+    LIST: '/jobs',
+    DETAIL: (id: string) => `/jobs/${id}`,
+    EVENTS: (id: string) => `/jobs/${id}/events`,
+    CANCEL: (id: string) => `/jobs/${id}/cancel`,
+    ASSIGN_ROBOT: (id: string) => `/jobs/${id}/assign-robot`,
+    ASSIGN_STAFF: (id: string) => `/jobs/${id}/assign-staff`,
+    RECOVERY: (jobId: string) => `/jobs/${jobId}/operations/recovery`,
+  },
+
+  SERVICE_REQUESTS: {
+    LIST: '/service-requests',
+    DETAIL: (id: string) => `/service-requests/${id}`,
+    SUBMIT: (id: string) => `/service-requests/${id}/submit`,
+    CANCEL: (id: string) => `/service-requests/${id}/cancel`,
+  },
+
+  DELIVERY: {
+    REQUESTS: '/delivery-requests',
+    REQUEST_DETAIL: (id: string) => `/delivery-requests/${id}`,
+    OPERATIONAL_REQUESTS: '/operational-requests',
+    NAVIGATION_REQUESTS: '/navigation-requests',
+    ESCORT_REQUESTS: '/escort-requests',
+    QR_CHALLENGE: (jobId: string) => `/jobs/${jobId}/qr-challenges`,
+    QR_VERIFY: (jobId: string) => `/jobs/${jobId}/qr-verifications`,
+    AUTH_VERIFY: (jobId: string) => `/jobs/${jobId}/auth-verifications`,
+  },
+
+  // 6. Cảnh báo (Alerts - Staff alert lifecycle)
+  ALERTS: {
+    LIST: '/alerts',
+    DETAIL: (id: string) => `/alerts/${id}`,
+    ACKNOWLEDGE: (id: string) => `/alerts/${id}/acknowledge`,
+    RESOLVE: (id: string) => `/alerts/${id}/resolve`,
+    CLOSE: (id: string) => `/alerts/${id}/close`,
+    DISMISS: (id: string) => `/alerts/${id}/dismiss`,
+  },
+
+  // 7. Sự cố khẩn cấp (Emergency Incidents)
+  INCIDENTS: {
+    LIST: '/emergency-incidents',
+    DETAIL: (id: string) => `/emergency-incidents/${id}`,
+    ACKNOWLEDGE: (id: string) => `/emergency-incidents/${id}/acknowledge`,
+    START: (id: string) => `/emergency-incidents/${id}/start`,
+    RESOLVE: (id: string) => `/emergency-incidents/${id}/resolve`,
+    FALSE_ALARM: (id: string) => `/emergency-incidents/${id}/false-alarm`,
+    CLOSE: (id: string) => `/emergency-incidents/${id}/close`,
+  },
+
+  // 8. Workflows
+  WORKFLOWS: {
+    LIST: '/workflows',
+    DETAIL: (id: string) => `/workflows/${id}`,
+    STEP_TYPES: '/workflows/step-types',
+  },
+
+  // 9. Lịch trình định kỳ Robot (Schedules)
+  SCHEDULES: {
+    LIST: '/schedules',
+    DETAIL: (id: string) => `/schedules/${id}`,
+    ACTIVATE: (id: string) => `/schedules/${id}/activate`,
+    PAUSE: (id: string) => `/schedules/${id}/pause`,
+    RETIRE: (id: string) => `/schedules/${id}/retire`,
   },
 };

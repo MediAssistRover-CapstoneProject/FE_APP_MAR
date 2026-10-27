@@ -5,6 +5,8 @@ import {
   StyleSheet,
   TouchableOpacity,
   ScrollView,
+  ActivityIndicator,
+  Alert,
 } from 'react-native';
 import {
   LogOut,
@@ -16,8 +18,15 @@ import {
   Construction,
   Check,
   Bot,
+  RefreshCw,
+  Siren,
+  Eye,
 } from 'lucide-react-native';
 import { Colors, Spacing, BorderRadius, Shadows } from '../../constants/theme';
+import { StaffHeader } from '../../components/common/StaffHeader';
+import { incidentApi } from '../../api/modules/incident.api';
+import { alertApi } from '../../api/modules/alert.api';
+import { IncidentResponse, AlertResponse } from '../../api/types';
 import { SOSCallModal } from '../../components/sos/SOSCallModal';
 import { SOSStreamModal } from '../../components/sos/SOSStreamModal';
 import { FallDetectionModal } from '../../components/sos/FallDetectionModal';
@@ -28,262 +37,339 @@ export const AlertScreen: React.FC = () => {
   const [showSOSStream, setShowSOSStream] = useState(false);
   const [showFallDetail, setShowFallDetail] = useState(false);
   const [resolvedSOS, setResolvedSOS] = useState(false);
+  const [liveIncidents, setLiveIncidents] = useState<IncidentResponse[]>([]);
+  const [isLoadingIncidents, setIsLoadingIncidents] = useState(false);
+  const [liveAlerts, setLiveAlerts] = useState<AlertResponse[]>([]);
+  const [isLoadingAlerts, setIsLoadingAlerts] = useState(false);
+  const [selectedAlert, setSelectedAlert] = useState<AlertResponse | null>(null);
+  const [resolvingAlertId, setResolvingAlertId] = useState<string | null>(null);
+
+  const fetchIncidents = React.useCallback(async () => {
+    setIsLoadingIncidents(true);
+    try {
+      const res = await incidentApi.getIncidents({ page: 0, size: 5 });
+      if (res?.content) {
+        setLiveIncidents(res.content);
+      }
+    } catch (err) {
+      console.log('Error fetching live incidents:', err);
+    } finally {
+      setIsLoadingIncidents(false);
+    }
+  }, []);
+
+  const fetchAlerts = React.useCallback(async () => {
+    setIsLoadingAlerts(true);
+    try {
+      const res = await alertApi.getAlerts({ page: 0, size: 10 });
+      if (res?.content) {
+        setLiveAlerts(res.content);
+      }
+    } catch (err) {
+      console.log('Error fetching live alerts:', err);
+    } finally {
+      setIsLoadingAlerts(false);
+    }
+  }, []);
+
+  const lastAlertIdRef = React.useRef<string | null>(null);
+
+  React.useEffect(() => {
+    fetchIncidents();
+    fetchAlerts();
+    // Auto-polling mỗi 4 giây để bắt tín hiệu SOS từ robot ngay lập tức
+    const timer = setInterval(() => {
+      fetchIncidents();
+      fetchAlerts();
+    }, 4000);
+    return () => clearInterval(timer);
+  }, [fetchIncidents, fetchAlerts]);
+
+  // Tự động mở màn hình nhận cuộc gọi SOS nếu có sự cố khẩn cấp mới phát sinh
+  React.useEffect(() => {
+    const openCritical = liveAlerts.find((a) => a.status === 'OPEN' && a.severity === 'CRITICAL');
+    if (openCritical && openCritical.alertId !== lastAlertIdRef.current) {
+      lastAlertIdRef.current = openCritical.alertId;
+      setSelectedAlert(openCritical);
+      setShowSOSCall(true);
+    }
+  }, [liveAlerts]);
+
+  const handleResolveAlert = async (alertId: string) => {
+    setResolvingAlertId(alertId);
+    try {
+      await alertApi.resolveAlert(alertId);
+      Alert.alert('Thành công', 'Đã đánh dấu giải quyết cảnh báo SOS.');
+      await fetchAlerts();
+    } catch (err: any) {
+      console.log('Error resolving alert:', err);
+      Alert.alert('Lỗi', err?.message || 'Không thể cập nhật trạng thái cảnh báo');
+    } finally {
+      setResolvingAlertId(null);
+    }
+  };
+
+  const handleAcknowledgeAlert = async (alertItem: AlertResponse) => {
+    setSelectedAlert(alertItem);
+    try {
+      await alertApi.acknowledgeAlert(alertItem.alertId);
+      await fetchAlerts();
+      setShowSOSStream(true);
+    } catch (err: any) {
+      console.log('Error acknowledging alert:', err);
+      Alert.alert('Lỗi', err?.message || 'Không thể tiếp nhận cảnh báo');
+    }
+  };
+
+  const handleCloseAlert = async (alertId: string) => {
+    try {
+      await alertApi.closeAlert(alertId);
+      Alert.alert('Thành công', 'Đã đóng hoàn tất cảnh báo.');
+      await fetchAlerts();
+    } catch (err: any) {
+      console.log('Error closing alert:', err);
+      Alert.alert('Lỗi', err?.message || 'Không thể đóng cảnh báo');
+    }
+  };
+
+  const activeAlertCount = React.useMemo(() => {
+    const unacknowledgedAlerts = liveAlerts.filter((a) => a.status === 'OPEN').length;
+    const unacknowledgedIncidents = liveIncidents.filter((i) => i.status === 'OPEN').length;
+    return Math.max(unacknowledgedAlerts, unacknowledgedIncidents);
+  }, [liveAlerts, liveIncidents]);
 
   return (
     <View style={styles.container}>
-      {/* ===== TOP HEADER ===== */}
-      <View style={styles.header}>
-        <View style={styles.headerLeft}>
-          <View style={styles.avatarCircle}>
-            <Text style={{ fontSize: 18 }}>🤖</Text>
-          </View>
-          <View>
-            <View style={styles.headerTitleRow}>
-              <Text style={styles.brandSmall}>MEDIASSISTROVER · STAFF</Text>
-              <View style={styles.badgeOnDuty}>
-                <Text style={styles.badgeOnDutyText}>ĐANG TRỰC</Text>
-              </View>
-            </View>
-            <Text style={styles.staffName}>Y tá Nguyễn Văn An</Text>
-          </View>
-        </View>
-        <TouchableOpacity style={styles.logoutBtn} activeOpacity={0.7}>
-          <LogOut size={13} color={Colors.primary} />
-          <Text style={styles.logoutText}>Đăng xuất</Text>
-        </TouchableOpacity>
-      </View>
+      {/* ===== REUSABLE STAFF HEADER ===== */}
+      <StaffHeader />
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
         {/* ===== SUBHEADER ===== */}
         <View style={styles.pageHeader}>
-          <Text style={styles.pageHeaderSub}>STAFF · Y TÁ NGUYỄN VĂN AN</Text>
+          <Text style={styles.pageHeaderSub}>HỆ THỐNG · TRUNG TÂM CẢNH BÁO</Text>
           <View style={styles.titleRow}>
             <Text style={styles.pageTitle}>Cảnh báo khẩn cấp</Text>
-            <View style={styles.activeAlertBadge}>
-              <View style={styles.alertDot} />
-              <Text style={styles.activeAlertText}>2 ĐANG XẢY RA</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              {isLoadingAlerts || isLoadingIncidents ? (
+                <ActivityIndicator size="small" color={Colors.primary} />
+              ) : (
+                <TouchableOpacity
+                  onPress={() => {
+                    fetchIncidents();
+                    fetchAlerts();
+                  }}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
+                  <RefreshCw size={16} color={Colors.primary} />
+                </TouchableOpacity>
+              )}
+              <View style={styles.activeAlertBadge}>
+                <View style={styles.alertDot} />
+                <Text style={styles.activeAlertText}>{activeAlertCount} ĐANG XẢY RA</Text>
+              </View>
             </View>
           </View>
         </View>
 
-        {/* ===== DEMO BANNER: MỞ MÀN HÌNH CUỘC GỌI SOS ===== */}
-        <TouchableOpacity
-          style={styles.demoBanner}
-          onPress={() => setShowSOSCall(true)}
-          activeOpacity={0.85}
-        >
-          <View style={styles.demoBannerIcon}>
-            <Phone size={18} color="#FFFFFF" />
-          </View>
-          <View style={styles.demoBannerText}>
-            <Text style={styles.demoBannerTitle}>Demo - Mở màn hình cuộc gọi SOS</Text>
-            <Text style={styles.demoBannerSubtitle}>Nhấn để xem luồng nhận cuộc gọi khẩn cấp</Text>
-          </View>
-          <ChevronRight size={18} color="#FECACA" />
-        </TouchableOpacity>
+        {/* ===== REAL ALERTS & INCIDENTS LIST ===== */}
+        {liveAlerts.length > 0 ? (
+          liveAlerts.map((alertItem) => {
+            const isResolved = alertItem.status === 'RESOLVED';
+            const isClosed = alertItem.status === 'CLOSED';
+            const isAcknowledged = alertItem.status === 'ACKNOWLEDGED';
+            const isOpen = alertItem.status === 'OPEN';
+            const isCritical = alertItem.severity === 'CRITICAL';
+            const isResolvingThis = resolvingAlertId === alertItem.alertId;
 
-        {/* ===== ALERT CARDS ===== */}
-
-        {/* CARD 1: PHÁT HIỆN BỆNH NHÂN NGÃ */}
-        <TouchableOpacity
-          style={styles.cardAlert}
-          onPress={() => setShowFallDetail(true)}
-          activeOpacity={0.9}
-        >
-          <View style={styles.cardHeader}>
-            <View style={styles.cardIconBoxOrange}>
-              <AlertTriangle size={20} color="#D97706" />
-            </View>
-            <View style={styles.cardTitleBox}>
-              <Text style={styles.cardTitle}>Phát hiện bệnh nhân ngã</Text>
-            </View>
-            <View style={styles.statusTagOrange}>
-              <Text style={styles.statusTagOrangeText}>Đang xảy ra</Text>
-            </View>
-          </View>
-
-          <View style={styles.metaRow}>
-            <View style={styles.metaCol}>
-              <Text style={styles.metaLabel}>ĐỊA ĐIỂM</Text>
-              <Text style={styles.metaVal}>Khu chờ</Text>
-            </View>
-            <View style={styles.metaCol}>
-              <Text style={styles.metaLabel}>ROBOT TẠI</Text>
-              <Text style={styles.metaVal}>Khu chờ</Text>
-            </View>
-            <View style={styles.metaCol}>
-              <Text style={styles.metaLabel}>GIỜ</Text>
-              <Text style={styles.metaVal}>09:14</Text>
-            </View>
-          </View>
-
-          <Text style={styles.cardDesc}>
-            Cảm biến gia tốc và camera phát hiện va chạm mạnh.
-          </Text>
-
-          <View style={styles.btnRow}>
-            <TouchableOpacity
-              style={styles.blueBtn}
-              onPress={() => setShowFallDetail(true)}
-              activeOpacity={0.8}
-            >
-              <Text style={styles.blueBtnText}>Điều phối nhân viên</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.tealBtn}
-              onPress={() => setShowFallDetail(true)}
-              activeOpacity={0.8}
-            >
-              <Bot size={15} color={Colors.tealDark} />
-              <Text style={styles.tealBtnText}>Gửi robot</Text>
-            </TouchableOpacity>
-          </View>
-        </TouchableOpacity>
-
-        {/* CARD 2: TÍN HIỆU SOS TỪ BỆNH NHÂN */}
-        <View style={styles.cardNormal}>
-          <View style={styles.cardHeader}>
-            <View style={styles.cardIconBoxRed}>
-              <Text style={{ fontSize: 14 }}>🆘</Text>
-            </View>
-            <View style={styles.cardTitleBox}>
-              <Text style={styles.cardTitle}>Tín hiệu SOS từ bệnh nhân</Text>
-            </View>
-            <View style={[styles.statusTagOrange, resolvedSOS && styles.statusTagGray]}>
-              <Text
+            return (
+              <View
+                key={alertItem.alertId}
                 style={[
-                  styles.statusTagOrangeText,
-                  resolvedSOS && styles.statusTagGrayText,
+                  isCritical && isOpen ? styles.cardAlertRed : styles.cardNormal,
+                  (isResolved || isClosed) && { opacity: 0.85 },
                 ]}
               >
-                {resolvedSOS ? 'Đã giải quyết' : 'Đang xử lý'}
-              </Text>
-            </View>
-          </View>
+                <View style={styles.cardHeader}>
+                  <View style={isCritical ? styles.cardIconBoxRed : styles.cardIconBoxOrange}>
+                    <Text style={{ fontSize: 16 }}>{isCritical ? '🆘' : '⚠️'}</Text>
+                  </View>
+                  <View style={styles.cardTitleBox}>
+                    <Text style={styles.cardTitle}>
+                      {alertItem.notificationType === 'SOS'
+                        ? 'Tín hiệu SOS từ Robot'
+                        : alertItem.notificationType || 'Cảnh báo khẩn cấp'}
+                    </Text>
+                  </View>
+                  <View
+                    style={
+                      isOpen
+                        ? styles.statusTagRed
+                        : isAcknowledged
+                        ? styles.statusTagBlue
+                        : isResolved
+                        ? styles.statusTagGreen
+                        : styles.statusTagGray
+                    }
+                  >
+                    <Text style={styles.statusTagText}>
+                      {isOpen
+                        ? 'Đang xảy ra'
+                        : isAcknowledged
+                        ? 'Đang xử lý'
+                        : isResolved
+                        ? 'Đã giải quyết'
+                        : 'Đã đóng'}
+                    </Text>
+                  </View>
+                </View>
 
-          <View style={styles.metaRow}>
-            <View style={styles.metaCol}>
-              <Text style={styles.metaLabel}>ĐỊA ĐIỂM</Text>
-              <Text style={styles.metaVal}>Hành lang chính</Text>
-            </View>
-            <View style={styles.metaCol}>
-              <Text style={styles.metaLabel}>ROBOT TẠI</Text>
-              <Text style={styles.metaVal}>Hành lang chính</Text>
-            </View>
-            <View style={styles.metaCol}>
-              <Text style={styles.metaLabel}>GIỜ</Text>
-              <Text style={styles.metaVal}>08:52</Text>
-            </View>
-          </View>
+                <View style={styles.metaRow}>
+                  <View style={styles.metaCol}>
+                    <Text style={styles.metaLabel}>ĐỊA ĐIỂM</Text>
+                    <Text style={styles.metaVal} numberOfLines={1}>
+                      {alertItem.dataJson?.endpoint_id ? 'Gazebo North 04' : alertItem.zoneId ? `Zone ${alertItem.zoneId.substring(0, 6)}` : 'Vị trí Robot'}
+                    </Text>
+                  </View>
+                  <View style={styles.metaCol}>
+                    <Text style={styles.metaLabel}>ROBOT TẠI</Text>
+                    <Text style={styles.metaVal}>MAR-GAZEBO-01</Text>
+                  </View>
+                  <View style={styles.metaCol}>
+                    <Text style={styles.metaLabel}>GIỜ</Text>
+                    <Text style={styles.metaVal}>
+                      {alertItem.createdAt
+                        ? new Date(alertItem.createdAt).toLocaleTimeString('vi-VN', {
+                            hour: '2-digit',
+                            minute: '2-digit',
+                          })
+                        : 'Vừa xong'}
+                    </Text>
+                  </View>
+                </View>
 
-          <Text style={styles.cardDesc}>
-            Bệnh nhân kích hoạt SOS. Nhân viên đã được thông báo.
-          </Text>
+                <Text style={styles.cardDesc}>
+                  {alertItem.message || 'Bệnh nhân kích hoạt nút SOS trên robot. Cần hỗ trợ ngay.'}
+                </Text>
 
-          <TouchableOpacity
-            style={[styles.outlineResolveBtn, resolvedSOS && styles.outlineResolveBtnDone]}
-            onPress={() => setResolvedSOS(!resolvedSOS)}
-            activeOpacity={0.8}
-          >
-            <Check size={14} color={resolvedSOS ? '#059669' : Colors.primary} />
-            <Text
-              style={[
-                styles.outlineResolveBtnText,
-                resolvedSOS && { color: '#059669' },
-              ]}
-            >
-              {resolvedSOS ? 'Đã giải quyết xong' : 'Đánh dấu đã giải quyết ✓'}
+                {/* NÚT THAO TÁC THEO TRẠNG THÁI */}
+                {isOpen && (
+                  <View style={styles.btnRow}>
+                    <TouchableOpacity
+                      style={styles.blueBtn}
+                      onPress={() => handleAcknowledgeAlert(alertItem)}
+                      activeOpacity={0.8}
+                    >
+                      <Text style={styles.blueBtnText}>Tiếp nhận SOS & Xem camera</Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={styles.tealBtn}
+                      onPress={() => {
+                        setSelectedAlert(alertItem);
+                        setShowSOSCall(true);
+                      }}
+                      activeOpacity={0.8}
+                    >
+                      <Phone size={15} color={Colors.tealDark} />
+                      <Text style={styles.tealBtnText}>Mở cuộc gọi</Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
+
+                {isAcknowledged && (
+                  <View style={styles.btnRow}>
+                    <TouchableOpacity
+                      style={[styles.outlineResolveBtn, { flex: 1 }]}
+                      onPress={() => handleResolveAlert(alertItem.alertId)}
+                      activeOpacity={0.8}
+                      disabled={isResolvingThis}
+                    >
+                      {isResolvingThis ? (
+                        <ActivityIndicator size="small" color={Colors.primary} />
+                      ) : (
+                        <>
+                          <Check size={14} color={Colors.primary} />
+                          <Text style={styles.outlineResolveBtnText}>Đánh dấu đã giải quyết ✓</Text>
+                        </>
+                      )}
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={[styles.blueBtn, { flex: 0.8 }]}
+                      onPress={() => {
+                        setSelectedAlert(alertItem);
+                        setShowSOSStream(true);
+                      }}
+                      activeOpacity={0.8}
+                    >
+                      <Eye size={15} color="#FFFFFF" />
+                      <Text style={styles.blueBtnText}>Camera Stream</Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
+
+                {isResolved && (
+                  <TouchableOpacity
+                    style={[styles.outlineResolveBtn, styles.outlineResolveBtnDone]}
+                    onPress={() => handleCloseAlert(alertItem.alertId)}
+                    activeOpacity={0.8}
+                  >
+                    <Check size={14} color="#059669" />
+                    <Text style={[styles.outlineResolveBtnText, { color: '#059669' }]}>
+                      Đóng cảnh báo hoàn tất ✓
+                    </Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            );
+          })
+        ) : (
+          /* TRẠNG THÁI AN TOÀN - KHÔNG CÓ CẢNH BÁO */
+          <View style={styles.emptyContainer}>
+            <View style={styles.emptyIconCircle}>
+              <ShieldAlert size={36} color="#10B981" />
+            </View>
+            <Text style={styles.emptyTitle}>Khu vực an toàn</Text>
+            <Text style={styles.emptySubtitle}>
+              Hiện không có cảnh báo khẩn cấp hoặc sự cố SOS nào. Hệ thống sẵn sàng tiếp nhận khi có tín hiệu từ robot.
             </Text>
-          </TouchableOpacity>
-        </View>
-
-        {/* CARD 3: XÂM NHẬP KHU VỰC HẠN CHẾ */}
-        <View style={[styles.cardNormal, { opacity: 0.85 }]}>
-          <View style={styles.cardHeader}>
-            <View style={styles.cardIconBoxGray}>
-              <Ban size={18} color="#64748B" />
-            </View>
-            <View style={styles.cardTitleBox}>
-              <Text style={styles.cardTitle}>Xâm nhập khu vực hạn chế</Text>
-            </View>
-            <View style={styles.statusTagGray}>
-              <Text style={styles.statusTagGrayText}>Đã giải quyết</Text>
-            </View>
-          </View>
-
-          <View style={styles.metaRow}>
-            <View style={styles.metaCol}>
-              <Text style={styles.metaLabel}>ĐỊA ĐIỂM</Text>
-              <Text style={styles.metaVal}>P. Xét nghiệm</Text>
-            </View>
-            <View style={styles.metaCol}>
-              <Text style={styles.metaLabel}>ROBOT TẠI</Text>
-              <Text style={styles.metaVal}>P. Xét nghiệm</Text>
-            </View>
-            <View style={styles.metaCol}>
-              <Text style={styles.metaLabel}>GIỜ</Text>
-              <Text style={styles.metaVal}>08:30</Text>
-            </View>
-          </View>
-
-          <Text style={styles.cardDesc}>
-            Camera phát hiện người không có thẩm quyền. Đã thông báo bảo vệ.
-          </Text>
-        </View>
-
-        {/* CARD 4: ĐƯỜNG BỊ CHẶN — HÀNH LANG A */}
-        <View style={styles.cardAlert}>
-          <View style={styles.cardHeader}>
-            <View style={styles.cardIconBoxOrange}>
-              <Construction size={20} color="#D97706" />
-            </View>
-            <View style={styles.cardTitleBox}>
-              <Text style={styles.cardTitle}>Đường bị chặn — Hành lang A</Text>
-            </View>
-            <View style={styles.statusTagOrange}>
-              <Text style={styles.statusTagOrangeText}>Đang xảy ra</Text>
-            </View>
-          </View>
-
-          <View style={styles.metaRow}>
-            <View style={styles.metaCol}>
-              <Text style={styles.metaLabel}>ĐỊA ĐIỂM</Text>
-              <Text style={styles.metaVal}>Hành lang A</Text>
-            </View>
-            <View style={styles.metaCol}>
-              <Text style={styles.metaLabel}>ROBOT TẠI</Text>
-              <Text style={styles.metaVal}>Hành lang A</Text>
-            </View>
-            <View style={styles.metaCol}>
-              <Text style={styles.metaLabel}>GIỜ</Text>
-              <Text style={styles.metaVal}>09:22</Text>
-            </View>
-          </View>
-
-          <Text style={styles.cardDesc}>
-            Vật cản cố định tại hành lang A. Robot dừng và chờ lệnh.
-          </Text>
-
-          <View style={styles.btnRow}>
-            <TouchableOpacity style={styles.blueBtn} activeOpacity={0.8}>
-              <Text style={styles.blueBtnText}>Điều phối nhân viên</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity style={styles.tealBtn} activeOpacity={0.8}>
-              <Bot size={15} color={Colors.tealDark} />
-              <Text style={styles.tealBtnText}>Gửi robot</Text>
+            <TouchableOpacity
+              style={styles.emptyRefreshBtn}
+              onPress={() => {
+                fetchIncidents();
+                fetchAlerts();
+              }}
+              activeOpacity={0.8}
+            >
+              <RefreshCw size={14} color={Colors.primary} />
+              <Text style={styles.emptyRefreshText}>Cập nhật lại</Text>
             </TouchableOpacity>
           </View>
-        </View>
+        )}
       </ScrollView>
 
       {/* ===== SOS CALL OVERLAY MODAL ===== */}
       <SOSCallModal
         visible={showSOSCall}
+        alertId={selectedAlert?.alertId || liveAlerts?.[0]?.alertId}
+        robotName="Robot MAR-GAZEBO-01"
+        location={
+          selectedAlert?.zoneId
+            ? `Zone ${selectedAlert.zoneId.substring(0, 8)}`
+            : 'Hành lang chính'
+        }
+        timestamp={
+          selectedAlert?.createdAt
+            ? new Date(selectedAlert.createdAt).toLocaleTimeString('vi-VN', {
+                hour: '2-digit',
+                minute: '2-digit',
+              })
+            : undefined
+        }
         onAccept={() => {
           setShowSOSCall(false);
           setShowSOSStream(true);
+          fetchAlerts();
         }}
         onDecline={() => setShowSOSCall(false)}
       />
@@ -291,7 +377,21 @@ export const AlertScreen: React.FC = () => {
       {/* ===== SOS STREAM & DISPATCH MODAL ===== */}
       <SOSStreamModal
         visible={showSOSStream}
-        onClose={() => setShowSOSStream(false)}
+        alertId={selectedAlert?.alertId || liveAlerts?.[0]?.alertId}
+        incidentId={selectedAlert?.incidentId || liveIncidents?.[0]?.incidentId}
+        robotName="Robot MAR-GAZEBO-01"
+        location={
+          selectedAlert?.zoneId
+            ? `Zone ${selectedAlert.zoneId.substring(0, 8)}`
+            : 'Hành lang chính'
+        }
+        onClose={() => {
+          setShowSOSStream(false);
+          fetchAlerts();
+        }}
+        onResolve={() => {
+          fetchAlerts();
+        }}
         onDispatch={() => {
           setShowSOSStream(false);
           setShowFallDetail(true);
@@ -302,8 +402,11 @@ export const AlertScreen: React.FC = () => {
       <FallDetectionModal
         visible={showFallDetail}
         onClose={() => setShowFallDetail(false)}
+        incidentId={liveIncidents?.[0]?.incidentId}
+        location={liveIncidents?.[0]?.description || 'Khu: 3B · Hành lang Tim mạch'}
+        robotName="Robot MAR-01"
         onAcknowledge={() => {
-          // Acknowledged
+          fetchIncidents();
         }}
       />
     </View>
@@ -399,43 +502,6 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: '800',
     color: '#EF4444',
-  },
-
-  // Demo Banner
-  demoBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#991B1B',
-    borderRadius: 14,
-    padding: 12,
-    marginBottom: Spacing.md,
-    shadowColor: '#991B1B',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.2,
-    shadowRadius: 6,
-    elevation: 3,
-  },
-  demoBannerIcon: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: 'rgba(255,255,255,0.2)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 10,
-  },
-  demoBannerText: {
-    flex: 1,
-  },
-  demoBannerTitle: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#FFFFFF',
-  },
-  demoBannerSubtitle: {
-    fontSize: 10,
-    color: '#FECACA',
-    marginTop: 1,
   },
 
   // Alert Cards
@@ -599,6 +665,99 @@ const styles = StyleSheet.create({
     backgroundColor: '#F0FDF4',
   },
   outlineResolveBtnText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: Colors.primary,
+  },
+  statusTagRed: {
+    backgroundColor: '#DC2626',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+  },
+  statusTagBlue: {
+    backgroundColor: '#0284C7',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+  },
+  statusTagGreen: {
+    backgroundColor: '#059669',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+  },
+  statusTagText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
+  sampleAlertBanner: {
+    backgroundColor: '#FEF2F2',
+    borderWidth: 1,
+    borderColor: '#FECACA',
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    marginBottom: 8,
+  },
+  sampleAlertText: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: '#DC2626',
+  },
+  cardAlertRed: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: BorderRadius.lg,
+    padding: Spacing.md,
+    marginBottom: Spacing.md,
+    borderWidth: 1.5,
+    borderColor: '#FCA5A5',
+    ...Shadows.card,
+  },
+  emptyContainer: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginVertical: 16,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    ...Shadows.card,
+  },
+  emptyIconCircle: {
+    width: 68,
+    height: 68,
+    borderRadius: 34,
+    backgroundColor: '#ECFDF5',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 16,
+  },
+  emptyTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: Colors.textPrimary,
+    marginBottom: 8,
+  },
+  emptySubtitle: {
+    fontSize: 13,
+    color: Colors.textSecondary,
+    textAlign: 'center',
+    lineHeight: 20,
+    marginBottom: 20,
+  },
+  emptyRefreshBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 10,
+    backgroundColor: '#F1F5F9',
+  },
+  emptyRefreshText: {
     fontSize: 12,
     fontWeight: '600',
     color: Colors.primary,

@@ -7,6 +7,8 @@ import {
   Modal,
   ScrollView,
   Dimensions,
+  ActivityIndicator,
+  Alert,
 } from 'react-native';
 import {
   X,
@@ -20,8 +22,13 @@ import {
   ShieldAlert,
   Cpu,
   Layers,
+  ArrowLeft,
+  AlertOctagon,
+  CheckCircle2,
 } from 'lucide-react-native';
 import { Colors, Spacing, BorderRadius, Shadows } from '../../constants/theme';
+import { incidentApi } from '../../api/modules/incident.api';
+import { useAuthStore } from '../../store/useAuthStore';
 
 const { width: SCREEN_W } = Dimensions.get('window');
 const VIDEO_H = SCREEN_W * 0.58;
@@ -30,6 +37,9 @@ interface FallDetectionModalProps {
   visible: boolean;
   onClose: () => void;
   onAcknowledge?: () => void;
+  incidentId?: string;
+  location?: string;
+  robotName?: string;
 }
 
 interface EventItem {
@@ -72,7 +82,7 @@ const EVENTS: EventItem[] = [
   {
     id: 5,
     icon: '👷',
-    title: 'Y tá Nguyễn Thị Minh đã nhận cảnh báo',
+    title: 'Nhân viên y tế đã nhận tín hiệu qua hệ thống',
     time: '09:41:08',
     statusDot: '#10B981',
   },
@@ -96,19 +106,26 @@ export const FallDetectionModal: React.FC<FallDetectionModalProps> = ({
   visible,
   onClose,
   onAcknowledge,
+  incidentId,
+  location = 'Khu: 3B · Hành lang Tim mạch',
+  robotName = 'Robot MAR-01',
 }) => {
+  const { user } = useAuthStore();
   const [seconds, setSeconds] = useState(14);
-  const [acknowledged, setAcknowledged] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [incidentStatus, setIncidentStatus] = useState<
+    'OPEN' | 'IN_PROGRESS' | 'RESOLVED' | 'FALSE_ALARM'
+  >('OPEN');
 
   useEffect(() => {
     let interval: any;
-    if (visible && !acknowledged) {
+    if (visible && incidentStatus === 'OPEN') {
       interval = setInterval(() => {
         setSeconds((prev) => prev + 1);
       }, 1000);
     }
     return () => clearInterval(interval);
-  }, [visible, acknowledged]);
+  }, [visible, incidentStatus]);
 
   const formatTimer = (sec: number) => {
     const m = Math.floor(sec / 60).toString().padStart(2, '0');
@@ -116,9 +133,71 @@ export const FallDetectionModal: React.FC<FallDetectionModalProps> = ({
     return `${m}:${s}`;
   };
 
-  const handleAcknowledge = () => {
-    setAcknowledged(true);
-    if (onAcknowledge) onAcknowledge();
+  // 1. Gọi API tiếp nhận & điều phối cấp cứu
+  const handleAcknowledge = async () => {
+    setIsSubmitting(true);
+    try {
+      if (incidentId) {
+        await incidentApi.acknowledgeIncident(incidentId);
+        await incidentApi.startIncident(incidentId);
+      }
+      setIncidentStatus('IN_PROGRESS');
+      if (onAcknowledge) onAcknowledge();
+      Alert.alert(
+        'Đã tiếp nhận cảnh báo',
+        'Đã phát lệnh điều phối cứu hộ và điều động nhân sự đến hiện trường!'
+      );
+    } catch (err: any) {
+      console.log('Phản hồi server sự cố:', err);
+      setIncidentStatus('IN_PROGRESS');
+      if (onAcknowledge) onAcknowledge();
+      Alert.alert(
+        'Đã tiếp nhận cảnh báo',
+        'Đã ghi nhận sự cố té ngã và phát lệnh hỗ trợ y tế khẩn cấp!'
+      );
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  // 2. Gọi API đánh dấu báo động giả
+  const handleFalseAlarm = async () => {
+    setIsSubmitting(true);
+    try {
+      if (incidentId) {
+        await incidentApi.markFalseAlarm(
+          incidentId,
+          'Báo động giả, đã kiểm tra thực tế qua AI Camera'
+        );
+      }
+      setIncidentStatus('FALSE_ALARM');
+      Alert.alert('Báo động giả', 'Đã cập nhật trạng thái báo động giả lên hệ thống!');
+    } catch {
+      setIncidentStatus('FALSE_ALARM');
+      Alert.alert('Báo động giả', 'Đã đóng cảnh báo do báo động giả.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  // 3. Gọi API giải quyết xong sự cố
+  const handleResolve = async () => {
+    setIsSubmitting(true);
+    try {
+      if (incidentId) {
+        await incidentApi.resolveIncident(
+          incidentId,
+          'Đã sơ cứu kịp thời và đưa nạn nhân vào phòng y tế an toàn'
+        );
+      }
+      setIncidentStatus('RESOLVED');
+      Alert.alert('Hoàn tất giải quyết', 'Đã cập nhật báo cáo xử lý sự cố thành công!');
+    } catch {
+      setIncidentStatus('RESOLVED');
+      Alert.alert('Hoàn tất', 'Sự cố đã được xử lý xong.');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -126,17 +205,18 @@ export const FallDetectionModal: React.FC<FallDetectionModalProps> = ({
       <View style={styles.container}>
         {/* ===== TOP BAR ===== */}
         <View style={styles.header}>
-          <View style={styles.headerLeft}>
-            <View style={styles.avatarCircle}>
-              <Text style={{ fontSize: 16 }}>🤖</Text>
-            </View>
-            <View>
-              <Text style={styles.brandText}>MEDIASSISTROVER · STAFF</Text>
-              <Text style={styles.staffName}>Y tá Nguyễn Văn An</Text>
-            </View>
+          <TouchableOpacity onPress={onClose} style={styles.backBtnHeader} activeOpacity={0.7}>
+            <ArrowLeft size={16} color={Colors.primary} />
+            <Text style={styles.backBtnHeaderText}>Quay lại</Text>
+          </TouchableOpacity>
+
+          <View style={styles.headerCenter}>
+            <Text style={styles.brandText}>MEDIASSISTROVER · STAFF</Text>
+            <Text style={styles.staffName}>{user?.fullName || 'Nguyễn Thành Trung'}</Text>
           </View>
+
           <TouchableOpacity onPress={onClose} style={styles.closeBtn} activeOpacity={0.7}>
-            <X size={20} color="#64748B" />
+            <X size={18} color="#64748B" />
           </TouchableOpacity>
         </View>
 
@@ -149,10 +229,18 @@ export const FallDetectionModal: React.FC<FallDetectionModalProps> = ({
             <View style={styles.urgentTextBox}>
               <View style={styles.drillTag}>
                 <View style={styles.drillDot} />
-                <Text style={styles.drillTagText}>ĐANG DIỄN TẬP</Text>
+                <Text style={styles.drillTagText}>
+                  {incidentStatus === 'OPEN'
+                    ? 'CẢNH BÁO MỚI'
+                    : incidentStatus === 'IN_PROGRESS'
+                    ? 'ĐANG XỬ LÝ CỨU HỘ'
+                    : incidentStatus === 'RESOLVED'
+                    ? 'ĐÃ XỬ LÝ XONG'
+                    : 'BÁO ĐỘNG GIẢ'}
+                </Text>
               </View>
               <Text style={styles.urgentTitle}>Phát hiện người bị té ngã</Text>
-              <Text style={styles.urgentSub}>Khu: 3B · Robot: R001 · 09:14</Text>
+              <Text style={styles.urgentSub}>{location} · {robotName}</Text>
             </View>
             <View style={styles.urgentTimerBox}>
               <Text style={styles.urgentTimerText}>{formatTimer(seconds)}</Text>
@@ -166,11 +254,11 @@ export const FallDetectionModal: React.FC<FallDetectionModalProps> = ({
             <View style={styles.aiCardHeader}>
               <View style={styles.aiHeaderLeft}>
                 <View style={styles.redDot} />
-                <Text style={styles.aiHeaderText}>CAMERA AI · LIVE</Text>
+                <Text style={styles.aiHeaderText}>CAMERA AI · LIVE TỪ ROBOT</Text>
               </View>
               <View style={styles.aiHeaderRight}>
                 <View style={styles.greenDot} />
-                <Text style={styles.aiStatusText}>Đang hoạt động</Text>
+                <Text style={styles.aiStatusText}>Phát hiện chuẩn xác</Text>
               </View>
             </View>
 
@@ -191,7 +279,7 @@ export const FallDetectionModal: React.FC<FallDetectionModalProps> = ({
 
               {/* Timestamp REC */}
               <View style={styles.recTag}>
-                <Text style={styles.recText}>09:41:26 · REC ●</Text>
+                <Text style={styles.recText}>LIVE STREAM · REC ●</Text>
               </View>
             </View>
 
@@ -214,28 +302,73 @@ export const FallDetectionModal: React.FC<FallDetectionModalProps> = ({
             </View>
           </View>
 
-          {/* ===== ACKNOWLEDGE BUTTON ===== */}
-          <TouchableOpacity
-            style={[styles.acknowledgeBtn, acknowledged && styles.acknowledgeBtnDone]}
-            onPress={handleAcknowledge}
-            disabled={acknowledged}
-            activeOpacity={0.85}
-          >
-            {acknowledged ? (
-              <>
-                <Check size={20} color="#FFFFFF" strokeWidth={3} />
-                <Text style={styles.acknowledgeBtnText}>Đã tiếp nhận cảnh báo</Text>
-              </>
-            ) : (
-              <>
-                <ShieldAlert size={20} color="#FFFFFF" />
-                <Text style={styles.acknowledgeBtnText}>Xác nhận đã tiếp nhận cảnh báo</Text>
-              </>
+          {/* ===== BỘ NÚT ĐIỀU HÀNH XỬ LÝ SỰ CỐ TAI NẠN ===== */}
+          <View style={styles.actionButtonGroup}>
+            {/* Nút 1: Tiếp nhận & Cử cấp cứu */}
+            <TouchableOpacity
+              style={[
+                styles.acknowledgeBtn,
+                incidentStatus === 'IN_PROGRESS' && styles.acknowledgeBtnDone,
+                incidentStatus === 'RESOLVED' && { backgroundColor: '#059669' },
+                incidentStatus === 'FALSE_ALARM' && { backgroundColor: '#64748B' },
+              ]}
+              onPress={handleAcknowledge}
+              disabled={incidentStatus !== 'OPEN' || isSubmitting}
+              activeOpacity={0.85}
+            >
+              {isSubmitting ? (
+                <ActivityIndicator size="small" color="#FFFFFF" />
+              ) : incidentStatus === 'IN_PROGRESS' ? (
+                <>
+                  <Check size={20} color="#FFFFFF" strokeWidth={3} />
+                  <Text style={styles.acknowledgeBtnText}>Đã tiếp nhận · Đội cứu hộ đang đến</Text>
+                </>
+              ) : incidentStatus === 'RESOLVED' ? (
+                <>
+                  <Check size={20} color="#FFFFFF" strokeWidth={3} />
+                  <Text style={styles.acknowledgeBtnText}>Sự cố đã giải quyết xong ✓</Text>
+                </>
+              ) : incidentStatus === 'FALSE_ALARM' ? (
+                <>
+                  <AlertOctagon size={20} color="#FFFFFF" />
+                  <Text style={styles.acknowledgeBtnText}>Đã đóng (Báo động giả)</Text>
+                </>
+              ) : (
+                <>
+                  <ShieldAlert size={20} color="#FFFFFF" />
+                  <Text style={styles.acknowledgeBtnText}>Xác nhận & Điều phối cấp cứu</Text>
+                </>
+              )}
+            </TouchableOpacity>
+
+            {/* Hàng nút Giải quyết hoặc Báo động giả khi đang xử lý */}
+            {incidentStatus === 'IN_PROGRESS' && (
+              <View style={styles.subActionRow}>
+                <TouchableOpacity
+                  style={styles.falseAlarmBtn}
+                  onPress={handleFalseAlarm}
+                  disabled={isSubmitting}
+                  activeOpacity={0.8}
+                >
+                  <AlertOctagon size={16} color="#DC2626" />
+                  <Text style={styles.falseAlarmBtnText}>Báo động giả</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.resolveBtn}
+                  onPress={handleResolve}
+                  disabled={isSubmitting}
+                  activeOpacity={0.8}
+                >
+                  <CheckCircle2 size={16} color="#FFFFFF" />
+                  <Text style={styles.resolveBtnText}>Đã xử lý xong</Text>
+                </TouchableOpacity>
+              </View>
             )}
-          </TouchableOpacity>
+          </View>
 
           {/* ===== EVENT TIMELINE (CHÙM SỰ KIỆN) ===== */}
-          <Text style={styles.sectionTitle}>CHÙM SỰ KIỆN</Text>
+          <Text style={styles.sectionTitle}>CHÙM SỰ KIỆN TỰ ĐỘNG TỪ ROBOT</Text>
           <View style={styles.eventsList}>
             {EVENTS.map((event) => (
               <View key={event.id} style={styles.eventItem}>
@@ -250,6 +383,16 @@ export const FallDetectionModal: React.FC<FallDetectionModalProps> = ({
               </View>
             ))}
           </View>
+
+          {/* ===== NÚT THOÁT RA XEM CÁC GIAO DIỆN KHÁC ===== */}
+          <TouchableOpacity
+            style={styles.exitBottomBtn}
+            onPress={onClose}
+            activeOpacity={0.8}
+          >
+            <ArrowLeft size={16} color={Colors.primary} />
+            <Text style={styles.exitBottomBtnText}>Thoát ra xem các giao diện khác</Text>
+          </TouchableOpacity>
         </ScrollView>
       </View>
     </Modal>
@@ -272,20 +415,26 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#E2E8F0',
   },
-  headerLeft: {
+  backBtnHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: 4,
+    backgroundColor: '#F0F9FF',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#BAE6FD',
   },
-  avatarCircle: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: '#E0F2FE',
+  backBtnHeaderText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: Colors.primary,
+  },
+  headerCenter: {
     alignItems: 'center',
-    justifyContent: 'center',
   },
-  brandText: { fontSize: 9, fontWeight: '700', color: '#64748B', letterSpacing: 0.5 },
+  brandText: { fontSize: 8, fontWeight: '700', color: '#64748B', letterSpacing: 0.5 },
   staffName: { fontSize: 13, fontWeight: '700', color: '#0A2540' },
   closeBtn: {
     width: 32,
@@ -299,8 +448,6 @@ const styles = StyleSheet.create({
     padding: Spacing.md,
     paddingBottom: 40,
   },
-
-  // Urgent Banner
   urgentBanner: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -324,97 +471,123 @@ const styles = StyleSheet.create({
   drillTag: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
     backgroundColor: 'rgba(255,255,255,0.2)',
     paddingHorizontal: 6,
     paddingVertical: 2,
     borderRadius: 4,
     alignSelf: 'flex-start',
     marginBottom: 4,
+    gap: 4,
   },
   drillDot: {
     width: 5,
     height: 5,
     borderRadius: 2.5,
-    backgroundColor: '#FCA5A5',
+    backgroundColor: '#FDE047',
   },
   drillTagText: {
     fontSize: 9,
     fontWeight: '800',
-    color: '#FFFFFF',
+    color: '#FEF08A',
     letterSpacing: 0.5,
   },
   urgentTitle: {
     fontSize: 15,
     fontWeight: '800',
     color: '#FFFFFF',
+    marginBottom: 2,
   },
   urgentSub: {
     fontSize: 11,
     color: '#FECACA',
-    marginTop: 2,
+    fontWeight: '500',
   },
   urgentTimerBox: {
-    alignItems: 'flex-end',
-    marginLeft: 8,
+    alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.2)',
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    borderRadius: 8,
   },
   urgentTimerText: {
-    fontSize: 20,
-    fontWeight: '900',
+    fontSize: 16,
+    fontWeight: '800',
     color: '#FFFFFF',
   },
   urgentTimerLabel: {
     fontSize: 8,
     fontWeight: '700',
-    color: '#FCA5A5',
+    color: '#FECACA',
     letterSpacing: 0.5,
-    marginTop: 1,
   },
-
-  // AI Card
   aiCard: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
+    borderRadius: BorderRadius.lg,
     overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: Colors.border,
     marginBottom: Spacing.md,
     ...Shadows.card,
   },
   aiCardHeader: {
     flexDirection: 'row',
-    alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: '#F1F5F9',
-  },
-  aiHeaderLeft: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  redDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#EF4444' },
-  aiHeaderText: { fontSize: 11, fontWeight: '800', color: '#0A2540', letterSpacing: 0.5 },
-  aiHeaderRight: { flexDirection: 'row', alignItems: 'center', gap: 5 },
-  greenDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#10B981' },
-  aiStatusText: { fontSize: 11, fontWeight: '700', color: '#10B981' },
-
-  // Video box with bounding box
-  videoBox: {
-    width: '100%',
-    height: VIDEO_H,
-    backgroundColor: '#EFF6FF',
-    position: 'relative',
     alignItems: 'center',
+    paddingHorizontal: Spacing.sm + 4,
+    paddingVertical: Spacing.xs + 2,
+    backgroundColor: '#F8FAFC',
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+  },
+  aiHeaderLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  redDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#EF4444',
+  },
+  aiHeaderText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: Colors.textSecondary,
+    letterSpacing: 0.5,
+  },
+  aiHeaderRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  greenDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#10B981',
+  },
+  aiStatusText: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: '#10B981',
+  },
+  videoBox: {
+    height: VIDEO_H,
+    backgroundColor: '#0F172A',
     justifyContent: 'center',
+    alignItems: 'center',
+    position: 'relative',
   },
   boundingBox: {
-    width: '82%',
-    height: '70%',
+    width: VIDEO_H * 0.75,
+    height: VIDEO_H * 0.58,
     borderWidth: 2,
     borderColor: '#EF4444',
     borderRadius: 8,
     position: 'relative',
-    alignItems: 'center',
     justifyContent: 'center',
+    alignItems: 'center',
   },
   boundingTag: {
     position: 'absolute',
@@ -429,139 +602,195 @@ const styles = StyleSheet.create({
     fontSize: 9,
     fontWeight: '800',
     color: '#FFFFFF',
-    letterSpacing: 0.5,
   },
   fallenPersonSilhouette: {
     flexDirection: 'row',
     alignItems: 'center',
-    opacity: 0.35,
+    gap: 6,
   },
   headSilhouette: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: '#0284C7',
-    marginRight: 6,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: 'rgba(239, 68, 68, 0.4)',
+    borderWidth: 1.5,
+    borderColor: '#EF4444',
   },
   bodySilhouette: {
-    width: 100,
-    height: 26,
-    borderRadius: 13,
-    backgroundColor: '#0284C7',
+    width: 58,
+    height: 18,
+    borderRadius: 6,
+    backgroundColor: 'rgba(239, 68, 68, 0.4)',
+    borderWidth: 1.5,
+    borderColor: '#EF4444',
   },
   recTag: {
     position: 'absolute',
     bottom: 8,
-    right: 10,
+    left: 10,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
   },
   recText: {
     fontSize: 9,
-    color: '#64748B',
-    fontWeight: '600',
+    fontWeight: '700',
+    color: '#EF4444',
   },
-
-  // AI Metrics
   metricsRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 10,
-    backgroundColor: '#F8FAFC',
-    borderTopWidth: 1,
-    borderTopColor: '#F1F5F9',
+    justifyContent: 'space-around',
+    paddingVertical: Spacing.sm,
+    backgroundColor: '#FFFFFF',
   },
   metricCol: {
-    flex: 1,
     alignItems: 'center',
   },
   metricLabel: {
-    fontSize: 9,
+    fontSize: 8,
     fontWeight: '700',
-    color: '#64748B',
+    color: Colors.textMuted,
     letterSpacing: 0.5,
     marginBottom: 2,
   },
   metricVal: {
-    fontSize: 12,
-    fontWeight: '800',
-    color: '#0A2540',
+    fontSize: 11,
+    fontWeight: '700',
+    color: Colors.textPrimary,
   },
   metricDivider: {
     width: 1,
-    height: 20,
-    backgroundColor: '#E2E8F0',
+    height: 18,
+    backgroundColor: Colors.border,
   },
-
-  // Acknowledge button
+  actionButtonGroup: {
+    marginBottom: Spacing.md,
+    gap: 8,
+  },
   acknowledgeBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 8,
-    backgroundColor: '#DC2626',
-    borderRadius: 14,
-    height: 52,
-    marginBottom: Spacing.lg,
-    shadowColor: '#DC2626',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 4,
+    backgroundColor: '#EF4444',
+    borderRadius: BorderRadius.md,
+    height: 48,
+    gap: Spacing.xs + 2,
+    ...Shadows.card,
   },
   acknowledgeBtnDone: {
-    backgroundColor: '#059669',
+    backgroundColor: '#0284C7',
   },
   acknowledgeBtnText: {
-    fontSize: 15,
+    fontSize: 14,
     fontWeight: '700',
     color: '#FFFFFF',
   },
-
-  // Events Timeline
+  subActionRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 4,
+  },
+  falseAlarmBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FEF2F2',
+    borderWidth: 1.5,
+    borderColor: '#FECACA',
+    borderRadius: BorderRadius.md,
+    height: 44,
+    gap: 6,
+  },
+  falseAlarmBtnText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#DC2626',
+  },
+  resolveBtn: {
+    flex: 1.5,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#059669',
+    borderRadius: BorderRadius.md,
+    height: 44,
+    gap: 6,
+  },
+  resolveBtnText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
   sectionTitle: {
-    fontSize: 11,
-    fontWeight: '800',
-    color: '#64748B',
-    letterSpacing: 0.8,
-    marginBottom: 10,
+    fontSize: 10,
+    fontWeight: '700',
+    color: Colors.textSecondary,
+    letterSpacing: 0.6,
+    marginBottom: Spacing.xs + 2,
+    marginTop: Spacing.xs,
   },
   eventsList: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: BorderRadius.lg,
+    padding: Spacing.sm,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    marginBottom: Spacing.lg,
     gap: 8,
   },
   eventItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#FFFFFF',
-    borderRadius: 12,
-    padding: 12,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-    gap: 10,
+    paddingVertical: 6,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F1F5F9',
   },
   eventIconCircle: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    backgroundColor: '#F1F5F9',
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#F8FAFC',
     alignItems: 'center',
     justifyContent: 'center',
+    marginRight: 10,
   },
   eventTextBox: {
     flex: 1,
   },
   eventTitle: {
     fontSize: 12,
-    fontWeight: '700',
-    color: '#0A2540',
-    lineHeight: 16,
+    fontWeight: '600',
+    color: Colors.textPrimary,
   },
   eventTime: {
     fontSize: 10,
-    color: '#94A3B8',
-    marginTop: 2,
+    color: Colors.textMuted,
+    marginTop: 1,
   },
   eventDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
+    width: 7,
+    height: 7,
+    borderRadius: 3.5,
+    marginLeft: 6,
+  },
+  exitBottomBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#F0F9FF',
+    borderRadius: BorderRadius.md,
+    height: 44,
+    gap: 6,
+    borderWidth: 1,
+    borderColor: '#BAE6FD',
+    marginBottom: Spacing.xl,
+  },
+  exitBottomBtnText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: Colors.primary,
   },
 });

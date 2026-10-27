@@ -8,8 +8,30 @@ import {
   ScrollView,
   Animated,
   Dimensions,
+  ActivityIndicator,
+  Alert,
 } from 'react-native';
 import { Colors, Spacing, BorderRadius, Shadows, Typography } from '../../constants/theme';
+import { StaffHeader } from '../../components/common/StaffHeader';
+import { robotApi } from '../../api/modules/robot.api';
+import { deliveryApi } from '../../api/modules/delivery.api';
+import { scheduleApi } from '../../api/modules/schedule.api';
+import { facilityApi } from '../../api/modules/facility.api';
+import { dispatchApi } from '../../api/modules/dispatch.api';
+import {
+  RobotDto,
+  DeliveryResponse,
+  MapResponse,
+  FloorResponse,
+  EndpointResponse,
+  ScheduleResponse,
+  JobResponse,
+} from '../../api/types';
+import { SOSCallModal } from '../../components/sos/SOSCallModal';
+import { SOSStreamModal } from '../../components/sos/SOSStreamModal';
+import { HospitalSvgMap } from '../../components/map/HospitalSvgMap';
+import { RobotTouchInterfaceModal } from '../../components/map/RobotTouchInterfaceModal';
+import { useHospitalMapStore, HospitalZone } from '../../store/useHospitalMapStore';
 import {
   LogOut,
   Settings,
@@ -27,6 +49,15 @@ import {
   Pill,
   FlaskConical,
   Radio,
+  RefreshCw,
+  Calendar,
+  Navigation,
+  MapPin,
+  Compass,
+  Trash2,
+  Send,
+  UserCheck,
+  Bot,
 } from 'lucide-react-native';
 
 const { height: SCREEN_HEIGHT } = Dimensions.get('window');
@@ -38,6 +69,8 @@ interface Room {
   row: number;
   col: number;
   bgColor?: string;
+  color?: string;
+  badge?: string;
   hasSOS?: boolean;
   isActive?: boolean;
 }
@@ -123,6 +156,93 @@ const QUEUE_ITEMS: QueueItem[] = [
   },
 ];
 
+// ===== Lịch trình mẫu khi máy chủ chưa phát sinh lịch mới =====
+const DEFAULT_SCHEDULES = [
+  {
+    scheduleId: 'SCH-01',
+    scheduleName: 'Khử khuẩn hành lang ca đêm',
+    scheduleType: 'DISINFECTION',
+    cronExpression: '0 22 * * * (22:00 hằng ngày)',
+    nextRunAt: '2026-10-20T22:00:00Z',
+    status: 'ACTIVE' as const,
+    intervalSec: 86400,
+  },
+  {
+    scheduleId: 'SCH-02',
+    scheduleName: 'Tuần tra an ninh & phát hiện sự cố SOS',
+    scheduleType: 'PATROL',
+    cronExpression: '*/30 8-18 * * * (Mỗi 30 phút)',
+    nextRunAt: '2026-10-20T14:00:00Z',
+    status: 'ACTIVE' as const,
+    intervalSec: 1800,
+  },
+  {
+    scheduleId: 'SCH-03',
+    scheduleName: 'Giao mẫu xét nghiệm định kỳ',
+    scheduleType: 'DELIVERY',
+    cronExpression: '0 9,11,14,16 * * *',
+    nextRunAt: '2026-10-20T16:00:00Z',
+    status: 'PAUSED' as const,
+    intervalSec: 7200,
+  },
+];
+
+// ===== Helper chuyển đổi thông tin Job sang tên nhiệm vụ thân thiện =====
+const getJobDisplayInfo = (job: JobResponse, epList: EndpointResponse[]) => {
+  const input = job.inputJson || {};
+  const targetEpId = input.endpoint_id || input.destination_endpoint_id || input.destinationEndpointId;
+  const originEpId = input.origin_endpoint_id || input.originEndpointId || input.pickup_endpoint_id || input.pickupEndpointId;
+
+  const targetEp = targetEpId ? epList.find((e) => e.endpointId === targetEpId) : null;
+  const originEp = originEpId ? epList.find((e) => e.endpointId === originEpId) : null;
+
+  const destinationName = targetEp
+    ? targetEp.endpointName
+    : input.target_mode === 'ENDPOINT_GROUP'
+      ? 'Khu vực chỉ định'
+      : targetEpId
+        ? `Điểm ${String(targetEpId).substring(0, 8)}...`
+        : 'Vị trí yêu cầu';
+
+  const originName = originEp ? originEp.endpointName : null;
+
+  // Xác định nghiệp vụ nhiệm vụ
+  const isEscort = Boolean(input.escort_mode || input.patient_reference || input.patientReference);
+  const isDelivery = Boolean(input.items || input.pickup_endpoint_id || input.pickupEndpointId);
+
+  let title = '';
+  let category = '';
+  let icon = '🚀';
+
+  if (isEscort) {
+    icon = '🚶‍♂️';
+    category = 'Dẫn đường bệnh nhân';
+    title = `Dẫn đường đến ${destinationName}`;
+  } else if (isDelivery) {
+    icon = '📦';
+    category = 'Vận chuyển y tế';
+    title = `Vận chuyển đến ${destinationName}`;
+  } else {
+    icon = '🚀';
+    category = 'Điều hướng robot';
+    title = `Điều hướng đến ${destinationName}`;
+  }
+
+  // Mức độ ưu tiên
+  let priorityLabel = 'Bình thường (P2)';
+  if (job.priority >= 80) priorityLabel = 'Khẩn cấp (P1)';
+  else if (job.priority < 40) priorityLabel = 'Thấp (P3)';
+
+  return {
+    icon,
+    category,
+    title,
+    destinationName,
+    originName,
+    priorityLabel,
+  };
+};
+
 export const MapScreen: React.FC = () => {
   const [currentTime, setCurrentTime] = useState('');
   const [selectedRoom, setSelectedRoom] = useState<Room | null>(null);
@@ -130,12 +250,62 @@ export const MapScreen: React.FC = () => {
   const [showQueueSheet, setShowQueueSheet] = useState(false);
   const [showTimelineSheet, setShowTimelineSheet] = useState(false);
   const [showConfirmModal, setShowConfirmModal] = useState(false);
+  const [showSOSCall, setShowSOSCall] = useState(false);
+  const [showSOSStream, setShowSOSStream] = useState(false);
+  const [showScheduleSheet, setShowScheduleSheet] = useState(false);
+  const [showLocationSheet, setShowLocationSheet] = useState(false);
   const [isExpanded, setIsExpanded] = useState(true);
   const [robotStatus, setRobotStatus] = useState<'running' | 'paused'>('running');
 
   // Animation values
   const sosAnim = useRef(new Animated.Value(1)).current;
   const pulseAnim = useRef(new Animated.Value(1)).current;
+
+  // Facility & Maps & Schedules state
+  const [activeMap, setActiveMap] = useState<MapResponse | null>(null);
+  const [activeFloor, setActiveFloor] = useState<FloorResponse | null>(null);
+  const [endpoints, setEndpoints] = useState<EndpointResponse[]>([]);
+  const [schedules, setSchedules] = useState<ScheduleResponse[]>([]);
+  const [isLoadingSchedules, setIsLoadingSchedules] = useState(false);
+  const [actionScheduleId, setActionScheduleId] = useState<string | null>(null);
+
+  // Jobs & Dispatch state (Nhiệm vụ & Điều phối Robot)
+  const [jobs, setJobs] = useState<JobResponse[]>([]);
+  const [isLoadingJobs, setIsLoadingJobs] = useState(false);
+  const [queueTab, setQueueTab] = useState<'jobs' | 'deliveries'>('jobs');
+  const [isDispatching, setIsDispatching] = useState(false);
+  const [dispatchMode, setDispatchMode] = useState<'NAV' | 'ESCORT'>('NAV');
+  const [cancellingJobId, setCancellingJobId] = useState<string | null>(null);
+
+  // Hospital SVG Map Store (Đồng bộ 1200x680 giữa Staff App và Robot App)
+  const {
+    zones: hospitalZones,
+    robotState,
+    selectedZoneId,
+    selectZone,
+    dispatchRobotToZone,
+    isRobotScreenOpen,
+    setRobotScreenOpen,
+  } = useHospitalMapStore();
+
+  const [selectedHospitalZone, setSelectedHospitalZone] = useState<HospitalZone | null>(null);
+
+  const handleSelectHospitalZone = useCallback(
+    (zone: HospitalZone) => {
+      setSelectedHospitalZone(zone);
+      selectZone(zone.id);
+      setSelectedRoom({
+        id: zone.id,
+        name: zone.name,
+        row: 0,
+        col: 0,
+        color: zone.color,
+        badge: zone.code,
+      });
+      setShowRoomSheet(true);
+    },
+    [selectZone]
+  );
 
   // Realtime clock
   useEffect(() => {
@@ -180,6 +350,204 @@ export const MapScreen: React.FC = () => {
     setShowRoomSheet(true);
   }, []);
 
+  const [robotData, setRobotData] = useState<RobotDto | null>(null);
+  const [isLoadingRobot, setIsLoadingRobot] = useState(false);
+  const [deliveryRequests, setDeliveryRequests] = useState<DeliveryResponse[]>([]);
+  const [isLoadingQueue, setIsLoadingQueue] = useState(false);
+
+  const fetchRobot = useCallback(async () => {
+    setIsLoadingRobot(true);
+    try {
+      const res = await robotApi.getRobots(0, 5);
+      if (res?.content && res.content.length > 0) {
+        setRobotData(res.content[0]);
+      }
+    } catch (err) {
+      console.log('Using default robot data:', err);
+    } finally {
+      setIsLoadingRobot(false);
+    }
+  }, []);
+
+  const fetchFacilityData = useCallback(async () => {
+    try {
+      const [mapsRes, floorsRes, epRes] = await Promise.all([
+        facilityApi.getMaps(0, 5),
+        facilityApi.getFloors(0, 5),
+        facilityApi.getEndpoints(0, 50),
+      ]);
+      if (mapsRes?.content && mapsRes.content.length > 0) {
+        const active = mapsRes.content.find((m) => m.status === 'ACTIVE') || mapsRes.content[0];
+        setActiveMap(active);
+      }
+      if (floorsRes?.content && floorsRes.content.length > 0) {
+        setActiveFloor(floorsRes.content[0]);
+      }
+      if (epRes?.content && epRes.content.length > 0) {
+        setEndpoints(epRes.content);
+      }
+    } catch (err) {
+      console.log('Error fetching facility data:', err);
+    }
+  }, []);
+
+  const fetchSchedules = useCallback(async () => {
+    setIsLoadingSchedules(true);
+    try {
+      const res = await scheduleApi.getSchedules({ page: 0, size: 10 });
+      if (res?.content) {
+        setSchedules(res.content);
+      }
+    } catch (err) {
+      console.log('Error fetching schedules:', err);
+    } finally {
+      setIsLoadingSchedules(false);
+    }
+  }, []);
+
+  const fetchDeliveryQueue = useCallback(async () => {
+    setIsLoadingQueue(true);
+    try {
+      const res = await deliveryApi.getDeliveryRequests(0, 10);
+      if (res?.content) {
+        setDeliveryRequests(res.content);
+      }
+    } catch (err) {
+      console.log('Error fetching delivery queue:', err);
+    } finally {
+      setIsLoadingQueue(false);
+    }
+  }, []);
+
+  const handleToggleSchedule = async (scheduleItem: ScheduleResponse) => {
+    setActionScheduleId(scheduleItem.scheduleId);
+    try {
+      if (scheduleItem.status === 'ACTIVE') {
+        await scheduleApi.pauseSchedule(scheduleItem.scheduleId);
+        Alert.alert('Thành công', `Đã tạm dừng lịch trình "${scheduleItem.scheduleName}".`);
+      } else {
+        await scheduleApi.activateSchedule(scheduleItem.scheduleId);
+        Alert.alert('Thành công', `Đã kích hoạt lịch trình "${scheduleItem.scheduleName}".`);
+      }
+      await fetchSchedules();
+    } catch (err: any) {
+      console.log('Error toggling schedule:', err);
+      Alert.alert('Lỗi', err?.message || 'Không thể đổi trạng thái lịch trình');
+    } finally {
+      setActionScheduleId(null);
+    }
+  };
+
+  const fetchJobs = useCallback(async () => {
+    setIsLoadingJobs(true);
+    try {
+      const res = await dispatchApi.getJobs({ page: 0, size: 20 });
+      if (res?.content) {
+        setJobs(res.content);
+      }
+    } catch (err) {
+      console.log('Error fetching jobs:', err);
+    } finally {
+      setIsLoadingJobs(false);
+    }
+  }, []);
+
+  const handleDispatchRobot = async () => {
+    if (!selectedRoom) return;
+    setIsDispatching(true);
+    try {
+      // 1. Kích hoạt thuật toán di chuyển thời gian thực trên bản đồ 1200x680
+      const targetZone =
+        selectedHospitalZone ||
+        hospitalZones.find((z) => z.id === selectedRoom.id || z.name === selectedRoom.name) ||
+        hospitalZones[0];
+
+      dispatchRobotToZone(targetZone.id);
+
+      // 2. Gửi lệnh điều phối lên Backend Railway (nếu kết nối)
+      const mapId = activeMap?.mapId || 'dee53b44-a8ef-446a-947e-c42aa14ce9c2';
+      const targetEp = endpoints.find((e) => e.mapId === mapId) || endpoints[0];
+      const epId = targetEp?.endpointId || '74d46e9c-73f0-4b05-91b3-4adabf54bf86';
+
+      if (dispatchMode === 'ESCORT') {
+        dispatchApi
+          .dispatchEscortToJob({
+            mapId,
+            endpointId: epId,
+            patientReference: `Bệnh nhân đến ${selectedRoom.name}`,
+            note: `Dẫn đường bệnh nhân đến ${selectedRoom.name} từ Staff App`,
+            walkingSpeedMps: 0.2,
+            priority: 60,
+          })
+          .catch((err) => console.log('Escort API note:', err.message));
+      } else {
+        dispatchApi
+          .dispatchNavigationToJob({
+            mapId,
+            endpointId: epId,
+            note: `Điều robot đến ${selectedRoom.name} từ Staff App`,
+            passengerCount: 1,
+            priority: 50,
+          })
+          .catch((err) => console.log('Nav API note:', err.message));
+      }
+
+      setShowRoomSheet(false);
+      Alert.alert(
+        'Đã điều phối Robot! 🚀',
+        `Robot MAR-01 đang tự hành di chuyển dọc theo tuyến đường đến ${selectedRoom.name}.\n\nBạn có thể nhấn nút "Màn hình Robot AMR" ở trên để xem trực tiếp góc nhìn cảm ứng của Robot!`
+      );
+      await fetchJobs();
+    } catch (err: any) {
+      console.log('Error dispatching robot:', err);
+      Alert.alert('Không thể gửi robot', err?.message || 'Lỗi kết nối máy chủ');
+    } finally {
+      setIsDispatching(false);
+    }
+  };
+
+  const handleCancelJob = async (jobId: string) => {
+    Alert.alert('Xác nhận hủy', 'Bạn có chắc chắn muốn hủy nhiệm vụ này của robot?', [
+      { text: 'Quay lại', style: 'cancel' },
+      {
+        text: 'HỦY NHIỆM VỤ',
+        style: 'destructive',
+        onPress: async () => {
+          setCancellingJobId(jobId);
+          try {
+            await dispatchApi.cancelJob(jobId, 'Nhân viên y tế hủy từ Staff App');
+            Alert.alert('Thành công', 'Đã gửi yêu cầu hủy nhiệm vụ robot.');
+            await fetchJobs();
+          } catch (err: any) {
+            Alert.alert('Lỗi', err?.message || 'Không thể hủy nhiệm vụ');
+          } finally {
+            setCancellingJobId(null);
+          }
+        },
+      },
+    ]);
+  };
+
+  useEffect(() => {
+    fetchRobot();
+    fetchFacilityData();
+    fetchSchedules();
+    fetchJobs();
+  }, [fetchRobot, fetchFacilityData, fetchSchedules, fetchJobs]);
+
+  useEffect(() => {
+    if (showQueueSheet) {
+      fetchDeliveryQueue();
+      fetchJobs();
+    }
+  }, [showQueueSheet, fetchDeliveryQueue, fetchJobs]);
+
+  useEffect(() => {
+    if (showScheduleSheet) {
+      fetchSchedules();
+    }
+  }, [showScheduleSheet, fetchSchedules]);
+
   const handleConfirmPause = useCallback(() => {
     setRobotStatus('paused');
     setShowConfirmModal(false);
@@ -187,35 +555,30 @@ export const MapScreen: React.FC = () => {
 
   return (
     <View style={styles.container}>
-      {/* ========= HEADER ========= */}
-      <View style={styles.header}>
-        <View style={styles.headerLeft}>
-          <View style={styles.avatarCircle}>
-            <Text style={styles.avatarText}>🤖</Text>
-          </View>
-          <View>
-            <View style={styles.headerTitleRow}>
-              <Text style={styles.brandSmall}>MEDIASSISTROVER · STAFF</Text>
-              <View style={styles.badgeOnDuty}>
-                <Text style={styles.badgeOnDutyText}>ĐANG TRỰC</Text>
-              </View>
-            </View>
-            <Text style={styles.staffName}>Y tá Nguyễn Văn An</Text>
-          </View>
-        </View>
-        <TouchableOpacity style={styles.logoutBtn} activeOpacity={0.7}>
-          <LogOut size={13} color={Colors.primary} />
-          <Text style={styles.logoutText}>Đăng xuất</Text>
-        </TouchableOpacity>
-      </View>
+      {/* ========= REUSABLE STAFF HEADER ========= */}
+      <StaffHeader />
 
       {/* ========= SUB HEADER ========= */}
       <View style={styles.subHeader}>
         <View style={styles.subHeaderLeft}>
-          <Text style={styles.digitalTwinLabel}>DIGITAL TWIN · Y TÁ NGUYỄN VĂN AN</Text>
-          <Text style={styles.clockText}>{currentTime}</Text>
+          <Text style={styles.digitalTwinLabel}>
+            DIGITAL TWIN · {robotData?.robotName || 'MediAssist Rover'}
+          </Text>
+          <Text style={styles.clockText}>{currentTime} · Thời gian thực</Text>
         </View>
         <View style={styles.subHeaderRight}>
+          <TouchableOpacity
+            style={styles.refreshBtn}
+            onPress={fetchRobot}
+            activeOpacity={0.7}
+            accessibilityLabel="Làm mới trạng thái robot"
+          >
+            {isLoadingRobot ? (
+              <ActivityIndicator size="small" color={Colors.primary} />
+            ) : (
+              <RefreshCw size={14} color={Colors.primary} />
+            )}
+          </TouchableOpacity>
           <TouchableOpacity style={styles.sosButton} activeOpacity={0.8}>
             <Text style={styles.sosButtonText}>SOS</Text>
           </TouchableOpacity>
@@ -226,114 +589,65 @@ export const MapScreen: React.FC = () => {
       </View>
 
       <ScrollView style={styles.mainScroll} showsVerticalScrollIndicator={false}>
-        {/* ========= HOSPITAL MAP ========= */}
-        <View style={styles.mapContainer}>
-          <View style={styles.grid}>
-            {/* Row 0 */}
-            <View style={styles.gridRow}>
-              <TouchableOpacity
-                style={[styles.room, { backgroundColor: '#FFFFFF' }]}
-                onPress={() => handleOpenRoomSheet(ROOMS[0])}
-                activeOpacity={0.8}
-              >
-                <Text style={styles.roomName}>Tiếp nhận</Text>
-              </TouchableOpacity>
-              <View style={[styles.room, styles.hallwayCol]} />
-              <TouchableOpacity
-                style={[styles.room, { backgroundColor: '#E0F2FE' }]}
-                onPress={() => handleOpenRoomSheet(ROOMS[1])}
-                activeOpacity={0.8}
-              >
-                <Text style={styles.roomName}>P. Nội TH</Text>
-                <View style={styles.robotTargetDot} />
-              </TouchableOpacity>
-            </View>
+        {/* ========= VIEW MODE SWITCHER & ROBOT KIOSK BUTTON ========= */}
+        <View style={styles.viewModeBar}>
+          <View style={styles.viewModeInfo}>
+            <Text style={styles.viewModeTitle}>
+              CHẾ ĐỘ: <Text style={{ color: Colors.primary }}>STAFF DISPATCH APP</Text>
+            </Text>
+            <Text style={styles.viewModeSub}>
+              Nhấn trực tiếp vào phòng trên bản đồ 1200x680 để điều Robot AMR
+            </Text>
+          </View>
+          <TouchableOpacity
+            style={styles.openRobotKioskBtn}
+            onPress={() => setRobotScreenOpen(true)}
+            activeOpacity={0.8}
+          >
+            <Bot size={16} color="#FFFFFF" />
+            <Text style={styles.openRobotKioskText}>Màn hình Robot AMR</Text>
+          </TouchableOpacity>
+        </View>
 
-            {/* Row 1 - with robot and path */}
-            <View style={styles.gridRow}>
-              <TouchableOpacity
-                style={[styles.room, { backgroundColor: '#FEF2F2' }]}
-                onPress={() => handleOpenRoomSheet(ROOMS[2])}
-                activeOpacity={0.8}
-              >
-                <Animated.View style={[styles.sosDotOuter, { transform: [{ scale: sosAnim }] }]}>
-                  <View style={styles.sosDotInner}>
-                    <Text style={styles.sosDotText}>SOS</Text>
-                  </View>
-                </Animated.View>
-                <Text style={[styles.roomName, { marginTop: 2 }]}>Kho</Text>
-              </TouchableOpacity>
-              <View style={[styles.room, styles.hallwayCol, styles.hallwayCenter]}>
-                <View style={styles.robotTriangleWrapper}>
-                  <View style={styles.robotPulseRing} />
-                  <View style={styles.robotTriangle} />
-                </View>
-              </View>
-              <TouchableOpacity
-                style={[styles.room, { backgroundColor: '#F0FDF4' }]}
-                onPress={() => handleOpenRoomSheet(ROOMS[3])}
-                activeOpacity={0.8}
-              >
-                <Text style={styles.roomName}>P. Tim mạch</Text>
-              </TouchableOpacity>
+        {/* ========= 2D HOSPITAL SVG MAP (CHUẨN 1200x680 PIXEL) ========= */}
+        <View style={styles.svgMapCard}>
+          <View style={styles.mapCardHeaderRow}>
+            <View style={styles.mapStatusBadge}>
+              <View
+                style={[
+                  styles.statusDotLive,
+                  {
+                    backgroundColor:
+                      robotState.status === 'NAVIGATING'
+                        ? '#06B6D4'
+                        : robotState.status === 'ARRIVED'
+                        ? '#10B981'
+                        : robotState.status === 'BLOCKED'
+                        ? '#EF4444'
+                        : '#3B82F6',
+                  },
+                ]}
+              />
+              <Text style={styles.mapStatusBadgeText}>
+                {robotState.status === 'NAVIGATING'
+                  ? `ROBOT ĐANG DI CHUYỂN: ${hospitalZones.find((z) => z.id === robotState.targetZoneId)?.name || 'PHÒNG BỆNH'}`
+                  : robotState.status === 'ARRIVED'
+                  ? 'ROBOT ĐÃ VÀO VỊ TRÍ ĐÍCH'
+                  : robotState.status === 'BLOCKED'
+                  ? 'ROBOT ĐANG TẠM DỪNG'
+                  : 'SƠ ĐỒ BẢN ĐỒ BỆNH VIỆN 1200x680 (0.05m/px)'}
+              </Text>
             </View>
-
-            {/* Hallway Banner */}
-            <View style={[styles.gridRow, styles.hallwayRow]}>
-              <Text style={styles.hallwayLabel}>HÀNH LANG CHÍNH</Text>
-              <View style={styles.staffOrangeBlock} />
-            </View>
-
-            {/* Row 2 */}
-            <View style={styles.gridRow}>
-              <TouchableOpacity
-                style={[styles.room, { backgroundColor: '#FFFBEB' }]}
-                onPress={() => handleOpenRoomSheet(ROOMS[4])}
-                activeOpacity={0.8}
-              >
-                <Text style={styles.roomName}>P. Xét nghiệm</Text>
-              </TouchableOpacity>
-              <View style={[styles.room, styles.hallwayCol]} />
-              <TouchableOpacity
-                style={[styles.room, { backgroundColor: '#F5F3FF' }]}
-                onPress={() => handleOpenRoomSheet(ROOMS[5])}
-                activeOpacity={0.8}
-              >
-                <Text style={styles.roomName}>P. Siêu âm</Text>
-              </TouchableOpacity>
-            </View>
-
-            {/* Row 3 */}
-            <View style={styles.gridRow}>
-              <TouchableOpacity
-                style={[styles.room, { backgroundColor: '#FFF7ED' }]}
-                onPress={() => handleOpenRoomSheet(ROOMS[6])}
-                activeOpacity={0.8}
-              >
-                <Text style={styles.roomName}>Nhà thuốc</Text>
-              </TouchableOpacity>
-              <View style={[styles.room, styles.hallwayCol, { justifyContent: 'center' }]}>
-                <Text style={styles.entranceLabel}>◀ LỐI VÀO ▶</Text>
-              </View>
-              <TouchableOpacity
-                style={[styles.room, styles.roomActive]}
-                onPress={() => handleOpenRoomSheet(ROOMS[7])}
-                activeOpacity={0.8}
-              >
-                <Text style={[styles.roomName, { color: Colors.tealDark }]}>P. Nhi khoa</Text>
-              </TouchableOpacity>
-            </View>
+            <Text style={styles.robotCoordLiveText}>
+              Robot MAR-01: ({Math.round(robotState.x)}, {Math.round(robotState.y)}) · {robotState.heading}°
+            </Text>
           </View>
 
-          {/* Legend */}
-          <View style={styles.legend}>
-            {LEGEND.map((item) => (
-              <View key={item.label} style={styles.legendItem}>
-                <View style={[styles.legendDot, { backgroundColor: item.color }]} />
-                <Text style={styles.legendText}>{item.label}</Text>
-              </View>
-            ))}
-          </View>
+          <HospitalSvgMap
+            interactive={true}
+            mode="staff"
+            onSelectZone={handleSelectHospitalZone}
+          />
         </View>
 
         {/* ========= TRACKING & FUNCTION DASHBOARD (Hình 5) ========= */}
@@ -352,11 +666,11 @@ export const MapScreen: React.FC = () => {
                 ]}
               />
               <Text style={styles.statusTitle}>
-                {robotStatus === 'running' ? 'ĐANG VẬN CHUYỂN' : 'TẠM DỪNG'}
+                {robotData?.status === 'OFFLINE' ? 'GAZEBO · OFFLINE' : (robotStatus === 'running' ? 'ĐANG VẬN CHUYỂN' : 'TẠM DỪNG')}
               </Text>
             </View>
             <View style={styles.statusRight}>
-              <Text style={styles.batteryText}>🔋 82%</Text>
+              <Text style={styles.batteryText}>🔋 {robotData?.batteryRaw ?? 100}%</Text>
               {isExpanded ? (
                 <ChevronUp size={18} color={Colors.textSecondary} />
               ) : (
@@ -370,32 +684,57 @@ export const MapScreen: React.FC = () => {
             <View style={styles.dashboardBody}>
               {/* 6 Info Cards */}
               <View style={styles.infoCardsGrid}>
-                <View style={styles.infoCard}>
-                  <Text style={styles.infoCardLabel}>ZONE HIỆN TẠI</Text>
-                  <Text style={styles.infoCardValue}>Khu chờ</Text>
-                </View>
+                <TouchableOpacity
+                  style={styles.infoCard}
+                  onPress={() => setShowLocationSheet(true)}
+                  activeOpacity={0.8}
+                >
+                  <Text style={styles.infoCardLabel}>VỊ TRÍ ROBOT</Text>
+                  <Text style={styles.infoCardValue} numberOfLines={1}>
+                    {activeFloor?.floorCode ? `${activeFloor.floorCode} · ${activeMap?.mapCode || 'Nav2'}` : 'F1 · Khu chờ'}
+                  </Text>
+                </TouchableOpacity>
+
                 <View style={styles.infoCard}>
                   <Text style={styles.infoCardLabel}>KẾT NỐI</Text>
-                  <Text style={[styles.infoCardValue, { color: '#10B981' }]}>🟢 Ổn định</Text>
+                  <Text style={[styles.infoCardValue, { color: robotData?.status === 'OFFLINE' ? '#F59E0B' : '#10B981' }]}>
+                    {robotData?.status === 'OFFLINE' ? '🟡 Sẵn sàng' : '🟢 Ổn định'}
+                  </Text>
                 </View>
-                <View style={styles.infoCard}>
-                  <Text style={styles.infoCardLabel}>MỨC ƯU TIÊN</Text>
-                  <Text style={[styles.infoCardValue, { color: '#EF4444' }]}>Ưu tiên cao</Text>
-                </View>
+
+                <TouchableOpacity
+                  style={styles.infoCard}
+                  onPress={() => setShowLocationSheet(true)}
+                  activeOpacity={0.8}
+                >
+                  <Text style={styles.infoCardLabel}>TỌA ĐỘ NAV2</Text>
+                  <Text style={[styles.infoCardValue, { color: Colors.primary }]} numberOfLines={1}>
+                    X: 2.05 | Y: 1.50
+                  </Text>
+                </TouchableOpacity>
+
                 <View style={styles.infoCard}>
                   <Text style={styles.infoCardLabel}>BẢO MẬT</Text>
                   <Text style={[styles.infoCardValue, { color: Colors.primary }]}>
                     Xác nhận khuôn mặt
                   </Text>
                 </View>
+
                 <View style={styles.infoCard}>
                   <Text style={styles.infoCardLabel}>ĐIỂM ĐẾN</Text>
                   <Text style={styles.infoCardValue}>P. Tim mạch</Text>
                 </View>
-                <View style={styles.infoCard}>
-                  <Text style={styles.infoCardLabel}>ƯỚC TÍNH</Text>
-                  <Text style={styles.infoCardValue}>~8 phút</Text>
-                </View>
+
+                <TouchableOpacity
+                  style={styles.infoCard}
+                  onPress={() => setShowScheduleSheet(true)}
+                  activeOpacity={0.8}
+                >
+                  <Text style={styles.infoCardLabel}>LỊCH TRÌNH</Text>
+                  <Text style={[styles.infoCardValue, { color: Colors.tealDark }]}>
+                    {schedules.length > 0 ? `${schedules.length} đang chạy` : '3 định kỳ'}
+                  </Text>
+                </TouchableOpacity>
               </View>
 
               {/* Action Buttons Row 1 */}
@@ -410,6 +749,15 @@ export const MapScreen: React.FC = () => {
                 </TouchableOpacity>
 
                 <TouchableOpacity
+                  style={styles.actionBtnTealSchedule}
+                  onPress={() => setShowScheduleSheet(true)}
+                  activeOpacity={0.8}
+                >
+                  <Calendar size={15} color={Colors.tealDark} />
+                  <Text style={styles.actionBtnTealText}>Lịch trình</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
                   style={styles.actionBtnOrange}
                   onPress={() => setShowConfirmModal(true)}
                   activeOpacity={0.8}
@@ -420,7 +768,23 @@ export const MapScreen: React.FC = () => {
 
                 <TouchableOpacity
                   style={styles.actionBtnRed}
-                  onPress={() => setRobotStatus('paused')}
+                  onPress={() => {
+                    Alert.alert(
+                      'Dừng khẩn cấp robot',
+                      'Bạn có chắc chắn muốn ngắt chuyển động toàn bộ robot ngay lập tức để đảm bảo an toàn?',
+                      [
+                        { text: 'Hủy', style: 'cancel' },
+                        {
+                          text: 'DỪNG NGAY ⚠️',
+                          style: 'destructive',
+                          onPress: () => {
+                            setRobotStatus('paused');
+                            Alert.alert('Đã kích hoạt', 'Robot đã dừng khẩn cấp và bật đèn cảnh báo.');
+                          },
+                        },
+                      ]
+                    );
+                  }}
                   activeOpacity={0.8}
                 >
                   <AlertTriangle size={15} color="#EF4444" />
@@ -430,9 +794,13 @@ export const MapScreen: React.FC = () => {
 
               {/* Action Buttons Row 2 */}
               <View style={styles.actionRow}>
-                <TouchableOpacity style={styles.manualControlBtn} activeOpacity={0.8}>
-                  <Radio size={16} color={Colors.primary} />
-                  <Text style={styles.manualControlText}>Điều khiển thủ công</Text>
+                <TouchableOpacity
+                  style={styles.manualControlBtn}
+                  onPress={() => setShowLocationSheet(true)}
+                  activeOpacity={0.8}
+                >
+                  <Navigation size={16} color={Colors.primary} />
+                  <Text style={styles.manualControlText}>Tọa độ & Vị trí</Text>
                 </TouchableOpacity>
 
                 <TouchableOpacity
@@ -453,35 +821,204 @@ export const MapScreen: React.FC = () => {
       ======================================================== */}
       <Modal visible={showQueueSheet} transparent animationType="slide">
         <View style={styles.modalBackdrop}>
-          <View style={styles.sheetContainer}>
+          <View style={[styles.sheetContainer, { maxHeight: SCREEN_HEIGHT * 0.82 }]}>
             <View style={styles.sheetHandle} />
-            <Text style={styles.queueSheetTitle}>Hàng đợi ({QUEUE_ITEMS.length})</Text>
-
-            <View style={styles.queueList}>
-              {QUEUE_ITEMS.map((item) => (
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+              <Text style={styles.queueSheetTitle}>Hàng đợi & Nhiệm vụ Robot</Text>
+              {isLoadingQueue || isLoadingJobs ? (
+                <ActivityIndicator size="small" color={Colors.primary} />
+              ) : (
                 <TouchableOpacity
-                  key={item.id}
-                  style={styles.queueCard}
                   onPress={() => {
-                    setShowQueueSheet(false);
-                    setShowTimelineSheet(true);
+                    fetchDeliveryQueue();
+                    fetchJobs();
                   }}
-                  activeOpacity={0.75}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                 >
-                  <View style={[styles.queueNumberBadge, { backgroundColor: item.color }]}>
-                    <Text style={styles.queueNumberText}>{item.id}</Text>
-                  </View>
-                  <View style={styles.queueCardContent}>
-                    <Text style={styles.queueItemTitle}>
-                      {item.type === 'medicine' ? '💊 ' : item.type === 'document' ? '📋 ' : '🧪 '}
-                      {item.title}
-                    </Text>
-                    <Text style={styles.queueItemSubtitle}>{item.subtitle}</Text>
-                  </View>
-                  <ArrowRight size={16} color={Colors.primary} />
+                  <RefreshCw size={14} color={Colors.primary} />
                 </TouchableOpacity>
-              ))}
+              )}
             </View>
+
+            {/* Tab Switcher: Nhiệm vụ Robot vs Đơn vận chuyển */}
+            <View style={styles.queueTabRow}>
+              <TouchableOpacity
+                style={[styles.queueTabBtn, queueTab === 'jobs' && styles.queueTabBtnActive]}
+                onPress={() => setQueueTab('jobs')}
+                activeOpacity={0.8}
+              >
+                <Text style={[styles.queueTabText, queueTab === 'jobs' && styles.queueTabTextActive]}>
+                  Nhiệm vụ Robot ({jobs.length})
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.queueTabBtn, queueTab === 'deliveries' && styles.queueTabBtnActive]}
+                onPress={() => setQueueTab('deliveries')}
+                activeOpacity={0.8}
+              >
+                <Text style={[styles.queueTabText, queueTab === 'deliveries' && styles.queueTabTextActive]}>
+                  Đơn vận chuyển ({deliveryRequests.length > 0 ? deliveryRequests.length : QUEUE_ITEMS.length})
+                </Text>
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView showsVerticalScrollIndicator={false} style={{ marginVertical: 4 }}>
+              {queueTab === 'jobs' ? (
+                /* TAB 1: NHIỆM VỤ ROBOT (JOBS REALTIME TỪ BACKEND) */
+                <View style={styles.queueList}>
+                  {jobs.length > 0 ? (
+                    jobs.map((job) => {
+                      const isQueued = job.status === 'QUEUED';
+                      const isRunning = job.status === 'RUNNING';
+                      const isCancelled = job.status === 'CANCELLED';
+                      const isCancelling = cancellingJobId === job.jobId;
+
+                      let badgeBg = '#E0F2FE';
+                      let badgeText = Colors.primary;
+                      let statusVi: string = job.status;
+
+                      if (isQueued) {
+                        badgeBg = '#FEF3C7';
+                        badgeText = '#D97706';
+                        statusVi = 'ĐANG XẾP HÀNG';
+                      } else if (isRunning) {
+                        badgeBg = '#D1FAE5';
+                        badgeText = '#059669';
+                        statusVi = 'ĐANG CHẠY';
+                      } else if (job.status === 'SUCCEEDED') {
+                        badgeBg = '#ECFDF5';
+                        badgeText = '#047857';
+                        statusVi = 'HOÀN TẤT';
+                      } else if (isCancelled) {
+                        badgeBg = '#FEE2E2';
+                        badgeText = '#DC2626';
+                        statusVi = 'ĐÃ HỦY';
+                      }
+
+                      const display = getJobDisplayInfo(job, endpoints);
+
+                      return (
+                        <View key={job.jobId} style={styles.jobCard}>
+                          <View style={styles.jobCardTop}>
+                            <View style={{ flex: 1, marginRight: 8 }}>
+                              <Text style={styles.jobTitleText} numberOfLines={1}>
+                                {display.icon} {display.title}
+                              </Text>
+                              <Text style={styles.jobSubtitleText}>
+                                {display.category} · Mã: {job.jobCode}
+                              </Text>
+                            </View>
+                            <View style={[styles.jobBadge, { backgroundColor: badgeBg }]}>
+                              <Text style={[styles.jobBadgeText, { color: badgeText }]}>{statusVi}</Text>
+                            </View>
+                          </View>
+
+                          <View style={styles.jobDetailBox}>
+                            <View style={styles.jobDetailRow}>
+                              <MapPin size={12} color={Colors.primary} />
+                              <Text style={styles.jobDetailText} numberOfLines={1}>
+                                Đích đến: <Text style={{ fontWeight: '700', color: Colors.textPrimary }}>{display.destinationName}</Text>
+                                {display.originName ? ` (Từ: ${display.originName})` : ''}
+                              </Text>
+                            </View>
+                            <View style={styles.jobDetailRow}>
+                              <Clock size={12} color={Colors.textMuted} />
+                              <Text style={styles.jobDetailText}>
+                                Khởi tạo: {job.queuedAt ? new Date(job.queuedAt).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : 'Vừa tạo'}
+                                {' · '}Ưu tiên: <Text style={{ fontWeight: '600', color: Colors.textPrimary }}>{display.priorityLabel}</Text>
+                              </Text>
+                            </View>
+                          </View>
+
+                          {(isQueued || isRunning) && (
+                            <TouchableOpacity
+                              style={styles.jobCancelBtn}
+                              onPress={() => handleCancelJob(job.jobId)}
+                              activeOpacity={0.8}
+                              disabled={isCancelling}
+                            >
+                              {isCancelling ? (
+                                <ActivityIndicator size="small" color="#EF4444" />
+                              ) : (
+                                <>
+                                  <Trash2 size={13} color="#EF4444" />
+                                  <Text style={styles.jobCancelText}>Hủy nhiệm vụ này</Text>
+                                </>
+                              )}
+                            </TouchableOpacity>
+                          )}
+                        </View>
+                      );
+                    })
+                  ) : (
+                    <View style={styles.sampleDataBanner}>
+                      <Text style={styles.sampleDataText}>
+                        (Hiện chưa có nhiệm vụ nào trong hàng đợi · Chọn phòng trên sơ đồ để điều robot)
+                      </Text>
+                    </View>
+                  )}
+                </View>
+              ) : (
+                /* TAB 2: ĐƠN VẬN CHUYỂN */
+                <View style={styles.queueList}>
+                  {deliveryRequests.length === 0 && (
+                    <View style={styles.sampleDataBanner}>
+                      <Text style={styles.sampleDataText}>
+                        (Dữ liệu minh họa · Chưa phát sinh đơn mới trên máy chủ)
+                      </Text>
+                    </View>
+                  )}
+                  {deliveryRequests.length > 0
+                    ? deliveryRequests.map((req, idx) => (
+                        <TouchableOpacity
+                          key={req.request?.requestId || idx}
+                          style={styles.queueCard}
+                          onPress={() => {
+                            setShowQueueSheet(false);
+                            setShowTimelineSheet(true);
+                          }}
+                          activeOpacity={0.75}
+                        >
+                          <View style={[styles.queueNumberBadge, { backgroundColor: Colors.primary }]}>
+                            <Text style={styles.queueNumberText}>{idx + 1}</Text>
+                          </View>
+                          <View style={styles.queueCardContent}>
+                            <Text style={styles.queueItemTitle}>
+                              📦 {req.request?.title || req.items?.[0]?.itemName || 'Đơn vận chuyển'}
+                            </Text>
+                            <Text style={styles.queueItemSubtitle}>
+                              Đến: {req.recipientName || 'Nhân viên trực'} · Trạng thái: {req.request?.status || 'QUEUED'}
+                            </Text>
+                          </View>
+                          <ArrowRight size={16} color={Colors.primary} />
+                        </TouchableOpacity>
+                      ))
+                    : QUEUE_ITEMS.map((item) => (
+                        <TouchableOpacity
+                          key={item.id}
+                          style={styles.queueCard}
+                          onPress={() => {
+                            setShowQueueSheet(false);
+                            setShowTimelineSheet(true);
+                          }}
+                          activeOpacity={0.75}
+                        >
+                          <View style={[styles.queueNumberBadge, { backgroundColor: item.color }]}>
+                            <Text style={styles.queueNumberText}>{item.id}</Text>
+                          </View>
+                          <View style={styles.queueCardContent}>
+                            <Text style={styles.queueItemTitle}>
+                              {item.type === 'medicine' ? '💊 ' : item.type === 'document' ? '📋 ' : '🧪 '}
+                              {item.title}
+                            </Text>
+                            <Text style={styles.queueItemSubtitle}>{item.subtitle}</Text>
+                          </View>
+                          <ArrowRight size={16} color={Colors.primary} />
+                        </TouchableOpacity>
+                      ))}
+                </View>
+              )}
+            </ScrollView>
 
             <TouchableOpacity
               style={styles.sheetCloseButton}
@@ -688,8 +1225,82 @@ export const MapScreen: React.FC = () => {
         <View style={styles.modalBackdrop}>
           <View style={styles.sheetContainer}>
             <View style={styles.sheetHandle} />
-            <Text style={styles.sheetLabel}>ĐIỀU ROBOT ĐẾN</Text>
-            <Text style={styles.sheetRoomName}>{selectedRoom?.name}</Text>
+            <Text style={styles.sheetLabel}>ĐIỀU ROBOT ĐẾN PHÒNG</Text>
+            <Text style={styles.sheetRoomName}>
+              {selectedHospitalZone?.name || selectedRoom?.name}
+            </Text>
+
+            {selectedHospitalZone && (
+              <View style={styles.zoneDetailsBox}>
+                <Text style={styles.zoneDepartmentText}>
+                  🏢 {selectedHospitalZone.department}
+                </Text>
+                <Text style={styles.zoneCoordsText}>
+                  📍 Tọa độ đích (dockPoint): ({selectedHospitalZone.dockPoint.x}, {selectedHospitalZone.dockPoint.y})
+                </Text>
+                <Text style={styles.zoneDescText}>
+                  {selectedHospitalZone.description}
+                </Text>
+              </View>
+            )}
+
+            {selectedRoom?.id === '2' && (
+              <View style={styles.roomSosAlertBanner}>
+                <Text style={styles.roomSosAlertTitle}>🆘 TÍN HIỆU SOS ĐANG KÍCH HOẠT</Text>
+                <Text style={styles.roomSosAlertSubtitle}>
+                  Có tín hiệu gọi khẩn cấp từ bệnh nhân tại vị trí này.
+                </Text>
+                <TouchableOpacity
+                  style={styles.roomSosCallBtn}
+                  onPress={() => {
+                    setShowRoomSheet(false);
+                    setShowSOSCall(true);
+                  }}
+                  activeOpacity={0.85}
+                >
+                  <Text style={styles.roomSosCallBtnText}>Xem cuộc gọi SOS ngay ➔</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+
+            {/* Chế độ điều robot (Navigation vs Escort) */}
+            <View style={styles.dispatchModeRow}>
+              <TouchableOpacity
+                style={[styles.dispatchModeBtn, dispatchMode === 'NAV' && styles.dispatchModeBtnActive]}
+                onPress={() => setDispatchMode('NAV')}
+                activeOpacity={0.8}
+              >
+                <Navigation size={14} color={dispatchMode === 'NAV' ? '#1D4ED8' : Colors.textSecondary} />
+                <Text style={[styles.dispatchModeText, dispatchMode === 'NAV' && styles.dispatchModeTextActive]}>
+                  🚀 Tự hành đến phòng
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.dispatchModeBtn, dispatchMode === 'ESCORT' && styles.dispatchModeBtnActive]}
+                onPress={() => setDispatchMode('ESCORT')}
+                activeOpacity={0.8}
+              >
+                <UserCheck size={14} color={dispatchMode === 'ESCORT' ? '#1D4ED8' : Colors.textSecondary} />
+                <Text style={[styles.dispatchModeText, dispatchMode === 'ESCORT' && styles.dispatchModeTextActive]}>
+                  🚶‍♂️ Dẫn đường bệnh nhân
+                </Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* Thông số vị trí đích */}
+            <View style={styles.dispatchMetaBox}>
+              <Text style={styles.dispatchMetaTitle}>ĐIỂM ĐÍCH TRÊN BẢN ĐỒ NAV2</Text>
+              <Text style={styles.dispatchMetaText}>
+                Bản đồ: {activeMap?.mapName || 'Hospital F1 - Gazebo Nav2 V2'}
+              </Text>
+              <Text style={[styles.dispatchMetaText, { color: Colors.textMuted, fontSize: 11, marginTop: 2 }]}>
+                {dispatchMode === 'ESCORT'
+                  ? 'Robot sẽ di chuyển tốc độ an toàn (0.2 m/s) và hướng dẫn bệnh nhân tới phòng.'
+                  : 'Robot sẽ tự tìm đường tối ưu theo thuật toán Nav2 SLAM để tới phòng.'}
+              </Text>
+            </View>
+
             <View style={styles.sheetButtons}>
               <TouchableOpacity
                 style={styles.cancelBtn}
@@ -700,18 +1311,339 @@ export const MapScreen: React.FC = () => {
               </TouchableOpacity>
               <TouchableOpacity
                 style={styles.sendBtn}
-                onPress={() => {
-                  setShowRoomSheet(false);
-                  setShowTimelineSheet(true);
-                }}
+                onPress={handleDispatchRobot}
+                disabled={isDispatching}
                 activeOpacity={0.8}
               >
-                <Text style={styles.sendBtnText}>✓ Gửi robot</Text>
+                {isDispatching ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <Text style={styles.sendBtnText}>
+                    {dispatchMode === 'ESCORT' ? '✓ Dẫn đường ngay' : '✓ Gửi robot'}
+                  </Text>
+                )}
               </TouchableOpacity>
             </View>
           </View>
         </View>
       </Modal>
+
+      {/* ========================================================
+          MODAL 5: CUỘC GỌI & STREAM SOS KHẨN CẤP
+      ======================================================== */}
+      <SOSCallModal
+        visible={showSOSCall}
+        robotName="Robot MAR-GAZEBO-01"
+        location={selectedRoom?.name || 'Kho · Tầng 4'}
+        onAccept={() => {
+          setShowSOSCall(false);
+          setShowSOSStream(true);
+        }}
+        onDecline={() => setShowSOSCall(false)}
+      />
+
+      <SOSStreamModal
+        visible={showSOSStream}
+        robotName="Robot MAR-GAZEBO-01"
+        location={selectedRoom?.name || 'Kho · Tầng 4'}
+        onClose={() => setShowSOSStream(false)}
+      />
+
+      {/* ========================================================
+          MODAL 6: LỊCH TRÌNH HOẠT ĐỘNG ROBOT (Staff Schedules)
+      ======================================================== */}
+      <Modal visible={showScheduleSheet} transparent animationType="slide">
+        <View style={styles.modalBackdrop}>
+          <View style={[styles.sheetContainer, { maxHeight: SCREEN_HEIGHT * 0.82 }]}>
+            <View style={styles.sheetHandle} />
+
+            <View style={styles.sheetHeaderRow}>
+              <View>
+                <Text style={styles.sheetCategoryLabel}>HỆ THỐNG ĐIỀU HÀNH · LỊCH TRÌNH</Text>
+                <Text style={styles.queueSheetTitle}>
+                  Lịch trình định kỳ robot {schedules.length > 0 ? `(${schedules.length})` : `(${DEFAULT_SCHEDULES.length})`}
+                </Text>
+              </View>
+              {isLoadingSchedules ? (
+                <ActivityIndicator size="small" color={Colors.primary} />
+              ) : (
+                <TouchableOpacity onPress={fetchSchedules} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                  <RefreshCw size={16} color={Colors.primary} />
+                </TouchableOpacity>
+              )}
+            </View>
+
+            {schedules.length === 0 && (
+              <View style={styles.sampleDataBanner}>
+                <Text style={styles.sampleDataText}>
+                  (Dữ liệu minh họa · Chưa phát sinh lịch trình mới trên máy chủ)
+                </Text>
+              </View>
+            )}
+
+            <ScrollView showsVerticalScrollIndicator={false} style={{ marginVertical: 8 }}>
+              {schedules.length > 0
+                ? schedules.map((sch) => {
+                    const isActive = sch.status === 'ACTIVE';
+                    const isToggling = actionScheduleId === sch.scheduleId;
+                    return (
+                      <View key={sch.scheduleId} style={styles.scheduleCard}>
+                        <View style={styles.scheduleCardTop}>
+                          <View style={styles.scheduleIconCircle}>
+                            <Calendar size={18} color={Colors.primary} />
+                          </View>
+                          <View style={{ flex: 1 }}>
+                            <Text style={styles.scheduleTitle}>{sch.scheduleName}</Text>
+                            <Text style={styles.scheduleCode}>
+                              {sch.scheduleCode} · {sch.scheduleType}
+                            </Text>
+                          </View>
+                          <View style={[styles.scheduleStatusBadge, isActive ? styles.badgeGreen : styles.badgeOrange]}>
+                            <Text style={[styles.scheduleStatusText, isActive ? styles.textGreen : styles.textOrange]}>
+                              {isActive ? 'Đang chạy' : 'Tạm dừng'}
+                            </Text>
+                          </View>
+                        </View>
+
+                        <View style={styles.scheduleMetaGrid}>
+                          <View style={styles.scheduleMetaItem}>
+                            <Text style={styles.scheduleMetaLabel}>CHU KỲ</Text>
+                            <Text style={styles.scheduleMetaVal}>
+                              {sch.cronExpression || (sch.intervalSec ? `Mỗi ${Math.round(sch.intervalSec / 60)} phút` : 'Định kỳ')}
+                            </Text>
+                          </View>
+                          <View style={styles.scheduleMetaItem}>
+                            <Text style={styles.scheduleMetaLabel}>LẦN CHẠY TIẾP</Text>
+                            <Text style={styles.scheduleMetaVal}>
+                              {sch.nextRunAt ? new Date(sch.nextRunAt).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : 'Theo ca trực'}
+                            </Text>
+                          </View>
+                        </View>
+
+                        <TouchableOpacity
+                          style={[styles.scheduleToggleBtn, isActive ? styles.scheduleBtnPause : styles.scheduleBtnResume]}
+                          onPress={() => handleToggleSchedule(sch)}
+                          activeOpacity={0.8}
+                          disabled={isToggling}
+                        >
+                          {isToggling ? (
+                            <ActivityIndicator size="small" color={isActive ? '#D97706' : '#059669'} />
+                          ) : (
+                            <Text style={[styles.scheduleToggleBtnText, isActive ? styles.textOrange : styles.textGreen]}>
+                              {isActive ? '⏸ Tạm dừng lịch trình' : '▶ Kích hoạt lại'}
+                            </Text>
+                          )}
+                        </TouchableOpacity>
+                      </View>
+                    );
+                  })
+                : DEFAULT_SCHEDULES.map((sch) => (
+                    <View key={sch.scheduleId} style={styles.scheduleCard}>
+                      <View style={styles.scheduleCardTop}>
+                        <View style={styles.scheduleIconCircle}>
+                          <Calendar size={18} color={Colors.primary} />
+                        </View>
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.scheduleTitle}>{sch.scheduleName}</Text>
+                          <Text style={styles.scheduleCode}>
+                            {sch.scheduleId} · {sch.scheduleType}
+                          </Text>
+                        </View>
+                        <View style={[styles.scheduleStatusBadge, sch.status === 'ACTIVE' ? styles.badgeGreen : styles.badgeOrange]}>
+                          <Text style={[styles.scheduleStatusText, sch.status === 'ACTIVE' ? styles.textGreen : styles.textOrange]}>
+                            {sch.status === 'ACTIVE' ? 'Đang chạy' : 'Tạm dừng'}
+                          </Text>
+                        </View>
+                      </View>
+
+                      <View style={styles.scheduleMetaGrid}>
+                        <View style={styles.scheduleMetaItem}>
+                          <Text style={styles.scheduleMetaLabel}>CHU KỲ</Text>
+                          <Text style={styles.scheduleMetaVal}>{sch.cronExpression}</Text>
+                        </View>
+                        <View style={styles.scheduleMetaItem}>
+                          <Text style={styles.scheduleMetaLabel}>ROBOT GÁN</Text>
+                          <Text style={styles.scheduleMetaVal}>MAR-GAZEBO-01</Text>
+                        </View>
+                      </View>
+
+                      <TouchableOpacity
+                        style={[styles.scheduleToggleBtn, sch.status === 'ACTIVE' ? styles.scheduleBtnPause : styles.scheduleBtnResume]}
+                        onPress={() => {
+                          Alert.alert('Thông báo', `Đã chuyển đổi trạng thái lịch trình: ${sch.scheduleName}`);
+                        }}
+                        activeOpacity={0.8}
+                      >
+                        <Text style={[styles.scheduleToggleBtnText, sch.status === 'ACTIVE' ? styles.textOrange : styles.textGreen]}>
+                          {sch.status === 'ACTIVE' ? '⏸ Tạm dừng lịch trình' : '▶ Kích hoạt lại'}
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
+                  ))}
+            </ScrollView>
+
+            <TouchableOpacity
+              style={styles.sheetCloseButton}
+              onPress={() => setShowScheduleSheet(false)}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.sheetCloseButtonText}>Đóng</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ========================================================
+          MODAL 7: TỌA ĐỘ VÀ VỊ TRÍ ROBOT NAV2 (Telemetry)
+      ======================================================== */}
+      <Modal visible={showLocationSheet} transparent animationType="slide">
+        <View style={styles.modalBackdrop}>
+          <View style={[styles.sheetContainer, { maxHeight: SCREEN_HEIGHT * 0.85 }]}>
+            <View style={styles.sheetHandle} />
+
+            <View style={styles.sheetHeaderRow}>
+              <View>
+                <Text style={styles.sheetCategoryLabel}>ĐỊNH VỊ REAL-TIME · TELEMETRY</Text>
+                <Text style={styles.queueSheetTitle}>Vị trí & Tọa độ Robot Nav2</Text>
+              </View>
+              <TouchableOpacity
+                onPress={() => {
+                  fetchRobot();
+                  fetchFacilityData();
+                }}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <RefreshCw size={16} color={Colors.primary} />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView showsVerticalScrollIndicator={false} style={{ marginVertical: 8 }}>
+              {/* Robot Identity Box */}
+              <View style={styles.telemetryRobotCard}>
+                <View style={styles.telemetryRobotLeft}>
+                  <View style={styles.telemetryRobotAvatar}>
+                    <Text style={{ fontSize: 24 }}>🤖</Text>
+                  </View>
+                  <View>
+                    <Text style={styles.telemetryRobotName}>
+                      {robotData?.robotName || 'MediAssist Rover Gazebo'}
+                    </Text>
+                    <Text style={styles.telemetryRobotCode}>
+                      Mã: {robotData?.robotCode || 'MAR-GAZEBO-01'} · Model: {robotData?.model || 'TurtleBot3'}
+                    </Text>
+                  </View>
+                </View>
+                <View style={[styles.scheduleStatusBadge, styles.badgeGreen]}>
+                  <Text style={[styles.scheduleStatusText, styles.textGreen]}>
+                    {robotData?.status === 'OFFLINE' ? 'OFFLINE' : 'ONLINE'}
+                  </Text>
+                </View>
+              </View>
+
+              {/* Map & Floor Telemetry */}
+              <View style={styles.locationDetailSection}>
+                <Text style={styles.locationSectionTitle}>BẢN ĐỒ & KHÔNG GIAN BỆNH VIỆN</Text>
+                <View style={styles.telemetryGrid}>
+                  <View style={styles.telemetryGridItem}>
+                    <Text style={styles.telemetryLabel}>TẦNG HIỆN TẠI</Text>
+                    <Text style={styles.telemetryValue}>
+                      {activeFloor?.floorName || 'Hospital Ground Floor (F1)'}
+                    </Text>
+                  </View>
+                  <View style={styles.telemetryGridItem}>
+                    <Text style={styles.telemetryLabel}>BẢN ĐỒ NAV2</Text>
+                    <Text style={styles.telemetryValue}>
+                      {activeMap?.mapName || 'Hospital F1 - Gazebo Nav2 V2'}
+                    </Text>
+                  </View>
+                  <View style={styles.telemetryGridItem}>
+                    <Text style={styles.telemetryLabel}>KÍCH THƯỚC MAP</Text>
+                    <Text style={styles.telemetryValue}>
+                      {activeMap?.widthM || 5.0}m × {activeMap?.heightM || 3.0}m ({activeMap?.resolutionMPerPixel || 0.004} m/px)
+                    </Text>
+                  </View>
+                  <View style={styles.telemetryGridItem}>
+                    <Text style={styles.telemetryLabel}>KHUNG THAM CHIẾU</Text>
+                    <Text style={styles.telemetryValue}>frame_id: "map"</Text>
+                  </View>
+                </View>
+              </View>
+
+              {/* Exact Nav2 Coordinates */}
+              <View style={styles.locationDetailSection}>
+                <Text style={styles.locationSectionTitle}>TỌA ĐỘ VẬT LÝ NAV2 (ODOMETRY / SLAM)</Text>
+                <View style={styles.coordsRow}>
+                  <View style={styles.coordBox}>
+                    <Text style={styles.coordLabel}>TRỤC X</Text>
+                    <Text style={styles.coordVal}>2.050 m</Text>
+                  </View>
+                  <View style={styles.coordBox}>
+                    <Text style={styles.coordLabel}>TRỤC Y</Text>
+                    <Text style={styles.coordVal}>1.500 m</Text>
+                  </View>
+                  <View style={styles.coordBox}>
+                    <Text style={styles.coordLabel}>GÓC YAW</Text>
+                    <Text style={styles.coordVal}>0.000 rad</Text>
+                  </View>
+                </View>
+              </View>
+
+              {/* Waypoints List */}
+              <View style={styles.locationDetailSection}>
+                <Text style={styles.locationSectionTitle}>
+                  ĐIỂM ĐÍCH / WAYPOINTS TRÊN BẢN ĐỒ {endpoints.length > 0 ? `(${endpoints.length})` : '(2)'}
+                </Text>
+                {endpoints.length > 0 ? (
+                  endpoints.map((ep) => (
+                    <View key={ep.endpointId} style={styles.waypointItem}>
+                      <MapPin size={16} color={Colors.primary} />
+                      <View style={{ flex: 1, marginLeft: 8 }}>
+                        <Text style={styles.waypointName}>{ep.endpointName}</Text>
+                        <Text style={styles.waypointCoords}>
+                          Mã: {ep.endpointCode} · X: {ep.xM.toFixed(2)}m, Y: {ep.yM.toFixed(2)}m ({ep.endpointType})
+                        </Text>
+                      </View>
+                    </View>
+                  ))
+                ) : (
+                  <>
+                    <View style={styles.waypointItem}>
+                      <MapPin size={16} color={Colors.primary} />
+                      <View style={{ flex: 1, marginLeft: 8 }}>
+                        <Text style={styles.waypointName}>Gazebo Test Point (Điểm an toàn Nav2)</Text>
+                        <Text style={styles.waypointCoords}>Mã: EP_TEST_01 · X: 2.05m, Y: 1.50m (WAYPOINT)</Text>
+                      </View>
+                    </View>
+                    <View style={styles.waypointItem}>
+                      <MapPin size={16} color={Colors.primary} />
+                      <View style={{ flex: 1, marginLeft: 8 }}>
+                        <Text style={styles.waypointName}>Gazebo North 04 (Hành lang phía Bắc)</Text>
+                        <Text style={styles.waypointCoords}>Mã: EP_GAZEBO_NORTH_04 · X: 3.50m, Y: 2.12m (WAYPOINT)</Text>
+                      </View>
+                    </View>
+                  </>
+                )}
+              </View>
+            </ScrollView>
+
+            <TouchableOpacity
+              style={styles.sheetCloseButton}
+              onPress={() => setShowLocationSheet(false)}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.sheetCloseButtonText}>Đóng</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ========================================================
+          MODAL 7: MÀN HÌNH CẢM ỨNG GẮN TRÊN ROBOT (ROBOT INTERFACE KIOSK)
+      ======================================================== */}
+      <RobotTouchInterfaceModal
+        visible={isRobotScreenOpen}
+        onClose={() => setRobotScreenOpen(false)}
+      />
     </View>
   );
 };
@@ -792,6 +1724,16 @@ const styles = StyleSheet.create({
     backgroundColor: '#E0F2FE',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  refreshBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
+    backgroundColor: '#F1F5F9',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
   },
 
   // Map
@@ -1051,7 +1993,20 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: '700',
     color: Colors.textPrimary,
-    marginBottom: Spacing.md,
+  },
+  sampleDataBanner: {
+    backgroundColor: '#FEF3C7',
+    borderWidth: 1,
+    borderColor: '#FCD34D',
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    marginBottom: 12,
+  },
+  sampleDataText: {
+    fontSize: 11,
+    color: '#92400E',
+    fontWeight: '600',
   },
   queueList: { gap: 10 },
   queueCard: {
@@ -1328,4 +2283,566 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   sendBtnText: { fontSize: 14, fontWeight: '700', color: '#FFF' },
+  roomSosAlertBanner: {
+    backgroundColor: '#FEF2F2',
+    borderWidth: 1.5,
+    borderColor: '#FCA5A5',
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 16,
+  },
+  roomSosAlertTitle: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#DC2626',
+    letterSpacing: 0.5,
+    marginBottom: 4,
+  },
+  roomSosAlertSubtitle: {
+    fontSize: 11,
+    color: '#64748B',
+    marginBottom: 10,
+    lineHeight: 16,
+  },
+  roomSosCallBtn: {
+    backgroundColor: '#DC2626',
+    borderRadius: 8,
+    paddingVertical: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  roomSosCallBtnText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
+
+  // Modal 6: Schedules & Modal 7: Telemetry Styles
+  actionBtnTealSchedule: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#F0FDF4',
+    borderRadius: BorderRadius.md,
+    height: 38,
+    gap: 4,
+    borderWidth: 1,
+    borderColor: '#BBF7D0',
+  },
+  actionBtnTealText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: Colors.tealDark,
+  },
+  robotMapTag: {
+    position: 'absolute',
+    bottom: 4,
+    backgroundColor: 'rgba(15, 23, 42, 0.85)',
+    borderRadius: 4,
+    paddingHorizontal: 4,
+    paddingVertical: 1,
+  },
+  robotMapTagText: {
+    fontSize: 8,
+    fontWeight: '700',
+    color: '#38BDF8',
+    letterSpacing: 0.3,
+  },
+
+  sheetHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+  },
+  sheetCategoryLabel: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: Colors.textMuted,
+    letterSpacing: 0.8,
+    marginBottom: 2,
+  },
+  scheduleCard: {
+    backgroundColor: '#F8FAFC',
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    marginBottom: 10,
+  },
+  scheduleCardTop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 8,
+  },
+  scheduleIconCircle: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#E0F2FE',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  scheduleTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: Colors.textPrimary,
+  },
+  scheduleCode: {
+    fontSize: 11,
+    color: Colors.textMuted,
+    marginTop: 1,
+  },
+  scheduleStatusBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+  },
+  scheduleStatusText: {
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  badgeGreen: {
+    backgroundColor: '#D1FAE5',
+  },
+  badgeOrange: {
+    backgroundColor: '#FEF3C7',
+  },
+  textGreen: {
+    color: '#059669',
+  },
+  textOrange: {
+    color: '#D97706',
+  },
+  scheduleMetaGrid: {
+    flexDirection: 'row',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 8,
+    padding: 8,
+    borderWidth: 1,
+    borderColor: '#F1F5F9',
+    marginBottom: 10,
+  },
+  scheduleMetaItem: {
+    flex: 1,
+  },
+  scheduleMetaLabel: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: Colors.textMuted,
+    letterSpacing: 0.5,
+    marginBottom: 2,
+  },
+  scheduleMetaVal: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: Colors.textPrimary,
+  },
+  scheduleToggleBtn: {
+    height: 36,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+  },
+  scheduleBtnPause: {
+    backgroundColor: '#FFFBEB',
+    borderColor: '#FDE68A',
+  },
+  scheduleBtnResume: {
+    backgroundColor: '#F0FDF4',
+    borderColor: '#BBF7D0',
+  },
+  scheduleToggleBtnText: {
+    fontSize: 12,
+    fontWeight: '600',
+  },
+
+  telemetryRobotCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#F8FAFC',
+    borderRadius: 14,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    marginBottom: 12,
+  },
+  telemetryRobotLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  telemetryRobotAvatar: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#E0F2FE',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  telemetryRobotName: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: Colors.textPrimary,
+  },
+  telemetryRobotCode: {
+    fontSize: 11,
+    color: Colors.textMuted,
+    marginTop: 2,
+  },
+  locationDetailSection: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    marginBottom: 12,
+  },
+  locationSectionTitle: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: Colors.textMuted,
+    letterSpacing: 0.7,
+    marginBottom: 8,
+  },
+  telemetryGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  telemetryGridItem: {
+    width: '48%',
+    backgroundColor: '#F8FAFC',
+    borderRadius: 8,
+    padding: 8,
+  },
+  telemetryLabel: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: Colors.textMuted,
+    letterSpacing: 0.5,
+    marginBottom: 2,
+  },
+  telemetryValue: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: Colors.textPrimary,
+  },
+  coordsRow: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  coordBox: {
+    flex: 1,
+    backgroundColor: '#EFF6FF',
+    borderRadius: 8,
+    padding: 8,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+  },
+  coordLabel: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: Colors.primary,
+    letterSpacing: 0.5,
+    marginBottom: 2,
+  },
+  coordVal: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: Colors.primary,
+  },
+  waypointItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F8FAFC',
+    borderRadius: 8,
+    padding: 8,
+    marginBottom: 6,
+  },
+  waypointName: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: Colors.textPrimary,
+  },
+  waypointCoords: {
+    fontSize: 10,
+    color: Colors.textMuted,
+    marginTop: 1,
+  },
+
+  // Modal 4 Dispatch Mode Styles
+  dispatchModeRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 12,
+  },
+  dispatchModeBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 10,
+    borderRadius: 10,
+    backgroundColor: '#F1F5F9',
+    borderWidth: 1.5,
+    borderColor: '#E2E8F0',
+  },
+  dispatchModeBtnActive: {
+    backgroundColor: '#EFF6FF',
+    borderColor: '#3B82F6',
+  },
+  dispatchModeText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: Colors.textSecondary,
+  },
+  dispatchModeTextActive: {
+    color: '#1D4ED8',
+    fontWeight: '700',
+  },
+  dispatchMetaBox: {
+    backgroundColor: '#F8FAFC',
+    borderRadius: 10,
+    padding: 10,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    marginBottom: 16,
+  },
+  dispatchMetaTitle: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: Colors.textMuted,
+    marginBottom: 4,
+  },
+  dispatchMetaText: {
+    fontSize: 12,
+    color: Colors.textPrimary,
+  },
+
+  // Modal 1 Queue Tabs & Jobs Styles
+  queueTabRow: {
+    flexDirection: 'row',
+    backgroundColor: '#F1F5F9',
+    borderRadius: 10,
+    padding: 3,
+    marginBottom: 12,
+  },
+  queueTabBtn: {
+    flex: 1,
+    paddingVertical: 7,
+    alignItems: 'center',
+    borderRadius: 8,
+  },
+  queueTabBtnActive: {
+    backgroundColor: '#FFFFFF',
+    ...Shadows.button,
+  },
+  queueTabText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: Colors.textSecondary,
+  },
+  queueTabTextActive: {
+    color: Colors.primary,
+    fontWeight: '700',
+  },
+  jobCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    marginBottom: 8,
+  },
+  jobCardTop: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+  },
+  jobTitleText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: Colors.textPrimary,
+    marginBottom: 2,
+  },
+  jobSubtitleText: {
+    fontSize: 11,
+    color: Colors.textMuted,
+    fontWeight: '500',
+  },
+  jobCode: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: Colors.textPrimary,
+  },
+  jobBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+  },
+  jobBadgeText: {
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  jobDetailBox: {
+    backgroundColor: '#F8FAFC',
+    borderRadius: 8,
+    padding: 8,
+    gap: 4,
+    borderWidth: 1,
+    borderColor: '#F1F5F9',
+    marginBottom: 8,
+  },
+  jobDetailRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  jobDetailText: {
+    fontSize: 11,
+    color: Colors.textSecondary,
+    flex: 1,
+  },
+  jobMeta: {
+    fontSize: 11,
+    color: Colors.textMuted,
+    marginBottom: 8,
+  },
+  jobCancelBtn: {
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+    backgroundColor: '#FEE2E2',
+  },
+  jobCancelText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#EF4444',
+  },
+  // --- HOSPITAL SVG MAP & ROBOT INTERFACE STYLES ---
+  viewModeBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    backgroundColor: '#F8FAFC',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E2E8F0',
+  },
+  viewModeInfo: {
+    flex: 1,
+    marginRight: 8,
+  },
+  viewModeTitle: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: Colors.textSecondary,
+    letterSpacing: 0.3,
+  },
+  viewModeSub: {
+    fontSize: 11,
+    color: Colors.textMuted,
+    marginTop: 2,
+  },
+  openRobotKioskBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    backgroundColor: Colors.primary,
+    shadowColor: Colors.primary,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  openRobotKioskText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
+  svgMapCard: {
+    margin: 12,
+    borderRadius: 16,
+    overflow: 'hidden',
+    backgroundColor: '#0F172A',
+    borderWidth: 1,
+    borderColor: '#334155',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  mapCardHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    backgroundColor: '#1E293B',
+    borderBottomWidth: 1,
+    borderBottomColor: '#334155',
+  },
+  mapStatusBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  statusDotLive: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  mapStatusBadgeText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#F8FAFC',
+  },
+  robotCoordLiveText: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: '#94A3B8',
+    fontVariant: ['tabular-nums'],
+  },
+  zoneDetailsBox: {
+    backgroundColor: '#F8FAFC',
+    borderRadius: 8,
+    padding: 10,
+    marginVertical: 8,
+    borderWidth: 1,
+    borderColor: '#F1F5F9',
+  },
+  zoneDepartmentText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: Colors.textPrimary,
+    marginBottom: 2,
+  },
+  zoneCoordsText: {
+    fontSize: 11,
+    color: Colors.primary,
+    fontWeight: '600',
+    marginBottom: 2,
+  },
+  zoneDescText: {
+    fontSize: 11,
+    color: Colors.textMuted,
+  },
 });
+

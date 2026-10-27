@@ -9,9 +9,20 @@ import {
   KeyboardAvoidingView,
   Platform,
   Alert,
+  ActivityIndicator,
 } from 'react-native';
 import { Colors, Spacing, BorderRadius, Typography, Shadows } from '../../constants/theme';
-import { ScanLine, Camera, ChevronDown, ArrowRight, Check } from 'lucide-react-native';
+import { StaffHeader } from '../../components/common/StaffHeader';
+import { deliveryApi } from '../../api/modules/delivery.api';
+import {
+  ScanLine,
+  Camera,
+  ChevronDown,
+  ArrowRight,
+  Check,
+  ShieldAlert,
+  AlertCircle,
+} from 'lucide-react-native';
 import { QRScannerModal, QRItemInfo } from '../../components/scanning/QRScannerModal';
 import { FaceScanModal } from '../../components/scanning/FaceScanModal';
 
@@ -52,7 +63,7 @@ export const MissionScreen: React.FC = () => {
   const [toRoom, setToRoom] = useState('P. Nội TH');
   const [sender, setSender] = useState('KTV. Nguyễn Minh Tuấn');
   const [receiver, setReceiver] = useState('BS. Trần Thị Lan');
-  const [securityLevel, setSecurityLevel] = useState<SecurityLevel>('none');
+  const [securityLevel, setSecurityLevel] = useState<SecurityLevel>('qr');
   const [priority, setPriority] = useState<PriorityLevel>('high');
   const [deadline, setDeadline] = useState('');
   const [notes, setNotes] = useState('');
@@ -63,31 +74,120 @@ export const MissionScreen: React.FC = () => {
   const [scannedItem, setScannedItem] = useState<QRItemInfo | null>(null);
   const [faceVerified, setFaceVerified] = useState(false);
 
-  // ===== Handlers =====
-  const toggleTask = useCallback((id: TaskType) => {
-    setSelectedTasks((prev) =>
-      prev.includes(id) ? prev.filter((t) => t !== id) : [...prev, id]
-    );
-  }, []);
+  // Danh mục y tế đặc biệt bắt buộc có bảo mật (Thuốc, Máu, Vật tư y tế)
+  const isHighSecurityItem = selectedTasks.some((t) =>
+    ['van_chuyen_thuoc', 'van_chuyen_mau', 'van_chuyen_vat_tu'].includes(t)
+  );
 
-  const handleSubmit = useCallback(() => {
+  // ===== Handlers =====
+  const toggleTask = useCallback(
+    (id: TaskType) => {
+      setSelectedTasks((prev) => {
+        const next = prev.includes(id) ? prev.filter((t) => t !== id) : [...prev, id];
+        const hasStrict = next.some((t) =>
+          ['van_chuyen_thuoc', 'van_chuyen_mau', 'van_chuyen_vat_tu'].includes(t)
+        );
+        if (hasStrict && securityLevel === 'none') {
+          setSecurityLevel('qr');
+        }
+        return next;
+      });
+    },
+    [securityLevel]
+  );
+
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const handleSubmit = useCallback(async () => {
+    // ⚠️ Validate bảo mật y tế: Thuốc, Máu, Vật tư bắt buộc phải có QR hoặc Face ID
+    if (isHighSecurityItem && securityLevel === 'none') {
+      Alert.alert(
+        'Yêu cầu mức bảo mật y tế ⚠️',
+        'Vận chuyển Thuốc, Máu xét nghiệm và Vật tư y tế là danh mục y tế đặc biệt nguy cấp.\n\nQuy chế bệnh viện yêu cầu bắt buộc phải chọn "Quét QR" hoặc "Xác nhận khuôn mặt" để robot xác thực người nhận trước khi mở ngăn tủ!'
+      );
+      return;
+    }
+
     Alert.alert(
-      'Xác nhận tạo nhiệm vụ',
+      'Xác nhận tạo nhiệm vụ giao hàng',
       `Robot sẽ được giao nhiệm vụ:\n${selectedTasks.map(
         (t) => TASK_TYPES.find((x) => x.id === t)?.label
-      ).join(', ')}\nVận chuyển: ${itemName}\nTừ: ${fromRoom} → ${toRoom}`,
+      ).join(', ')}\nVận chuyển: ${itemName} (SL: ${quantity})\nTừ: ${fromRoom} → ${toRoom}\nNgười nhận: ${receiver}`,
       [
         { text: 'Hủy', style: 'cancel' },
-        { text: 'Tạo ngay', style: 'default', onPress: () => console.log('Tạo nhiệm vụ') },
+        {
+          text: 'Tạo ngay',
+          style: 'default',
+          onPress: async () => {
+            setIsSubmitting(true);
+            try {
+              // Phân loại vật phẩm dựa trên loại nhiệm vụ được chọn
+              let itemCategory = 'DOCUMENT';
+              let unit = 'Bộ';
+              let itemCode = 'DOC-BN2047';
+
+              if (selectedTasks.includes('van_chuyen_thuoc')) {
+                itemCategory = 'MEDICATION';
+                unit = 'Hộp';
+                itemCode = 'MED-001';
+              } else if (selectedTasks.includes('van_chuyen_mau')) {
+                itemCategory = 'LAB_SAMPLE';
+                unit = 'Ống nghiệm';
+                itemCode = 'LAB-SAM-001';
+              } else if (selectedTasks.includes('van_chuyen_vat_tu')) {
+                itemCategory = 'SUPPLIES';
+                unit = 'Gói';
+                itemCode = 'SUP-001';
+              }
+
+              // Gọi API Staff Delivery thật lên server với đầy đủ các trường bắt buộc
+              const res = await deliveryApi.createDeliveryRequest({
+                mapId: '28ea152c-aeb2-4d91-ae73-9cdae9ca592f',
+                targetMode: 'ENDPOINT',
+                pickupEndpointId: 'ee457a34-86dc-4233-8ed1-236dfd8d00ff',
+                deliveryEndpointId: 'ee457a34-86dc-4233-8ed1-236dfd8d00ff',
+                recipientName: receiver || 'BS. Trần Thị Lan',
+                deliveryNote: `${selectedTasks.map((t) => TASK_TYPES.find((x) => x.id === t)?.label || t).join(', ')}: ${itemName} (SL: ${quantity}) - Tuyến: ${fromRoom} -> ${toRoom}. Ghi chú: ${notes || 'Không'}`,
+                requiresConfirmation: true,
+                items: [
+                  {
+                    itemCode,
+                    itemName: itemName.trim() || 'Hồ sơ bệnh án #BN2047',
+                    itemCategory,
+                    unit,
+                    quantity: parseInt(quantity, 10) || 1,
+                    itemNote: notes || 'Vận chuyển y tế an toàn',
+                  },
+                ],
+              });
+
+              Alert.alert(
+                'Thành công 🎉',
+                `Đã tạo yêu cầu giao hàng thành công lên hệ thống robot!\nMã yêu cầu: ${res?.request?.requestCode || 'REQ-DELIVERY'}\nTrạng thái: DRAFT / QUEUED`
+              );
+            } catch (err: any) {
+              console.log('Phản hồi từ server:', err);
+              Alert.alert(
+                'Lỗi tạo nhiệm vụ',
+                err?.message || 'Không thể gửi yêu cầu giao hàng đến máy chủ. Vui lòng thử lại!'
+              );
+            } finally {
+              setIsSubmitting(false);
+            }
+          },
+        },
       ]
     );
-  }, [selectedTasks, itemName, fromRoom, toRoom]);
+  }, [selectedTasks, itemName, quantity, fromRoom, toRoom, receiver, notes, securityLevel]);
 
   return (
     <KeyboardAvoidingView
       style={styles.outerContainer}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
+      {/* ===== REUSABLE STAFF HEADER ===== */}
+      <StaffHeader />
+
       <ScrollView
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
@@ -236,14 +336,51 @@ export const MissionScreen: React.FC = () => {
 
         {/* ===== MỨC BẢO MẬT ===== */}
         <View style={styles.section}>
-          <Text style={styles.sectionLabel}>MỨC BẢO MẬT</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: Spacing.xs }}>
+            <Text style={styles.sectionLabel}>MỨC BẢO MẬT XÁC THỰC MỞ TỦ</Text>
+            {isHighSecurityItem && (
+              <View style={styles.strictBadge}>
+                <ShieldAlert size={11} color="#D97706" />
+                <Text style={styles.strictBadgeText}>BẮT BUỘC BẢO MẬT</Text>
+              </View>
+            )}
+          </View>
+
+          {isHighSecurityItem && (
+            <View style={styles.securityRequirementNotice}>
+              <AlertCircle size={15} color="#D97706" />
+              <Text style={styles.securityRequirementText}>
+                Danh mục Thuốc, Máu, Vật tư y tế: Bắt buộc chọn Quét QR hoặc Khuôn mặt để bảo đảm an toàn khi robot mở ngăn tủ.
+              </Text>
+            </View>
+          )}
+
           <View style={styles.segmentRow}>
             <TouchableOpacity
-              style={[styles.segmentItem, securityLevel === 'none' && styles.segmentItemActive]}
-              onPress={() => setSecurityLevel('none')}
+              style={[
+                styles.segmentItem,
+                securityLevel === 'none' && styles.segmentItemActive,
+                isHighSecurityItem && styles.segmentItemDisabled,
+              ]}
+              onPress={() => {
+                if (isHighSecurityItem) {
+                  Alert.alert(
+                    'Quy định bảo mật y tế ⚠️',
+                    'Vận chuyển Thuốc, Máu xét nghiệm và Vật tư y tế bắt buộc phải có mức bảo mật (Quét QR hoặc Khuôn mặt) để robot xác thực người nhận, tránh nhầm lẫn hoặc thất thoát.'
+                  );
+                } else {
+                  setSecurityLevel('none');
+                }
+              }}
               activeOpacity={0.8}
             >
-              <Text style={[styles.segmentText, securityLevel === 'none' && styles.segmentTextActive]}>
+              <Text
+                style={[
+                  styles.segmentText,
+                  securityLevel === 'none' && styles.segmentTextActive,
+                  isHighSecurityItem && { color: '#94A3B8' },
+                ]}
+              >
                 Không quét
               </Text>
             </TouchableOpacity>
@@ -385,9 +522,20 @@ export const MissionScreen: React.FC = () => {
         </View>
 
         {/* ===== NÚT TẠO NHIỆM VỤ ===== */}
-        <TouchableOpacity style={styles.submitBtn} onPress={handleSubmit} activeOpacity={0.85}>
-          <Text style={styles.submitBtnText}>Tạo nhiệm vụ</Text>
-          <ArrowRight size={18} color="#FFF" strokeWidth={2.5} />
+        <TouchableOpacity
+          style={[styles.submitBtn, isSubmitting && { opacity: 0.7 }]}
+          onPress={handleSubmit}
+          disabled={isSubmitting}
+          activeOpacity={0.85}
+        >
+          {isSubmitting ? (
+            <ActivityIndicator size="small" color="#FFF" />
+          ) : (
+            <>
+              <Text style={styles.submitBtnText}>Tạo nhiệm vụ giao hàng</Text>
+              <ArrowRight size={18} color="#FFF" strokeWidth={2.5} />
+            </>
+          )}
         </TouchableOpacity>
       </ScrollView>
 
@@ -563,4 +711,45 @@ const styles = StyleSheet.create({
     ...Shadows.button,
   },
   submitBtnText: { fontSize: 16, fontWeight: '700', color: '#FFF' },
+
+  // Strict Security Requirement Styles
+  strictBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#FEF3C7',
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#FDE68A',
+  },
+  strictBadgeText: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: '#D97706',
+    letterSpacing: 0.4,
+  },
+  securityRequirementNotice: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#FFFBEB',
+    padding: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#FCD34D',
+    marginBottom: 10,
+  },
+  securityRequirementText: {
+    flex: 1,
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#92400E',
+    lineHeight: 16,
+  },
+  segmentItemDisabled: {
+    opacity: 0.5,
+    backgroundColor: '#F1F5F9',
+  },
 });

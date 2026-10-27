@@ -30,7 +30,7 @@ export const ForgotPasswordScreen: React.FC = () => {
   // Step 2: OTP (6 digits)
   const [otp, setOtp] = useState<string[]>(['', '', '', '', '', '']);
   const [timer, setTimer] = useState(41);
-  const otpInputs = useRef<Array<TextInput | null>>([]);
+  const otpInputs = useRef<Array<React.ElementRef<typeof TextInput> | null>>([]);
 
   // Step 3: Passwords
   const [newPassword, setNewPassword] = useState('');

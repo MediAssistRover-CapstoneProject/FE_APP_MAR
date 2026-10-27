@@ -9,21 +9,32 @@ import {
   Dimensions,
 } from 'react-native';
 import { Phone, PhoneOff, MapPin, Siren } from 'lucide-react-native';
+import { ActivityIndicator } from 'react-native';
 import { Colors, Spacing, BorderRadius } from '../../constants/theme';
+import { alertApi } from '../../api/modules/alert.api';
 
 const { width: SCREEN_W } = Dimensions.get('window');
 
 interface SOSCallModalProps {
   visible: boolean;
+  alertId?: string;
+  robotName?: string;
+  location?: string;
+  timestamp?: string;
   onAccept: () => void;
   onDecline: () => void;
 }
 
 export const SOSCallModal: React.FC<SOSCallModalProps> = ({
   visible,
+  alertId,
+  robotName = 'Robot MAR-GAZEBO-01',
+  location = 'Khu chờ',
+  timestamp,
   onAccept,
   onDecline,
 }) => {
+  const [isAccepting, setIsAccepting] = React.useState(false);
   // Pulse animation cho vòng chuông SOS
   const pulseAnim1 = useRef(new Animated.Value(1)).current;
   const pulseAnim2 = useRef(new Animated.Value(1)).current;
@@ -79,7 +90,7 @@ export const SOSCallModal: React.FC<SOSCallModalProps> = ({
         <View style={styles.titleBox}>
           <Text style={styles.callTitle}>Cuộc gọi khẩn cấp</Text>
           <Text style={styles.callSubtitle}>Bệnh nhân bấm nút SOS</Text>
-          <Text style={styles.robotIdText}>Robot ID: #RC-01 · 17:46</Text>
+          <Text style={styles.robotIdText}>{robotName} · {timestamp || 'Vừa xong'}</Text>
         </View>
 
         {/* Thẻ vị trí */}
@@ -91,7 +102,7 @@ export const SOSCallModal: React.FC<SOSCallModalProps> = ({
           <View style={styles.locationBody}>
             <MapPin size={18} color="#EF4444" style={{ marginTop: 2 }} />
             <View style={styles.locationInfo}>
-              <Text style={styles.locationZone}>Khu chờ</Text>
+              <Text style={styles.locationZone}>{location}</Text>
               <Text style={styles.locationNote}>Tọa độ đang được chia sẻ real-time</Text>
             </View>
           </View>
@@ -104,6 +115,7 @@ export const SOSCallModal: React.FC<SOSCallModalProps> = ({
               style={styles.declineBtn}
               onPress={onDecline}
               activeOpacity={0.8}
+              disabled={isAccepting}
             >
               <PhoneOff size={28} color="#EF4444" strokeWidth={2.5} />
             </TouchableOpacity>
@@ -113,12 +125,29 @@ export const SOSCallModal: React.FC<SOSCallModalProps> = ({
           <View style={styles.actionItem}>
             <TouchableOpacity
               style={styles.acceptBtn}
-              onPress={onAccept}
+              onPress={async () => {
+                if (alertId) {
+                  setIsAccepting(true);
+                  try {
+                    await alertApi.acknowledgeAlert(alertId);
+                  } catch (err) {
+                    console.log('Error acknowledging SOS alert:', err);
+                  } finally {
+                    setIsAccepting(false);
+                  }
+                }
+                onAccept();
+              }}
               activeOpacity={0.8}
+              disabled={isAccepting}
             >
-              <Phone size={28} color="#FFFFFF" strokeWidth={2.5} />
+              {isAccepting ? (
+                <ActivityIndicator size="small" color="#FFFFFF" />
+              ) : (
+                <Phone size={28} color="#FFFFFF" strokeWidth={2.5} />
+              )}
             </TouchableOpacity>
-            <Text style={styles.acceptText}>Nghe máy</Text>
+            <Text style={styles.acceptText}>{isAccepting ? 'Đang kết nối...' : 'Nghe máy'}</Text>
           </View>
         </View>
       </View>

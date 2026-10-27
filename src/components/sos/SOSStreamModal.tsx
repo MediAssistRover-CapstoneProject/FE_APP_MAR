@@ -6,6 +6,8 @@ import {
   TouchableOpacity,
   Modal,
   Dimensions,
+  ActivityIndicator,
+  Alert,
 } from 'react-native';
 import {
   X,
@@ -19,8 +21,11 @@ import {
   Wifi,
   Battery,
   Bot,
+  CheckCircle,
 } from 'lucide-react-native';
 import { Colors, Spacing, BorderRadius, Shadows } from '../../constants/theme';
+import { alertApi } from '../../api/modules/alert.api';
+import { incidentApi } from '../../api/modules/incident.api';
 
 const { width: SCREEN_W } = Dimensions.get('window');
 const VIDEO_H = SCREEN_W * 0.65;
@@ -29,16 +34,28 @@ interface SOSStreamModalProps {
   visible: boolean;
   onClose: () => void;
   onDispatch?: () => void;
+  alertId?: string;
+  incidentId?: string;
+  robotName?: string;
+  location?: string;
+  onResolve?: (alertId: string) => void;
 }
 
 export const SOSStreamModal: React.FC<SOSStreamModalProps> = ({
   visible,
   onClose,
   onDispatch,
+  alertId,
+  incidentId,
+  robotName = 'Robot MAR-GAZEBO-01',
+  location = 'Tầng 4 · Khu Hành lang chính',
+  onResolve,
 }) => {
   const [seconds, setSeconds] = useState(6);
   const [cameraEnabled, setCameraEnabled] = useState(true);
   const [micEnabled, setMicEnabled] = useState(true);
+  const [isDispatching, setIsDispatching] = useState(false);
+  const [isResolving, setIsResolving] = useState(false);
 
   // Timer đếm giây cuộc gọi
   useEffect(() => {
@@ -107,7 +124,7 @@ export const SOSStreamModal: React.FC<SOSStreamModalProps> = ({
                 <Bot size={76} color="#0284C7" strokeWidth={1.5} />
               </View>
               <Text style={styles.robotStreamingText}>
-                {cameraEnabled ? 'Đang truyền hình ảnh từ robot...' : 'Camera đã tắt'}
+                {cameraEnabled ? `Đang truyền hình ảnh từ ${robotName}...` : 'Camera đã tắt'}
               </Text>
             </View>
           </View>
@@ -138,7 +155,7 @@ export const SOSStreamModal: React.FC<SOSStreamModalProps> = ({
             <MapPin size={18} color="#EF4444" />
             <View>
               <Text style={styles.locationCardLabel}>VỊ TRÍ HIỆN TẠI</Text>
-              <Text style={styles.locationCardValue}>Tầng 4 · Khu Hành lang chính</Text>
+              <Text style={styles.locationCardValue}>{location}</Text>
             </View>
           </View>
           <ChevronRight size={18} color="#94A3B8" />
@@ -147,14 +164,37 @@ export const SOSStreamModal: React.FC<SOSStreamModalProps> = ({
         {/* ===== DISPATCH BUTTON ===== */}
         <TouchableOpacity
           style={styles.dispatchBtn}
-          onPress={onDispatch || onClose}
+          onPress={async () => {
+            if (incidentId) {
+              setIsDispatching(true);
+              try {
+                await incidentApi.startIncident(incidentId);
+              } catch (err) {
+                console.log('Error dispatching robot to incident:', err);
+              } finally {
+                setIsDispatching(false);
+              }
+            }
+            if (onDispatch) {
+              onDispatch();
+            } else {
+              onClose();
+            }
+          }}
           activeOpacity={0.85}
+          disabled={isDispatching}
         >
           <View style={styles.dispatchIconBox}>
-            <Text style={{ fontSize: 20 }}>🤖</Text>
+            {isDispatching ? (
+              <ActivityIndicator size="small" color="#FFFFFF" />
+            ) : (
+              <Text style={{ fontSize: 20 }}>🤖</Text>
+            )}
           </View>
           <View style={styles.dispatchTextBox}>
-            <Text style={styles.dispatchTitle}>Gửi lệnh điều phối</Text>
+            <Text style={styles.dispatchTitle}>
+              {isDispatching ? 'Đang gửi lệnh điều phối...' : 'Gửi lệnh điều phối'}
+            </Text>
             <Text style={styles.dispatchSubtitle}>Robot di chuyển đến vị trí yêu cầu</Text>
           </View>
           <ChevronRight size={20} color="#FFFFFF" />
@@ -195,13 +235,48 @@ export const SOSStreamModal: React.FC<SOSStreamModalProps> = ({
           <View style={styles.controlItem}>
             <TouchableOpacity
               style={styles.endCallBtn}
-              onPress={onClose}
+              onPress={() => {
+                if (alertId) {
+                  Alert.alert(
+                    'Kết thúc cuộc gọi',
+                    'Bạn có muốn đánh dấu giải quyết cảnh báo SOS này luôn không?',
+                    [
+                      {
+                        text: 'Chỉ đóng cuộc gọi',
+                        style: 'cancel',
+                        onPress: onClose,
+                      },
+                      {
+                        text: 'Đã giải quyết ✓',
+                        onPress: async () => {
+                          setIsResolving(true);
+                          try {
+                            await alertApi.resolveAlert(alertId);
+                            if (onResolve) onResolve(alertId);
+                          } catch (err) {
+                            console.log('Error resolving alert:', err);
+                          } finally {
+                            setIsResolving(false);
+                            onClose();
+                          }
+                        },
+                      },
+                    ]
+                  );
+                } else {
+                  onClose();
+                }
+              }}
               activeOpacity={0.8}
             >
-              <PhoneOff size={26} color="#FFFFFF" />
+              {isResolving ? (
+                <ActivityIndicator size="small" color="#FFFFFF" />
+              ) : (
+                <PhoneOff size={26} color="#FFFFFF" />
+              )}
             </TouchableOpacity>
             <Text style={[styles.controlLabel, { color: '#EF4444', fontWeight: '700' }]}>
-              Kết thúc
+              {isResolving ? 'Đang lưu...' : 'Kết thúc'}
             </Text>
           </View>
         </View>

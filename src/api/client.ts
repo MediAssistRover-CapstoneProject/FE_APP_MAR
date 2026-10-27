@@ -1,10 +1,10 @@
 import { API_CONFIG } from './config';
-import { ApiResponse, ApiError } from './types';
+import { ApiError } from './types';
 
 /**
  * Native HTTP Client (Fetch-based)
- * Tối ưu hóa cực nhẹ cho React Native, không cần cài thêm thư viện ngoài.
- * Hỗ trợ tự động gắn Token, Timeout, bắt lỗi mạng và format dữ liệu chuẩn.
+ * Tối ưu hóa cực nhẹ cho React Native, tương thích 100% với Backend MediAssistRover.
+ * Hỗ trợ tự động gắn Token Bearer, Timeout, bắt lỗi mạng và format dữ liệu.
  */
 
 class ApiClient {
@@ -21,10 +21,10 @@ class ApiClient {
   }
 
   // Hàm gọi HTTP cốt lõi với Timeout
-  private async request<T>(
+  public async request<T>(
     endpoint: string,
     options: RequestInit = {}
-  ): Promise<ApiResponse<T>> {
+  ): Promise<T> {
     const url = endpoint.startsWith('http') ? endpoint : `${this.baseUrl}${endpoint}`;
 
     const headers: Record<string, string> = {
@@ -43,7 +43,7 @@ class ApiClient {
 
     try {
       if (__DEV__) {
-        console.log(`[API REQUEST] ➔ ${options.method || 'GET'} ${url}`, options.body || '');
+        console.log(`[API REQUEST] ${options.method || 'GET'} ${url}`);
       }
 
       const response = await fetch(url, {
@@ -57,20 +57,20 @@ class ApiClient {
       const responseData = await response.json().catch(() => null);
 
       if (__DEV__) {
-        console.log(`[API RESPONSE] ⬅ ${response.status} ${url}`, responseData);
+        console.log(`[API RESPONSE] ${response.status} ${url}`, responseData);
       }
 
       if (!response.ok) {
         const error: ApiError = {
           status: response.status,
           message: responseData?.message || `Lỗi máy chủ (${response.status})`,
-          code: responseData?.code,
-          details: responseData?.details,
+          code: responseData?.error || responseData?.code,
+          details: responseData?.violations || responseData?.details,
         };
         throw error;
       }
 
-      return responseData as ApiResponse<T>;
+      return responseData as T;
     } catch (err: any) {
       clearTimeout(timeoutId);
 
@@ -97,12 +97,12 @@ class ApiClient {
   }
 
   // GET
-  public get<T>(endpoint: string, headers?: Record<string, string>): Promise<ApiResponse<T>> {
+  public get<T>(endpoint: string, headers?: Record<string, string>): Promise<T> {
     return this.request<T>(endpoint, { method: 'GET', headers });
   }
 
   // POST
-  public post<T>(endpoint: string, body?: any, headers?: Record<string, string>): Promise<ApiResponse<T>> {
+  public post<T>(endpoint: string, body?: any, headers?: Record<string, string>): Promise<T> {
     return this.request<T>(endpoint, {
       method: 'POST',
       headers,
@@ -111,7 +111,7 @@ class ApiClient {
   }
 
   // PUT
-  public put<T>(endpoint: string, body?: any, headers?: Record<string, string>): Promise<ApiResponse<T>> {
+  public put<T>(endpoint: string, body?: any, headers?: Record<string, string>): Promise<T> {
     return this.request<T>(endpoint, {
       method: 'PUT',
       headers,
@@ -120,7 +120,7 @@ class ApiClient {
   }
 
   // DELETE
-  public delete<T>(endpoint: string, headers?: Record<string, string>): Promise<ApiResponse<T>> {
+  public delete<T>(endpoint: string, headers?: Record<string, string>): Promise<T> {
     return this.request<T>(endpoint, { method: 'DELETE', headers });
   }
 }

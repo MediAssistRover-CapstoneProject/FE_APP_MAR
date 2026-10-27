@@ -7,14 +7,15 @@ import {
   Modal,
   Animated,
   Dimensions,
+  ActivityIndicator,
 } from 'react-native';
-import { X, Check, User } from 'lucide-react-native';
-import { Colors, Spacing } from '../../constants/theme';
+import { X, Check, User, Camera, FlipHorizontal } from 'lucide-react-native';
+import { CameraView, useCameraPermissions } from 'expo-camera';
+import { Colors, Spacing, BorderRadius } from '../../constants/theme';
 
 const { width: SCREEN_W } = Dimensions.get('window');
-const OVAL_W = SCREEN_W * 0.58;
-const OVAL_H = OVAL_W * 1.25;
-const FRAME_SIZE = SCREEN_W * 0.62;
+const OVAL_W = SCREEN_W * 0.62;
+const OVAL_H = OVAL_W * 1.3;
 
 interface FaceScanModalProps {
   visible: boolean;
@@ -32,6 +33,8 @@ export const FaceScanModal: React.FC<FaceScanModalProps> = ({
   onConfirm,
 }) => {
   const [phase, setPhase] = useState<ScanPhase>('prepare');
+  const [permission, requestPermission] = useCameraPermissions();
+  const [facing, setFacing] = useState<'front' | 'back'>('front');
 
   // Corner scan animation
   const scanAnim = useRef(new Animated.Value(0)).current;
@@ -41,8 +44,11 @@ export const FaceScanModal: React.FC<FaceScanModalProps> = ({
   useEffect(() => {
     if (visible) {
       setPhase('prepare');
+      if (!permission?.granted) {
+        requestPermission();
+      }
     }
-  }, [visible]);
+  }, [visible, permission?.granted, requestPermission]);
 
   // Scanning corner animation
   useEffect(() => {
@@ -50,8 +56,8 @@ export const FaceScanModal: React.FC<FaceScanModalProps> = ({
       // Pulse animation
       const pulsing = Animated.loop(
         Animated.sequence([
-          Animated.timing(pulseAnim, { toValue: 1.08, duration: 700, useNativeDriver: true }),
-          Animated.timing(pulseAnim, { toValue: 1, duration: 700, useNativeDriver: true }),
+          Animated.timing(pulseAnim, { toValue: 1.06, duration: 600, useNativeDriver: true }),
+          Animated.timing(pulseAnim, { toValue: 1, duration: 600, useNativeDriver: true }),
         ])
       );
       pulsing.start();
@@ -59,18 +65,18 @@ export const FaceScanModal: React.FC<FaceScanModalProps> = ({
       // Corner scan glow
       const cornerAnim = Animated.loop(
         Animated.sequence([
-          Animated.timing(scanAnim, { toValue: 1, duration: 600, useNativeDriver: false }),
-          Animated.timing(scanAnim, { toValue: 0, duration: 600, useNativeDriver: false }),
+          Animated.timing(scanAnim, { toValue: 1, duration: 500, useNativeDriver: false }),
+          Animated.timing(scanAnim, { toValue: 0, duration: 500, useNativeDriver: false }),
         ])
       );
       cornerAnim.start();
 
-      // Giả lập nhận dạng thành công sau 2.5 giây
+      // Giả lập nhận dạng AI thành công sau 2.2 giây
       const timer = setTimeout(() => {
         pulsing.stop();
         cornerAnim.stop();
         setPhase('success');
-      }, 2500);
+      }, 2200);
 
       return () => {
         clearTimeout(timer);
@@ -78,7 +84,7 @@ export const FaceScanModal: React.FC<FaceScanModalProps> = ({
         cornerAnim.stop();
       };
     }
-  }, [phase]);
+  }, [phase, pulseAnim, scanAnim]);
 
   const borderColor = scanAnim.interpolate({
     inputRange: [0, 1],
@@ -94,35 +100,62 @@ export const FaceScanModal: React.FC<FaceScanModalProps> = ({
     onClose();
   };
 
+  const toggleFacing = () => {
+    setFacing((prev) => (prev === 'front' ? 'back' : 'front'));
+  };
+
   return (
     <Modal visible={visible} animationType="slide" transparent={false}>
       <View style={styles.container}>
         {/* ===== HEADER ===== */}
         <View style={styles.header}>
           <View style={styles.headerInfo}>
-            <Text style={styles.headerLabel}>NGƯỜI NHẬN XÁC NHẬN</Text>
-            <Text style={styles.headerName}>{receiverName || 'BS. Trần Thị Lan'}</Text>
+            <Text style={styles.headerLabel}>XÁC NHẬN KHUÔN MẶT BẰNG CAMERA THẬT</Text>
+            <Text style={styles.headerName}>{receiverName || 'Nhân viên nhận hàng'}</Text>
           </View>
-          <TouchableOpacity onPress={onClose} style={styles.closeBtn} activeOpacity={0.7}>
-            <X size={20} color="#94A3B8" />
-          </TouchableOpacity>
+          <View style={styles.headerActions}>
+            {permission?.granted && phase !== 'success' && (
+              <TouchableOpacity onPress={toggleFacing} style={styles.flipBtn} activeOpacity={0.7}>
+                <FlipHorizontal size={18} color="#FFFFFF" />
+              </TouchableOpacity>
+            )}
+            <TouchableOpacity onPress={onClose} style={styles.closeBtn} activeOpacity={0.7}>
+              <X size={20} color="#94A3B8" />
+            </TouchableOpacity>
+          </View>
         </View>
 
         <View style={styles.body}>
           {/* ===== PHASE 1: PREPARE ===== */}
           {phase === 'prepare' && (
             <View style={styles.phaseContainer}>
-              <Text style={styles.phaseTitle}>Chuẩn bị chụp ảnh</Text>
+              <Text style={styles.phaseTitle}>Scan khuôn mặt trực tiếp</Text>
               <Text style={styles.phaseSubtitle}>
-                Scan khuôn mặt của bạn để xác minh nhận hàng
+                Camera trước đang hoạt động. Căn chỉnh khuôn mặt vào trong khung oval.
               </Text>
 
-              {/* Face oval silhouette */}
+              {/* Face oval silhouette & Live Camera */}
               <View style={styles.ovalWrapper}>
                 <View style={styles.oval}>
-                  <View style={styles.silhouetteContainer}>
-                    <User size={100} color="rgba(255,255,255,0.3)" strokeWidth={1.2} />
-                  </View>
+                  {permission?.granted ? (
+                    <CameraView
+                      style={StyleSheet.absoluteFill}
+                      facing={facing}
+                    />
+                  ) : (
+                    <View style={styles.silhouetteContainer}>
+                      <User size={90} color="rgba(255,255,255,0.4)" strokeWidth={1.2} />
+                      <TouchableOpacity
+                        style={styles.permissionBtn}
+                        onPress={requestPermission}
+                        activeOpacity={0.8}
+                      >
+                        <Camera size={14} color="#FFFFFF" />
+                        <Text style={styles.permissionBtnText}>Bật quyền Camera</Text>
+                      </TouchableOpacity>
+                    </View>
+                  )}
+
                   {/* Corner indicators */}
                   <View style={[styles.ovalCorner, styles.ovalCornerTL]} />
                   <View style={[styles.ovalCorner, styles.ovalCornerTR]} />
@@ -132,7 +165,7 @@ export const FaceScanModal: React.FC<FaceScanModalProps> = ({
               </View>
 
               <Text style={styles.ovalHint}>
-                Đưa khuôn mặt vào vùng sáng, nhìn thẳng vào camera
+                {facing === 'front' ? 'Camera trước: Nhìn thẳng' : 'Camera sau đang bật'} · Đảm bảo đủ ánh sáng
               </Text>
 
               {/* Buttons */}
@@ -145,7 +178,8 @@ export const FaceScanModal: React.FC<FaceScanModalProps> = ({
                   onPress={handleCapture}
                   activeOpacity={0.8}
                 >
-                  <Text style={styles.captureBtnText}>Chụp ảnh</Text>
+                  <Camera size={18} color="#FFFFFF" />
+                  <Text style={styles.captureBtnText}>Quét khuôn mặt</Text>
                 </TouchableOpacity>
               </View>
             </View>
@@ -154,20 +188,27 @@ export const FaceScanModal: React.FC<FaceScanModalProps> = ({
           {/* ===== PHASE 2: SCANNING ===== */}
           {phase === 'scanning' && (
             <View style={styles.phaseContainer}>
-              <Text style={styles.phaseTitle}>Đang nhận dạng...</Text>
-              <Text style={styles.phaseSubtitle}>Giữ yên khuôn mặt trong khung</Text>
+              <Text style={styles.phaseTitle}>Đang nhận diện AI...</Text>
+              <Text style={styles.phaseSubtitle}>Giữ yên khuôn mặt trong khung camera</Text>
 
-              {/* Animated scan frame */}
-              <View style={styles.scanFrameWrapper}>
+              {/* Animated scan frame with live camera */}
+              <View style={styles.ovalWrapper}>
                 <Animated.View
                   style={[
-                    styles.scanFrame,
+                    styles.oval,
                     {
                       borderColor,
                       transform: [{ scale: pulseAnim }],
                     },
                   ]}
                 >
+                  {permission?.granted && (
+                    <CameraView
+                      style={StyleSheet.absoluteFill}
+                      facing={facing}
+                    />
+                  )}
+
                   {/* Scan corner highlights */}
                   <View style={[styles.scanCorner, styles.scanCornerTL]} />
                   <View style={[styles.scanCorner, styles.scanCornerTR]} />
@@ -176,12 +217,12 @@ export const FaceScanModal: React.FC<FaceScanModalProps> = ({
 
                   {/* Center dots loading */}
                   <View style={styles.scanningDots}>
-                    <LoadingDots />
+                    <ActivityIndicator size="large" color="#10B981" />
                   </View>
                 </Animated.View>
               </View>
 
-              <Text style={styles.scanningText}>Đang xử lý nhận dạng khuôn mặt...</Text>
+              <Text style={styles.scanningText}>Hệ thống AI đang so khớp dữ liệu...</Text>
             </View>
           )}
 
@@ -189,21 +230,19 @@ export const FaceScanModal: React.FC<FaceScanModalProps> = ({
           {phase === 'success' && (
             <View style={styles.phaseContainer}>
               <Text style={[styles.phaseTitle, { color: '#10B981' }]}>
-                Đã nhận dạng thành công!
+                Xác thực khuôn mặt thành công!
               </Text>
 
               {/* Success Frame */}
               <View style={styles.successFrameWrapper}>
                 <View style={styles.successFrame}>
-                  {/* Corner indicators xanh */}
                   <View style={[styles.successCorner, styles.successCornerTL]} />
                   <View style={[styles.successCorner, styles.successCornerTR]} />
                   <View style={[styles.successCorner, styles.successCornerBL]} />
                   <View style={[styles.successCorner, styles.successCornerBR]} />
 
-                  {/* Checkmark center */}
                   <View style={styles.successCheckCircle}>
-                    <Check size={40} color="#10B981" strokeWidth={3} />
+                    <Check size={42} color="#10B981" strokeWidth={3} />
                   </View>
                 </View>
               </View>
@@ -211,15 +250,15 @@ export const FaceScanModal: React.FC<FaceScanModalProps> = ({
               {/* Person info card */}
               <View style={styles.personCard}>
                 <View style={styles.personAvatarCircle}>
-                  <User size={20} color={Colors.primary} />
+                  <User size={22} color={Colors.primary} />
                 </View>
                 <View style={styles.personInfo}>
                   <Text style={styles.personName}>{receiverName || 'BS. Trần Thị Lan'}</Text>
-                  <Text style={styles.personRole}>Bác sĩ điều trị · P. Tim mạch</Text>
+                  <Text style={styles.personRole}>Nhân viên y tế được cấp quyền nhận bàn giao</Text>
                 </View>
                 <View style={styles.verifiedBadge}>
                   <Check size={12} color="#10B981" strokeWidth={3} />
-                  <Text style={styles.verifiedText}>Đã xác minh</Text>
+                  <Text style={styles.verifiedText}>Đã khớp</Text>
                 </View>
               </View>
 
@@ -229,7 +268,7 @@ export const FaceScanModal: React.FC<FaceScanModalProps> = ({
                 onPress={handleConfirm}
                 activeOpacity={0.8}
               >
-                <Text style={styles.confirmBtnText}>Xác nhận đúng người  ▶</Text>
+                <Text style={styles.confirmBtnText}>Hoàn tất xác minh khuôn mặt</Text>
               </TouchableOpacity>
 
               <TouchableOpacity
@@ -237,7 +276,7 @@ export const FaceScanModal: React.FC<FaceScanModalProps> = ({
                 style={styles.retryLink}
                 activeOpacity={0.7}
               >
-                <Text style={styles.retryLinkText}>Chụp lại</Text>
+                <Text style={styles.retryLinkText}>Quét lại</Text>
               </TouchableOpacity>
             </View>
           )}
@@ -247,217 +286,189 @@ export const FaceScanModal: React.FC<FaceScanModalProps> = ({
   );
 };
 
-// Loading dots animation component
-const LoadingDots: React.FC = () => {
-  const dot1 = useRef(new Animated.Value(0.3)).current;
-  const dot2 = useRef(new Animated.Value(0.3)).current;
-  const dot3 = useRef(new Animated.Value(0.3)).current;
-
-  useEffect(() => {
-    const animate = (dot: Animated.Value, delay: number) =>
-      Animated.loop(
-        Animated.sequence([
-          Animated.delay(delay),
-          Animated.timing(dot, { toValue: 1, duration: 400, useNativeDriver: true }),
-          Animated.timing(dot, { toValue: 0.3, duration: 400, useNativeDriver: true }),
-        ])
-      );
-
-    const a1 = animate(dot1, 0);
-    const a2 = animate(dot2, 200);
-    const a3 = animate(dot3, 400);
-    a1.start();
-    a2.start();
-    a3.start();
-    return () => { a1.stop(); a2.stop(); a3.stop(); };
-  }, []);
-
-  return (
-    <View style={{ flexDirection: 'row', gap: 8 }}>
-      {[dot1, dot2, dot3].map((dot, i) => (
-        <Animated.View
-          key={i}
-          style={[styles.dot, { opacity: dot }]}
-        />
-      ))}
-    </View>
-  );
-};
-
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#0A1628',
+    backgroundColor: '#0F172A',
   },
-
-  // Header
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: Spacing.lg,
-    paddingTop: 56,
-    paddingBottom: Spacing.md,
+    paddingHorizontal: Spacing.md,
+    paddingTop: 50,
+    paddingBottom: Spacing.sm,
+    backgroundColor: '#1E293B',
     borderBottomWidth: 1,
-    borderBottomColor: 'rgba(255,255,255,0.08)',
+    borderBottomColor: '#334155',
   },
   headerInfo: { flex: 1 },
   headerLabel: {
-    fontSize: 10,
+    fontSize: 9,
     fontWeight: '700',
-    color: 'rgba(255,255,255,0.4)',
+    color: '#38BDF8',
     letterSpacing: 0.8,
-    textTransform: 'uppercase',
+    marginBottom: 2,
   },
   headerName: {
-    fontSize: 17,
+    fontSize: 16,
     fontWeight: '700',
     color: '#FFFFFF',
-    marginTop: 2,
+  },
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  flipBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#334155',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   closeBtn: {
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: 'rgba(255,255,255,0.1)',
+    backgroundColor: '#334155',
     alignItems: 'center',
     justifyContent: 'center',
   },
-
-  // Body
   body: {
     flex: 1,
-    alignItems: 'center',
     justifyContent: 'center',
   },
   phaseContainer: {
     alignItems: 'center',
-    paddingHorizontal: Spacing.xl,
-    width: '100%',
+    paddingHorizontal: Spacing.lg,
   },
   phaseTitle: {
-    fontSize: 22,
+    fontSize: 20,
     fontWeight: '700',
     color: '#FFFFFF',
-    marginBottom: 8,
+    marginBottom: 6,
     textAlign: 'center',
   },
   phaseSubtitle: {
-    fontSize: 14,
-    color: 'rgba(255,255,255,0.55)',
+    fontSize: 13,
+    color: '#94A3B8',
     textAlign: 'center',
-    marginBottom: 36,
-    lineHeight: 22,
+    lineHeight: 18,
+    marginBottom: 24,
+    maxWidth: 300,
   },
-
-  // Face Oval (Phase 1)
   ovalWrapper: {
-    marginBottom: 28,
-    alignItems: 'center',
-    justifyContent: 'center',
+    marginBottom: 20,
   },
   oval: {
     width: OVAL_W,
     height: OVAL_H,
     borderRadius: OVAL_W / 2,
     borderWidth: 2.5,
-    borderColor: 'rgba(255,255,255,0.25)',
-    borderStyle: 'dashed',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: 'rgba(255,255,255,0.05)',
-    overflow: 'hidden',
+    borderColor: '#38BDF8',
+    backgroundColor: '#1E293B',
     position: 'relative',
+    overflow: 'hidden',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   silhouetteContainer: {
     alignItems: 'center',
-    justifyContent: 'flex-end',
-    height: '100%',
-    paddingBottom: 12,
+    justifyContent: 'center',
+  },
+  permissionBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: Colors.primary,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 20,
+    marginTop: 12,
+  },
+  permissionBtnText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#FFFFFF',
   },
   ovalCorner: {
     position: 'absolute',
-    width: 24,
-    height: 24,
-    borderColor: '#10B981',
-    borderWidth: 2.5,
+    width: 16,
+    height: 16,
+    borderColor: '#38BDF8',
   },
-  ovalCornerTL: { top: 24, left: 24, borderRightWidth: 0, borderBottomWidth: 0 },
-  ovalCornerTR: { top: 24, right: 24, borderLeftWidth: 0, borderBottomWidth: 0 },
-  ovalCornerBL: { bottom: 24, left: 24, borderRightWidth: 0, borderTopWidth: 0 },
-  ovalCornerBR: { bottom: 24, right: 24, borderLeftWidth: 0, borderTopWidth: 0 },
+  ovalCornerTL: { top: 12, left: 16, borderTopWidth: 3, borderLeftWidth: 3 },
+  ovalCornerTR: { top: 12, right: 16, borderTopWidth: 3, borderRightWidth: 3 },
+  ovalCornerBL: { bottom: 12, left: 16, borderBottomWidth: 3, borderLeftWidth: 3 },
+  ovalCornerBR: { bottom: 12, right: 16, borderBottomWidth: 3, borderRightWidth: 3 },
   ovalHint: {
-    fontSize: 13,
-    color: 'rgba(255,255,255,0.45)',
+    fontSize: 12,
+    color: '#64748B',
     textAlign: 'center',
-    marginBottom: 36,
-    lineHeight: 20,
+    marginBottom: 24,
   },
-
-  // Buttons (Phase 1)
-  btnRow: { flexDirection: 'row', gap: 12, width: '100%' },
+  btnRow: {
+    flexDirection: 'row',
+    gap: 12,
+    width: '100%',
+    maxWidth: 320,
+  },
   cancelBtn: {
     flex: 1,
-    height: 50,
-    borderRadius: 14,
+    height: 48,
+    borderRadius: BorderRadius.md,
     borderWidth: 1.5,
-    borderColor: 'rgba(255,255,255,0.25)',
+    borderColor: '#475569',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  cancelBtnText: { fontSize: 15, fontWeight: '600', color: 'rgba(255,255,255,0.7)' },
+  cancelBtnText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#94A3B8',
+  },
   captureBtn: {
     flex: 2,
-    height: 50,
-    borderRadius: 14,
-    backgroundColor: '#10B981',
+    flexDirection: 'row',
+    height: 48,
+    borderRadius: BorderRadius.md,
+    backgroundColor: '#0284C7',
     alignItems: 'center',
     justifyContent: 'center',
+    gap: 8,
   },
-  captureBtnText: { fontSize: 15, fontWeight: '700', color: '#FFF' },
-
-  // Scan Frame (Phase 2)
-  scanFrameWrapper: { marginBottom: 28 },
-  scanFrame: {
-    width: FRAME_SIZE,
-    height: FRAME_SIZE,
-    borderRadius: 20,
-    borderWidth: 3,
-    backgroundColor: 'rgba(16,185,129,0.08)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    position: 'relative',
+  captureBtnText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#FFFFFF',
   },
   scanCorner: {
     position: 'absolute',
-    width: 28,
-    height: 28,
+    width: 20,
+    height: 20,
     borderColor: '#10B981',
-    borderWidth: 3,
   },
-  scanCornerTL: { top: 12, left: 12, borderRightWidth: 0, borderBottomWidth: 0, borderTopLeftRadius: 8 },
-  scanCornerTR: { top: 12, right: 12, borderLeftWidth: 0, borderBottomWidth: 0, borderTopRightRadius: 8 },
-  scanCornerBL: { bottom: 12, left: 12, borderRightWidth: 0, borderTopWidth: 0, borderBottomLeftRadius: 8 },
-  scanCornerBR: { bottom: 12, right: 12, borderLeftWidth: 0, borderTopWidth: 0, borderBottomRightRadius: 8 },
-  scanningDots: { alignItems: 'center', justifyContent: 'center' },
-  dot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    backgroundColor: '#10B981',
+  scanCornerTL: { top: 10, left: 14, borderTopWidth: 3.5, borderLeftWidth: 3.5 },
+  scanCornerTR: { top: 10, right: 14, borderTopWidth: 3.5, borderRightWidth: 3.5 },
+  scanCornerBL: { bottom: 10, left: 14, borderBottomWidth: 3.5, borderLeftWidth: 3.5 },
+  scanCornerBR: { bottom: 10, right: 14, borderBottomWidth: 3.5, borderRightWidth: 3.5 },
+  scanningDots: {
+    position: 'absolute',
   },
   scanningText: {
-    fontSize: 14,
-    color: 'rgba(255,255,255,0.5)',
-    textAlign: 'center',
+    fontSize: 13,
+    color: '#34D399',
+    fontWeight: '600',
   },
-
-  // Success (Phase 3)
-  successFrameWrapper: { marginBottom: 24 },
+  successFrameWrapper: {
+    marginBottom: 20,
+  },
   successFrame: {
-    width: FRAME_SIZE,
-    height: FRAME_SIZE * 0.8,
-    borderRadius: 20,
+    width: 140,
+    height: 140,
+    borderRadius: 70,
     borderWidth: 3,
     borderColor: '#10B981',
     backgroundColor: 'rgba(16,185,129,0.1)',
@@ -467,48 +478,46 @@ const styles = StyleSheet.create({
   },
   successCorner: {
     position: 'absolute',
-    width: 28,
-    height: 28,
-    borderColor: '#34D399',
-    borderWidth: 3,
-  },
-  successCornerTL: { top: 12, left: 12, borderRightWidth: 0, borderBottomWidth: 0, borderTopLeftRadius: 8 },
-  successCornerTR: { top: 12, right: 12, borderLeftWidth: 0, borderBottomWidth: 0, borderTopRightRadius: 8 },
-  successCornerBL: { bottom: 12, left: 12, borderRightWidth: 0, borderTopWidth: 0, borderBottomLeftRadius: 8 },
-  successCornerBR: { bottom: 12, right: 12, borderLeftWidth: 0, borderTopWidth: 0, borderBottomRightRadius: 8 },
-  successCheckCircle: {
-    width: 84,
-    height: 84,
-    borderRadius: 42,
-    backgroundColor: 'rgba(16,185,129,0.2)',
-    borderWidth: 2,
+    width: 16,
+    height: 16,
     borderColor: '#10B981',
+  },
+  successCornerTL: { top: 6, left: 6, borderTopWidth: 3, borderLeftWidth: 3 },
+  successCornerTR: { top: 6, right: 6, borderTopWidth: 3, borderRightWidth: 3 },
+  successCornerBL: { bottom: 6, left: 6, borderBottomWidth: 3, borderLeftWidth: 3 },
+  successCornerBR: { bottom: 6, right: 6, borderBottomWidth: 3, borderRightWidth: 3 },
+  successCheckCircle: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: '#D1FAE5',
     alignItems: 'center',
     justifyContent: 'center',
   },
   personCard: {
-    width: '100%',
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(255,255,255,0.08)',
-    borderRadius: 14,
-    padding: 14,
-    marginBottom: 20,
+    backgroundColor: '#1E293B',
+    borderRadius: BorderRadius.md,
+    padding: 12,
+    width: '100%',
+    maxWidth: 320,
     borderWidth: 1,
-    borderColor: 'rgba(16,185,129,0.3)',
-    gap: 12,
+    borderColor: '#334155',
+    marginBottom: 20,
+    gap: 10,
   },
   personAvatarCircle: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: 'rgba(59,130,246,0.2)',
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: '#0284C7',
     alignItems: 'center',
     justifyContent: 'center',
   },
   personInfo: { flex: 1 },
-  personName: { fontSize: 15, fontWeight: '700', color: '#FFF' },
-  personRole: { fontSize: 12, color: 'rgba(255,255,255,0.5)', marginTop: 2 },
+  personName: { fontSize: 14, fontWeight: '700', color: '#FFFFFF' },
+  personRole: { fontSize: 11, color: '#94A3B8', marginTop: 1 },
   verifiedBadge: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -516,19 +525,30 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(16,185,129,0.15)',
     paddingHorizontal: 8,
     paddingVertical: 4,
-    borderRadius: 8,
+    borderRadius: 6,
   },
   verifiedText: { fontSize: 11, fontWeight: '700', color: '#10B981' },
   confirmBtn: {
     width: '100%',
-    height: 52,
-    borderRadius: 14,
+    maxWidth: 320,
+    height: 50,
+    borderRadius: BorderRadius.md,
     backgroundColor: '#10B981',
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 12,
   },
-  confirmBtnText: { fontSize: 16, fontWeight: '700', color: '#FFF' },
-  retryLink: { paddingVertical: 8 },
-  retryLinkText: { fontSize: 14, fontWeight: '600', color: 'rgba(255,255,255,0.4)' },
+  confirmBtnText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
+  retryLink: {
+    padding: 8,
+  },
+  retryLinkText: {
+    fontSize: 13,
+    color: '#38BDF8',
+    fontWeight: '600',
+  },
 });

@@ -1,28 +1,15 @@
 import React from 'react';
-import { View, Text, StyleSheet } from 'react-native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { MainTabParamList } from '../types/navigation';
 import { MapScreen } from '../screens/main/MapScreen';
 import { MissionScreen } from '../screens/main/MissionScreen';
 import { AlertScreen } from '../screens/main/AlertScreen';
+import { DensityScreen } from '../screens/main/DensityScreen';
+import { IncidentScreen } from '../screens/main/IncidentScreen';
 import { Colors } from '../constants/theme';
 import { Map, Plus, Bell, Users, AlertOctagon } from 'lucide-react-native';
 
 const Tab = createBottomTabNavigator<MainTabParamList>();
-
-const DensityScreen = () => (
-  <View style={styles.placeholder}>
-    <Users size={40} color={Colors.primary} />
-    <Text style={styles.placeholderText}>Mật độ</Text>
-  </View>
-);
-
-const IncidentScreen = () => (
-  <View style={styles.placeholder}>
-    <AlertOctagon size={40} color={Colors.error} />
-    <Text style={styles.placeholderText}>Sự cố</Text>
-  </View>
-);
 
 export function MainNavigator() {
   return (
@@ -94,18 +81,3 @@ export function MainNavigator() {
     </Tab.Navigator>
   );
 }
-
-const styles = StyleSheet.create({
-  placeholder: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: Colors.background,
-    gap: 12,
-  },
-  placeholderText: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: Colors.textSecondary,
-  },
-});

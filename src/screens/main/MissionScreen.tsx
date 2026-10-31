@@ -77,7 +77,7 @@ export const MissionScreen: React.FC = () => {
   const [selectedTasks, setSelectedTasks] = useState<TaskType[]>(['van_chuyen_tai_lieu']);
   const [itemName, setItemName] = useState('Hồ sơ bệnh án #BN2047');
   const [quantity, setQuantity] = useState('1');
-  const [fromRoom, setFromRoom] = useState('Tiếp nhận');
+  const [fromRoom] = useState('Tiếp nhận');
   const [toRoom, setToRoom] = useState('P. Nội TH');
   const [sender, setSender] = useState('KTV. Nguyễn Minh Tuấn');
   const [receiver, setReceiver] = useState('BS. Trần Thị Lan');
@@ -182,7 +182,7 @@ export const MissionScreen: React.FC = () => {
 
               Alert.alert(
                 'Thành công 🎉',
-                `Đã tạo yêu cầu giao hàng thành công lên hệ thống robot!\nMã yêu cầu: ${res?.request?.requestCode || 'REQ-DELIVERY'}\nTrạng thái: DRAFT / QUEUED`
+                `Đã tạo yêu cầu giao hàng đến ${toRoom} thành công!\nMã yêu cầu: ${res?.request?.requestCode || 'REQ-DELIVERY'}\nTrạng thái: DRAFT / QUEUED (Lấy hàng tại Tiếp nhận)`
               );
             } catch (err: any) {
               console.log('Phản hồi từ server:', err);

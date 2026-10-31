@@ -27,7 +27,10 @@ import {
   Play,
   Pause,
   LogOut,
+  Video,
+  Map,
 } from 'lucide-react-native';
+import { RobotCameraStreamView } from '../camera/RobotCameraStreamView';
 import { useHospitalMapStore } from '../../store/useHospitalMapStore';
 import { HospitalSvgMap } from './HospitalSvgMap';
 import { Colors } from '../../constants/theme';
@@ -43,6 +46,8 @@ export const RobotTouchInterfaceModal: React.FC<RobotTouchInterfaceModalProps> =
   visible,
   onClose,
 }) => {
+  const [kioskViewMode, setKioskViewMode] = React.useState<'camera' | 'map'>('camera');
+
   const {
     robotState,
     zones,
@@ -220,16 +225,70 @@ export const RobotTouchInterfaceModal: React.FC<RobotTouchInterfaceModalProps> =
             )}
           </View>
 
-          {/* ========= 3. BẢN ĐỒ BỆNH VIỆN 2D ĐỒNG BỘ 1200x680 ========= */}
-          <View style={styles.mapSectionWrapper}>
-            <View style={styles.mapSectionHeader}>
-              <Text style={styles.mapSectionTitle}>🗺️ BẢN ĐỒ ĐỊNH VỊ THỜI GIAN THỰC (1200x680)</Text>
-              <Text style={styles.mapCoordsText}>
-                Tọa độ hiện tại: ({Math.round(robotState.x)}, {Math.round(robotState.y)})
+          {/* ========= 3. CHẾ ĐỘ XEM: CAMERA ROBOT (LIVE) vs BẢN ĐỒ NAV2 ========= */}
+          <View style={styles.viewModeTabContainer}>
+            <TouchableOpacity
+              style={[
+                styles.kioskTabBtn,
+                kioskViewMode === 'camera' && styles.kioskTabBtnActive,
+              ]}
+              onPress={() => setKioskViewMode('camera')}
+              activeOpacity={0.8}
+            >
+              <Video size={16} color={kioskViewMode === 'camera' ? '#FFFFFF' : '#94A3B8'} />
+              <Text
+                style={[
+                  styles.kioskTabText,
+                  kioskViewMode === 'camera' && styles.kioskTabTextActive,
+                ]}
+              >
+                📹 CAMERA ROBOT (LIVE)
               </Text>
-            </View>
-            <HospitalSvgMap interactive={false} mode="robot" />
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[
+                styles.kioskTabBtn,
+                kioskViewMode === 'map' && styles.kioskTabBtnActive,
+              ]}
+              onPress={() => setKioskViewMode('map')}
+              activeOpacity={0.8}
+            >
+              <Map size={16} color={kioskViewMode === 'map' ? '#FFFFFF' : '#94A3B8'} />
+              <Text
+                style={[
+                  styles.kioskTabText,
+                  kioskViewMode === 'map' && styles.kioskTabTextActive,
+                ]}
+              >
+                🗺️ BẢN ĐỒ 2D NAV2
+              </Text>
+            </TouchableOpacity>
           </View>
+
+          {kioskViewMode === 'camera' ? (
+            <View style={styles.cameraSectionWrapper}>
+              <View style={styles.cameraSectionHeader}>
+                <Text style={styles.cameraSectionTitle}>
+                  🔴 GÓC NHÌN TRỰC TIẾP TỪ ROBOT (CAMERA STREAM)
+                </Text>
+                <Text style={styles.cameraLiveBadgeText}>
+                  {robotState.status === 'NAVIGATING' ? 'ĐANG DI CHUYỂN' : 'TẠI CHỖ'}
+                </Text>
+              </View>
+              <RobotCameraStreamView height={SCREEN_W * 0.7} showControls={true} />
+            </View>
+          ) : (
+            <View style={styles.mapSectionWrapper}>
+              <View style={styles.mapSectionHeader}>
+                <Text style={styles.mapSectionTitle}>🗺️ BẢN ĐỒ ĐỊNH VỊ THỜI GIAN THỰC (1200x680)</Text>
+                <Text style={styles.mapCoordsText}>
+                  Tọa độ hiện tại: ({Math.round(robotState.x)}, {Math.round(robotState.y)})
+                </Text>
+              </View>
+              <HospitalSvgMap interactive={false} mode="robot" />
+            </View>
+          )}
 
           {/* ========= 4. BẢNG ĐIỀU KHIỂN TƯƠNG TÁC TẠI ĐÍCH ĐẾN (ARRIVED PANEL) ========= */}
           {robotState.status === 'ARRIVED' && (
@@ -523,6 +582,62 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#92400E',
     flex: 1,
+  },
+  viewModeTabContainer: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 14,
+    backgroundColor: '#1E293B',
+    padding: 4,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#334155',
+  },
+  kioskTabBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 9,
+    borderRadius: 8,
+  },
+  kioskTabBtnActive: {
+    backgroundColor: '#0284C7',
+  },
+  kioskTabText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#94A3B8',
+  },
+  kioskTabTextActive: {
+    color: '#FFFFFF',
+    fontWeight: '800',
+  },
+  cameraSectionWrapper: {
+    backgroundColor: '#1E293B',
+    borderRadius: 14,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#38BDF8',
+    marginBottom: 20,
+  },
+  cameraSectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+  },
+  cameraSectionTitle: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#38BDF8',
+    letterSpacing: 0.3,
+  },
+  cameraLiveBadgeText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#10B981',
   },
   mapSectionWrapper: {
     backgroundColor: '#1E293B',

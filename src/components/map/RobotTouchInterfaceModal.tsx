@@ -26,6 +26,7 @@ import {
   AlertTriangle,
   Play,
   Pause,
+  LogOut,
 } from 'lucide-react-native';
 import { useHospitalMapStore } from '../../store/useHospitalMapStore';
 import { HospitalSvgMap } from './HospitalSvgMap';
@@ -92,46 +93,56 @@ export const RobotTouchInterfaceModal: React.FC<RobotTouchInterfaceModalProps> =
       <View style={styles.kioskContainer}>
         {/* ========= 1. TOP KIOSK HUD HEADER ========= */}
         <View style={styles.hudHeader}>
-          <View style={styles.hudLeft}>
-            <View style={styles.robotAvatarBox}>
-              <Bot size={22} color="#38BDF8" />
+          {/* Top row: Identity + Quick Exit */}
+          <View style={styles.topBarRow}>
+            <View style={styles.hudLeft}>
+              <View style={styles.robotAvatarBox}>
+                <Bot size={22} color="#38BDF8" />
+              </View>
+              <View style={styles.titleWrapper}>
+                <Text style={styles.robotTitleText} numberOfLines={1}>
+                  {robotState.robotId} · KIOSK INTERFACE
+                </Text>
+                <Text style={styles.robotSubText} numberOfLines={1}>
+                  Màn hình robot · Model Gazebo Nav2
+                </Text>
+              </View>
             </View>
-            <View>
-              <Text style={styles.robotTitleText}>{robotState.robotId} · ROBOT ON-BOARD INTERFACE</Text>
-              <Text style={styles.robotSubText}>
-                Hệ điều hành AMR Touch Kiosk · Model Gazebo Nav2
-              </Text>
-            </View>
+
+            {/* Nút thoát nổi bật ở góc trên bên phải */}
+            <TouchableOpacity
+              style={styles.exitKioskBtn}
+              onPress={onClose}
+              activeOpacity={0.8}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              <LogOut size={16} color="#FFFFFF" />
+              <Text style={styles.exitKioskText}>Thoát (Out)</Text>
+            </TouchableOpacity>
           </View>
 
-          {/* Telemetry Chips */}
+          {/* Telemetry Chips (Hàng phụ co giãn) */}
           <View style={styles.telemetryGroup}>
             <View style={styles.telemetryChip}>
-              <BatteryCharging size={16} color="#10B981" />
+              <BatteryCharging size={14} color="#10B981" />
               <Text style={styles.telemetryValueText}>{robotState.batteryPercent}%</Text>
             </View>
 
             <View style={styles.telemetryChip}>
-              <Gauge size={16} color="#38BDF8" />
+              <Gauge size={14} color="#38BDF8" />
               <Text style={styles.telemetryValueText}>
                 {robotState.status === 'NAVIGATING' ? `${robotState.speedMps} m/s` : '0.0 m/s'}
               </Text>
             </View>
 
             <View style={styles.telemetryChip}>
-              <Compass size={16} color="#F59E0B" />
+              <Compass size={14} color="#F59E0B" />
               <Text style={styles.telemetryValueText}>{robotState.heading}°</Text>
             </View>
-
-            {/* Nút thoát về chế độ Staff */}
-            <TouchableOpacity style={styles.exitKioskBtn} onPress={onClose} activeOpacity={0.8}>
-              <X size={18} color="#FFFFFF" />
-              <Text style={styles.exitKioskText}>Về Staff App</Text>
-            </TouchableOpacity>
           </View>
         </View>
 
-        <ScrollView style={styles.scrollBody} showsVerticalScrollIndicator={false}>
+        <ScrollView style={styles.scrollBody} contentContainerStyle={{ paddingBottom: 24 }} showsVerticalScrollIndicator={false}>
           {/* ========= 2. BANNER TRẠNG THÁI & ĐÍCH ĐẾN (ETA) ========= */}
           <View
             style={[
@@ -325,6 +336,18 @@ export const RobotTouchInterfaceModal: React.FC<RobotTouchInterfaceModalProps> =
             </View>
           )}
         </ScrollView>
+
+        {/* ========= 5. BOTTOM PERSISTENT EXIT BAR ========= */}
+        <View style={styles.bottomExitBar}>
+          <TouchableOpacity
+            style={styles.bottomExitBtn}
+            onPress={onClose}
+            activeOpacity={0.85}
+          >
+            <LogOut size={20} color="#FFFFFF" />
+            <Text style={styles.bottomExitBtnText}>THOÁT MÀN HÌNH ROBOT · VỀ STAFF APP (OUT)</Text>
+          </TouchableOpacity>
+        </View>
       </View>
     </Modal>
   );
@@ -334,35 +357,46 @@ const styles = StyleSheet.create({
   kioskContainer: {
     flex: 1,
     backgroundColor: '#0F172A', // Nền tối chuyên dụng cho màn hình cảm ứng robot
-    paddingTop: 36,
+    paddingTop: 44,
   },
   hudHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingVertical: 14,
+    paddingHorizontal: 16,
+    paddingTop: 8,
+    paddingBottom: 12,
     backgroundColor: '#1E293B',
     borderBottomWidth: 1,
     borderBottomColor: '#334155',
   },
+  topBarRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
   hudLeft: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
+    gap: 10,
+    flex: 1,
+    minWidth: 0,
+  },
+  titleWrapper: {
+    flex: 1,
+    minWidth: 0,
   },
   robotAvatarBox: {
-    width: 44,
-    height: 44,
-    borderRadius: 12,
+    width: 40,
+    height: 40,
+    borderRadius: 10,
     backgroundColor: '#0F172A',
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1.5,
     borderColor: '#38BDF8',
+    flexShrink: 0,
   },
   robotTitleText: {
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: '800',
     color: '#F8FAFC',
     letterSpacing: 0.5,
@@ -372,41 +406,71 @@ const styles = StyleSheet.create({
     color: '#94A3B8',
     marginTop: 2,
   },
+  exitKioskBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 8,
+    backgroundColor: '#DC2626',
+    flexShrink: 0,
+  },
+  exitKioskText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#FFFFFF',
+  },
   telemetryGroup: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
+    gap: 8,
+    marginTop: 10,
+    flexWrap: 'wrap',
   },
   telemetryChip: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
     borderRadius: 8,
     backgroundColor: '#0F172A',
     borderWidth: 1,
     borderColor: '#334155',
   },
   telemetryValueText: {
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: '700',
     color: '#F8FAFC',
   },
-  exitKioskBtn: {
+  bottomExitBar: {
+    paddingHorizontal: 16,
+    paddingTop: 10,
+    paddingBottom: 24,
+    backgroundColor: '#1E293B',
+    borderTopWidth: 1,
+    borderTopColor: '#334155',
+  },
+  bottomExitBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 14,
-    paddingVertical: 7,
-    borderRadius: 8,
+    justifyContent: 'center',
+    gap: 10,
     backgroundColor: '#DC2626',
-    marginLeft: 8,
+    paddingVertical: 14,
+    borderRadius: 12,
+    shadowColor: '#DC2626',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.35,
+    shadowRadius: 6,
+    elevation: 4,
   },
-  exitKioskText: {
-    fontSize: 12,
-    fontWeight: '700',
+  bottomExitBtnText: {
+    fontSize: 14,
+    fontWeight: '800',
     color: '#FFFFFF',
+    letterSpacing: 0.5,
   },
   scrollBody: {
     flex: 1,

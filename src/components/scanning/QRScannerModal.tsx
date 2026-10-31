@@ -9,7 +9,7 @@ import {
   Dimensions,
   ActivityIndicator,
 } from 'react-native';
-import { X, QrCode, Check, RefreshCw, Camera, ScanLine } from 'lucide-react-native';
+import { X, QrCode, Check, RefreshCw, Camera, ScanLine, ArrowLeft, LogOut } from 'lucide-react-native';
 import { CameraView, useCameraPermissions, BarcodeScanningResult } from 'expo-camera';
 import QRCode from 'react-native-qrcode-svg';
 import { Colors, BorderRadius, Spacing } from '../../constants/theme';
@@ -157,7 +157,11 @@ export const QRScannerModal: React.FC<QRScannerModalProps> = ({
       <View style={styles.container}>
         {/* ===== HEADER ===== */}
         <View style={styles.header}>
-          <Text style={styles.headerTitle}>Xác thực mã QR vật phẩm</Text>
+          <TouchableOpacity onPress={onClose} style={styles.headerBackBtn} activeOpacity={0.7}>
+            <ArrowLeft size={16} color="#FFFFFF" />
+            <Text style={styles.headerBackText}>Thoát (Out)</Text>
+          </TouchableOpacity>
+          <Text style={styles.headerTitle} numberOfLines={1}>Xác thực mã QR</Text>
           <TouchableOpacity onPress={onClose} style={styles.closeBtn} activeOpacity={0.7}>
             <X size={20} color="#94A3B8" />
           </TouchableOpacity>
@@ -253,6 +257,36 @@ export const QRScannerModal: React.FC<QRScannerModalProps> = ({
                   <Text style={styles.scanHint}>
                     Tự động nhận diện khi mã QR nằm trong khung hình
                   </Text>
+
+                  {/* Nút thoát / bỏ qua khi không có mã QR */}
+                  <View style={styles.bottomActionsWrapper}>
+                    <TouchableOpacity
+                      style={styles.manualConfirmBtn}
+                      onPress={() => {
+                        onConfirm({
+                          code: 'Vật phẩm đã kiểm tra thủ công (Không có QR)',
+                          serialNumber: 'SN: MANUAL-' + Date.now().toString().slice(-6),
+                          quantity: '1 đơn vị',
+                        });
+                        onClose();
+                      }}
+                      activeOpacity={0.8}
+                    >
+                      <Check size={16} color="#10B981" strokeWidth={2.5} />
+                      <Text style={styles.manualConfirmBtnText}>
+                        Không có mã QR · Xác nhận thủ công
+                      </Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={styles.outBtn}
+                      onPress={onClose}
+                      activeOpacity={0.8}
+                    >
+                      <LogOut size={16} color="#EF4444" />
+                      <Text style={styles.outBtnText}>Thoát ra ngoài (Out)</Text>
+                    </TouchableOpacity>
+                  </View>
                 </View>
               ) : (
                 /* Giao diện quét thành công */
@@ -349,6 +383,15 @@ export const QRScannerModal: React.FC<QRScannerModalProps> = ({
                 activeOpacity={0.8}
               >
                 <Text style={styles.confirmBtnText}>Sử dụng mã QR này</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.outBtnSecondary}
+                onPress={onClose}
+                activeOpacity={0.8}
+              >
+                <LogOut size={15} color="#94A3B8" />
+                <Text style={styles.outBtnSecondaryText}>Thoát ra ngoài (Out)</Text>
               </TouchableOpacity>
             </View>
           )}
@@ -593,5 +636,78 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#FFFFFF',
     fontWeight: '600',
+  },
+  headerBackBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    backgroundColor: '#334155',
+  },
+  headerBackText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
+  bottomActionsWrapper: {
+    width: '100%',
+    maxWidth: 320,
+    marginTop: 20,
+    gap: 10,
+    alignItems: 'center',
+  },
+  manualConfirmBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    width: '100%',
+    height: 46,
+    borderRadius: BorderRadius.md,
+    backgroundColor: '#1E293B',
+    borderWidth: 1.5,
+    borderColor: '#059669',
+  },
+  manualConfirmBtnText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#10B981',
+  },
+  outBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    width: '100%',
+    height: 44,
+    borderRadius: BorderRadius.md,
+    backgroundColor: 'rgba(239, 68, 68, 0.15)',
+    borderWidth: 1,
+    borderColor: '#EF4444',
+  },
+  outBtnText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#EF4444',
+  },
+  outBtnSecondary: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    width: '100%',
+    maxWidth: 320,
+    height: 42,
+    borderRadius: BorderRadius.md,
+    borderWidth: 1,
+    borderColor: '#475569',
+    marginTop: 8,
+  },
+  outBtnSecondaryText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#94A3B8',
   },
 });

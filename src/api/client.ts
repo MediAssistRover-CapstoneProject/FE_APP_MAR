@@ -8,8 +8,16 @@ import { ApiError } from './types';
  */
 
 class ApiClient {
-  private baseUrl: string = API_CONFIG.BASE_URL;
+  private customBaseUrl: string | null = null;
   private token: string | null = null;
+
+  public getBaseUrl(): string {
+    return this.customBaseUrl || API_CONFIG.BASE_URL;
+  }
+
+  public setBaseUrl(url: string | null) {
+    this.customBaseUrl = url;
+  }
 
   // Cập nhật Token xác thực khi đăng nhập thành công
   public setToken(token: string | null) {
@@ -25,7 +33,8 @@ class ApiClient {
     endpoint: string,
     options: RequestInit = {}
   ): Promise<T> {
-    const url = endpoint.startsWith('http') ? endpoint : `${this.baseUrl}${endpoint}`;
+    const baseUrl = this.getBaseUrl();
+    const url = endpoint.startsWith('http') ? endpoint : `${baseUrl}${endpoint}`;
 
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',

@@ -1,10 +1,5 @@
-/**
- * API Configuration
- * Kết nối trực tiếp đến Backend MediAssistRover đã deploy
- */
-
 import Constants from 'expo-constants';
-import { Platform } from 'react-native';
+import { Platform, NativeModules } from 'react-native';
 
 /**
  * API Configuration
@@ -12,29 +7,85 @@ import { Platform } from 'react-native';
  * Swagger UI: http://localhost:8080/swagger-ui/index.html
  */
 
+// Hàm kiểm tra IP hợp lệ trong mạng LAN (loại trừ các domain tunnel của Expo/Ngrok)
+const isValidLocalIp = (host?: string): boolean => {
+  if (!host) return false;
+  const h = host.toLowerCase().trim();
+  if (
+    h.includes('expo.app') ||
+    h.includes('expo.dev') ||
+    h.includes('ngrok') ||
+    h === 'localhost' ||
+    h === '127.0.0.1'
+  ) {
+    return false;
+  }
+  // Kiểm tra chuỗi định dạng IPv4 (vd: 10.3.90.174, 192.168.1.5)
+  return /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(h);
+};
+
 // Tự động nhận diện host IP:
 // - Web / Simulator: localhost
-// - Điện thoại thật qua Expo Go: IP máy tính trong mạng Wi-Fi (lấy từ hostUri)
-const getBackendHost = (): string => {
+// - Điện thoại thật qua Expo Go: tự động trích xuất IP LAN từ Metro Bundler hoặc fallback IP Wi-Fi
+export const getBackendHost = (): string => {
   if (Platform.OS === 'web') {
     return 'localhost';
   }
-  const hostUri = Constants.expoConfig?.hostUri;
-  if (hostUri) {
-    const ip = hostUri.split(':')[0];
-    if (ip && ip.trim()) return ip;
-  }
-  // IP Wi-Fi hiện tại của máy tính
-  return '10.1.167.76';
+
+  // 1. Lấy trực tiếp từ URL nạp bundle của Metro
+  try {
+    const scriptURL: string | undefined = NativeModules?.SourceCode?.scriptURL;
+    if (scriptURL) {
+      const host = scriptURL.split('://')?.[1]?.split('/')?.[0]?.split(':')?.[0];
+      if (isValidLocalIp(host)) {
+        return host;
+      }
+    }
+  } catch {}
+
+  // 2. Lấy từ Expo Go debuggerHost
+  try {
+    const debuggerHost = (Constants as any)?.expoGoConfig?.debuggerHost;
+    if (debuggerHost) {
+      const ip = debuggerHost.split(':')[0];
+      if (isValidLocalIp(ip)) return ip;
+    }
+  } catch {}
+
+  // 3. Lấy từ hostUri
+  try {
+    const hostUri = Constants.expoConfig?.hostUri;
+    if (hostUri) {
+      const ip = hostUri.split(':')[0];
+      if (isValidLocalIp(ip)) return ip;
+    }
+  } catch {}
+
+  // 4. Lấy từ linkingUri
+  try {
+    const linking = Constants.linkingUri;
+    if (linking) {
+      const match = linking.match(/:\/\/(.[^/:]+)/);
+      if (match && isValidLocalIp(match[1])) {
+        return match[1];
+      }
+    }
+  } catch {}
+
+  // 5. IP Wi-Fi thực tế của máy tính (Dùng khi chạy Expo qua Tunnel)
+  return '10.3.90.174';
 };
 
-const BACKEND_HOST = getBackendHost();
-const BACKEND_PORT = 8080;
+export const BACKEND_PORT = 8080;
 
 export const API_CONFIG = {
   // Local Backend URL (tự động theo môi trường)
-  BASE_URL: `http://${BACKEND_HOST}:${BACKEND_PORT}/api/v1`,
-  HOST: BACKEND_HOST,
+  get BASE_URL(): string {
+    return `http://${getBackendHost()}:${BACKEND_PORT}/api/v1`;
+  },
+  get HOST(): string {
+    return getBackendHost();
+  },
   PORT: BACKEND_PORT,
   SWAGGER_URL: `http://localhost:${BACKEND_PORT}/swagger-ui/index.html`,
   

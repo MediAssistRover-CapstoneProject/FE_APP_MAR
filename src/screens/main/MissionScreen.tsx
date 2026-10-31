@@ -10,6 +10,7 @@ import {
   Platform,
   Alert,
   ActivityIndicator,
+  Modal,
 } from 'react-native';
 import { Colors, Spacing, BorderRadius, Typography, Shadows } from '../../constants/theme';
 import { StaffHeader } from '../../components/common/StaffHeader';
@@ -22,6 +23,9 @@ import {
   Check,
   ShieldAlert,
   AlertCircle,
+  MapPin,
+  CheckCircle2,
+  X,
 } from 'lucide-react-native';
 import { QRScannerModal, QRItemInfo } from '../../components/scanning/QRScannerModal';
 import { FaceScanModal } from '../../components/scanning/FaceScanModal';
@@ -69,6 +73,7 @@ export const MissionScreen: React.FC = () => {
   const [notes, setNotes] = useState('');
 
   // Modal states
+  const [showRoomModal, setShowRoomModal] = useState(false);
   const [showQRScanner, setShowQRScanner] = useState(false);
   const [showFaceScan, setShowFaceScan] = useState(false);
   const [scannedItem, setScannedItem] = useState<QRItemInfo | null>(null);
@@ -288,25 +293,32 @@ export const MissionScreen: React.FC = () => {
             </View>
           </View>
         </View>
-
-        {/* ===== TUYẾN ĐƯỜNG ===== */}
+        {/* ===== ĐIỂM GIAO ĐẾN (PHÒNG NHẬN VẬT TƯ) ===== */}
         <View style={styles.section}>
-          <Text style={styles.sectionLabel}>TUYẾN ĐƯỜNG</Text>
-          <View style={styles.twoCol}>
-            <View style={[styles.fieldGroup, { flex: 1 }]}>
-              <Text style={styles.inputLabel}>ĐIỂM ĐI</Text>
-              <TouchableOpacity style={styles.selectInput} activeOpacity={0.8}>
-                <Text style={styles.selectInputText}>{fromRoom}</Text>
-                <ChevronDown size={16} color={Colors.textSecondary} />
-              </TouchableOpacity>
-            </View>
-            <View style={[styles.fieldGroup, { flex: 1 }]}>
-              <Text style={styles.inputLabel}>ĐIỂM GIAO</Text>
-              <TouchableOpacity style={styles.selectInput} activeOpacity={0.8}>
-                <Text style={styles.selectInputText}>{toRoom}</Text>
-                <ChevronDown size={16} color={Colors.textSecondary} />
-              </TouchableOpacity>
-            </View>
+          <Text style={styles.sectionLabel}>PHÒNG ĐÍCH ĐẾN (ĐIỂM GIAO VẬT TƯ)</Text>
+          <View style={styles.fieldGroup}>
+            <Text style={styles.inputLabel}>CHỌN PHÒNG ĐẾN</Text>
+            <TouchableOpacity
+              style={styles.selectInput}
+              onPress={() => setShowRoomModal(true)}
+              activeOpacity={0.8}
+            >
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 }}>
+                <MapPin size={18} color={Colors.primary} />
+                <Text style={[styles.selectInputText, { fontSize: 15, fontWeight: '700', color: Colors.textPrimary }]}>
+                  {toRoom}
+                </Text>
+              </View>
+              <ChevronDown size={18} color={Colors.textSecondary} />
+            </TouchableOpacity>
+          </View>
+
+          {/* Badge thông báo điểm đi tự động ngầm */}
+          <View style={styles.autoOriginBadge}>
+            <CheckCircle2 size={13} color="#059669" />
+            <Text style={styles.autoOriginText}>
+              Điểm lấy hàng: Tự động xuất phát từ Quầy tiếp nhận / Kho trực
+            </Text>
           </View>
         </View>
 
@@ -560,11 +572,145 @@ export const MissionScreen: React.FC = () => {
           setShowFaceScan(false);
         }}
       />
+      {/* ===== ROOM PICKER MODAL ===== */}
+      <Modal visible={showRoomModal} transparent animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <MapPin size={20} color={Colors.primary} />
+                <Text style={styles.modalTitle}>Chọn phòng đích đến</Text>
+              </View>
+              <TouchableOpacity
+                onPress={() => setShowRoomModal(false)}
+                style={styles.modalCloseBtn}
+              >
+                <X size={18} color={Colors.textSecondary} />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView style={{ maxHeight: 360 }}>
+              {ROOMS.filter((r) => r !== 'Tiếp nhận').map((room) => {
+                const isSelected = toRoom === room;
+                return (
+                  <TouchableOpacity
+                    key={room}
+                    style={[styles.roomSelectItem, isSelected && styles.roomSelectItemActive]}
+                    onPress={() => {
+                      setToRoom(room);
+                      setShowRoomModal(false);
+                    }}
+                    activeOpacity={0.7}
+                  >
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 }}>
+                      <View style={[styles.roomSelectRadio, isSelected && styles.roomSelectRadioActive]}>
+                        {isSelected && <View style={styles.roomSelectRadioInner} />}
+                      </View>
+                      <Text style={[styles.roomSelectText, isSelected && styles.roomSelectTextActive]}>
+                        {room}
+                      </Text>
+                    </View>
+                    {isSelected && <Check size={18} color={Colors.primary} />}
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
     </KeyboardAvoidingView>
   );
 };
 
 const styles = StyleSheet.create({
+  autoOriginBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#ECFDF5',
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: 6,
+    borderRadius: BorderRadius.sm,
+    borderWidth: 1,
+    borderColor: '#A7F3D0',
+    marginTop: Spacing.xs,
+  },
+  autoOriginText: {
+    fontSize: 12,
+    color: '#065F46',
+    fontWeight: '600',
+    flex: 1,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: Spacing.lg,
+  },
+  modalContent: {
+    width: '100%',
+    backgroundColor: Colors.surface,
+    borderRadius: BorderRadius.lg,
+    padding: Spacing.md,
+    ...Shadows.floating,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: Spacing.md,
+    paddingBottom: Spacing.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+  },
+  modalTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: Colors.textPrimary,
+  },
+  modalCloseBtn: {
+    padding: 4,
+  },
+  roomSelectItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 12,
+    paddingHorizontal: Spacing.sm,
+    borderRadius: BorderRadius.md,
+    marginBottom: 4,
+  },
+  roomSelectItemActive: {
+    backgroundColor: '#F0F9FF',
+  },
+  roomSelectRadio: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    borderWidth: 1.5,
+    borderColor: Colors.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  roomSelectRadioActive: {
+    borderColor: Colors.primary,
+  },
+  roomSelectRadioInner: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: Colors.primary,
+  },
+  roomSelectText: {
+    fontSize: 14,
+    color: Colors.textPrimary,
+    fontWeight: '500',
+  },
+  roomSelectTextActive: {
+    color: Colors.primary,
+    fontWeight: '700',
+  },
   outerContainer: { flex: 1, backgroundColor: Colors.background },
   scrollContent: { paddingBottom: 32 },
   // Page Header

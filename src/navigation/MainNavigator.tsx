@@ -4,10 +4,9 @@ import { MainTabParamList } from '../types/navigation';
 import { MapScreen } from '../screens/main/MapScreen';
 import { MissionScreen } from '../screens/main/MissionScreen';
 import { AlertScreen } from '../screens/main/AlertScreen';
-import { DensityScreen } from '../screens/main/DensityScreen';
 import { IncidentScreen } from '../screens/main/IncidentScreen';
 import { Colors } from '../constants/theme';
-import { Map, Plus, Bell, Users, AlertOctagon } from 'lucide-react-native';
+import { Map, Plus, Bell, AlertOctagon } from 'lucide-react-native';
 
 const Tab = createBottomTabNavigator<MainTabParamList>();
 
@@ -60,14 +59,6 @@ export function MainNavigator() {
             fontSize: 10,
             fontWeight: '700',
           },
-        }}
-      />
-      <Tab.Screen
-        name="Profile"
-        component={DensityScreen}
-        options={{
-          tabBarLabel: 'Mật độ',
-          tabBarIcon: ({ color, size }) => <Users size={size} color={color} />,
         }}
       />
       <Tab.Screen

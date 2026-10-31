@@ -7,19 +7,7 @@ import {
   ScrollView,
   Dimensions,
 } from 'react-native';
-import {
-  LogOut,
-  Plus,
-  Minus,
-  Settings,
-  Compass,
-  Layers,
-  MapPin,
-  Bot,
-  Footprints,
-  Clock,
-  Radio,
-} from 'lucide-react-native';
+import { MapPin, Bot } from 'lucide-react-native';
 import { Colors, Spacing, BorderRadius, Shadows } from '../../constants/theme';
 import { StaffHeader } from '../../components/common/StaffHeader';
 
@@ -61,7 +49,6 @@ const ROOMS_FLOOR_2: RoomBlueprint[] = [
 
 export const DensityScreen: React.FC = () => {
   const [selectedFloor, setSelectedFloor] = useState<'Tầng 2' | 'Tầng 3' | 'Tầng 4'>('Tầng 2');
-  const [zoomLevel, setZoomLevel] = useState(1);
 
   return (
     <View style={styles.container}>
@@ -160,33 +147,6 @@ export const DensityScreen: React.FC = () => {
               <View style={styles.startTagPill}>
                 <Text style={styles.startTagText}>Bắt đầu từ đây</Text>
               </View>
-            </View>
-
-            {/* Floating Map Controls (Right side) */}
-            <View style={styles.mapControls}>
-              <TouchableOpacity
-                style={styles.controlIconBtn}
-                onPress={() => setZoomLevel((z) => Math.min(z + 0.2, 2))}
-                activeOpacity={0.75}
-              >
-                <Plus size={16} color="#0A2540" />
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.controlIconBtn}
-                onPress={() => setZoomLevel((z) => Math.max(z - 0.2, 0.6))}
-                activeOpacity={0.75}
-              >
-                <Minus size={16} color="#0A2540" />
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.controlIconBtn} activeOpacity={0.75}>
-                <Settings size={16} color="#0A2540" />
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.controlIconBtn} activeOpacity={0.75}>
-                <Layers size={16} color="#0A2540" />
-              </TouchableOpacity>
-              <TouchableOpacity style={[styles.controlIconBtn, { marginTop: 4 }]} activeOpacity={0.75}>
-                <Compass size={18} color="#0284C7" />
-              </TouchableOpacity>
             </View>
 
             {/* Legend Box (Bottom Left) */}
@@ -506,30 +466,6 @@ const styles = StyleSheet.create({
     fontSize: 8,
     fontWeight: '800',
     color: '#FFFFFF',
-  },
-
-  // Map Controls (Right floating)
-  mapControls: {
-    position: 'absolute',
-    top: 140,
-    right: 12,
-    gap: 6,
-    zIndex: 10,
-  },
-  controlIconBtn: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    backgroundColor: '#FFFFFF',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 4,
-    elevation: 3,
   },
 
   // Legend Box (Bottom Left)

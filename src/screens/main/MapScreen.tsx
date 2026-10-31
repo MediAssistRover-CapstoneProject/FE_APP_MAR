@@ -558,35 +558,6 @@ export const MapScreen: React.FC = () => {
       {/* ========= REUSABLE STAFF HEADER ========= */}
       <StaffHeader />
 
-      {/* ========= SUB HEADER ========= */}
-      <View style={styles.subHeader}>
-        <View style={styles.subHeaderLeft}>
-          <Text style={styles.digitalTwinLabel}>
-            DIGITAL TWIN · {robotData?.robotName || 'MediAssist Rover'}
-          </Text>
-          <Text style={styles.clockText}>{currentTime} · Thời gian thực</Text>
-        </View>
-        <View style={styles.subHeaderRight}>
-          <TouchableOpacity
-            style={styles.refreshBtn}
-            onPress={fetchRobot}
-            activeOpacity={0.7}
-            accessibilityLabel="Làm mới trạng thái robot"
-          >
-            {isLoadingRobot ? (
-              <ActivityIndicator size="small" color={Colors.primary} />
-            ) : (
-              <RefreshCw size={14} color={Colors.primary} />
-            )}
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.sosButton} activeOpacity={0.8}>
-            <Text style={styles.sosButtonText}>SOS</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.cameraButton} activeOpacity={0.8}>
-            <Video size={16} color={Colors.textPrimary} />
-          </TouchableOpacity>
-        </View>
-      </View>
 
       <ScrollView style={styles.mainScroll} showsVerticalScrollIndicator={false}>
         {/* ========= VIEW MODE SWITCHER & ROBOT KIOSK BUTTON ========= */}

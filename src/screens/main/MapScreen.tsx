@@ -575,8 +575,8 @@ export const MapScreen: React.FC = () => {
             onPress={() => setRobotScreenOpen(true)}
             activeOpacity={0.8}
           >
-            <Bot size={16} color="#FFFFFF" />
-            <Text style={styles.openRobotKioskText}>Màn hình Robot AMR</Text>
+            <Video size={16} color="#FFFFFF" />
+            <Text style={styles.openRobotKioskText}>Màn hình & Camera Robot</Text>
           </TouchableOpacity>
         </View>
 

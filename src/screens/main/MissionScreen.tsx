@@ -53,6 +53,20 @@ const TASK_TYPES: { id: TaskType; label: string }[] = [
   { id: 'dieu_robot_sos',      label: 'Điều robot đến SOS' },
 ];
 
+// Map tên phòng đến UUID Endpoint tương ứng trên hệ thống
+const ROOM_ENDPOINT_MAP: Record<string, string> = {
+  'Tiếp nhận': 'ee457a34-86dc-4233-8ed1-236dfd8d00ff',
+  'P. Nội TH': 'ee457a34-86dc-4233-8ed1-236dfd8d00ff',
+  'P. Tim mạch': '58a69a03-9bb5-4a55-bc2d-5f3c13a073e8',
+  'P. Xét nghiệm': 'c912e960-4889-49db-8ff5-6c7c00e1215b',
+  'P. Siêu âm': '0f25e980-8771-4fb2-a1f4-d5760ee0c3aa',
+  'Nhà thuốc': 'b102b412-4217-49a6-8977-8fa573bc87e1',
+  'P. Nhi khoa': '32e18570-5b12-4eb1-955a-e328bc639145',
+  'Kho': '77891823-1029-4ee2-bb8a-e909a3410b00',
+  'ICU': '90a12e34-1189-4cde-8012-32a10be76591',
+};
+const DEFAULT_PICKUP_ENDPOINT_ID = 'ee457a34-86dc-4233-8ed1-236dfd8d00ff';
+
 const ROOMS = [
   'Tiếp nhận', 'P. Nội TH', 'P. Tim mạch', 'P. Xét nghiệm',
   'P. Siêu âm', 'Nhà thuốc', 'P. Nhi khoa', 'Kho', 'ICU',
@@ -117,7 +131,7 @@ export const MissionScreen: React.FC = () => {
       'Xác nhận tạo nhiệm vụ giao hàng',
       `Robot sẽ được giao nhiệm vụ:\n${selectedTasks.map(
         (t) => TASK_TYPES.find((x) => x.id === t)?.label
-      ).join(', ')}\nVận chuyển: ${itemName} (SL: ${quantity})\nTừ: ${fromRoom} → ${toRoom}\nNgười nhận: ${receiver}`,
+      ).join(', ')}\nVận chuyển: ${itemName} (SL: ${quantity})\nPhòng đến: ${toRoom}\nNgười nhận: ${receiver}`,
       [
         { text: 'Hủy', style: 'cancel' },
         {
@@ -149,10 +163,10 @@ export const MissionScreen: React.FC = () => {
               const res = await deliveryApi.createDeliveryRequest({
                 mapId: '28ea152c-aeb2-4d91-ae73-9cdae9ca592f',
                 targetMode: 'ENDPOINT',
-                pickupEndpointId: 'ee457a34-86dc-4233-8ed1-236dfd8d00ff',
-                deliveryEndpointId: 'ee457a34-86dc-4233-8ed1-236dfd8d00ff',
+                pickupEndpointId: DEFAULT_PICKUP_ENDPOINT_ID,
+                deliveryEndpointId: ROOM_ENDPOINT_MAP[toRoom] || DEFAULT_PICKUP_ENDPOINT_ID,
                 recipientName: receiver || 'BS. Trần Thị Lan',
-                deliveryNote: `${selectedTasks.map((t) => TASK_TYPES.find((x) => x.id === t)?.label || t).join(', ')}: ${itemName} (SL: ${quantity}) - Tuyến: ${fromRoom} -> ${toRoom}. Ghi chú: ${notes || 'Không'}`,
+                deliveryNote: `${selectedTasks.map((t) => TASK_TYPES.find((x) => x.id === t)?.label || t).join(', ')}: ${itemName} (SL: ${quantity}) - Giao đến: ${toRoom} (Lấy hàng tại Quầy tiếp nhận). Ghi chú: ${notes || 'Không'}`,
                 requiresConfirmation: true,
                 items: [
                   {

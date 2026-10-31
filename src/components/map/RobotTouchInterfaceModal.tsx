@@ -336,19 +336,7 @@ export const RobotTouchInterfaceModal: React.FC<RobotTouchInterfaceModalProps> =
             </View>
           )}
         </ScrollView>
-
-        {/* ========= 5. BOTTOM PERSISTENT EXIT BAR ========= */}
-        <View style={styles.bottomExitBar}>
-          <TouchableOpacity
-            style={styles.bottomExitBtn}
-            onPress={onClose}
-            activeOpacity={0.85}
-          >
-            <LogOut size={20} color="#FFFFFF" />
-            <Text style={styles.bottomExitBtnText}>THOÁT MÀN HÌNH ROBOT · VỀ STAFF APP (OUT)</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
+</View>
     </Modal>
   );
 };
@@ -443,34 +431,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
     color: '#F8FAFC',
-  },
-  bottomExitBar: {
-    paddingHorizontal: 16,
-    paddingTop: 10,
-    paddingBottom: 24,
-    backgroundColor: '#1E293B',
-    borderTopWidth: 1,
-    borderTopColor: '#334155',
-  },
-  bottomExitBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 10,
-    backgroundColor: '#DC2626',
-    paddingVertical: 14,
-    borderRadius: 12,
-    shadowColor: '#DC2626',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.35,
-    shadowRadius: 6,
-    elevation: 4,
-  },
-  bottomExitBtnText: {
-    fontSize: 14,
-    fontWeight: '800',
-    color: '#FFFFFF',
-    letterSpacing: 0.5,
   },
   scrollBody: {
     flex: 1,

@@ -77,6 +77,8 @@ export const getBackendHost = (): string => {
 };
 
 export const BACKEND_PORT = 8080;
+export const ROBOT_CAMERA_PORT = 8090;
+export const AI_VISION_PORT = 8001;
 
 export const API_CONFIG = {
   // Local Backend URL (tự động theo môi trường)
@@ -88,6 +90,15 @@ export const API_CONFIG = {
   },
   PORT: BACKEND_PORT,
   SWAGGER_URL: `http://localhost:${BACKEND_PORT}/swagger-ui/index.html`,
+  get ROBOT_CAMERA_STREAM_URL(): string {
+    return `http://${getBackendHost()}:${ROBOT_CAMERA_PORT}/video`;
+  },
+  get ROBOT_CAMERA_SNAPSHOT_URL(): string {
+    return `http://${getBackendHost()}:${ROBOT_CAMERA_PORT}/snapshot`;
+  },
+  get AI_VISION_STREAM_URL(): string {
+    return `http://${getBackendHost()}:${AI_VISION_PORT}/video`;
+  },
   
   // Thời gian chờ tối đa (miligiây)
   TIMEOUT_MS: 15000,

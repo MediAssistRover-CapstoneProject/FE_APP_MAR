@@ -47,8 +47,8 @@ export const LoginScreen: React.FC = () => {
     clearError,
   } = useAuthStore();
 
-  const [username, setUsername] = useState('dieuduong01');
-  const [password, setPassword] = useState('12345678');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(true);
   const [usernameError, setUsernameError] = useState('');
@@ -102,13 +102,12 @@ export const LoginScreen: React.FC = () => {
     }
   };
 
-  const handleApplyServer = (urlToApply: string) => {
-    const cleanUrl = urlToApply.trim().replace(/\/+$/, '');
-    apiClient.setBaseUrl(cleanUrl);
-    setCurrentBaseUrl(cleanUrl);
-    setServerUrlInput(cleanUrl);
+  const handleApplyServer = () => {
+    apiClient.setBaseUrl(null);
+    setCurrentBaseUrl(REMOTE_BACKEND_URL);
+    setServerUrlInput(REMOTE_BACKEND_URL);
     setShowServerModal(false);
-    Alert.alert('Thành công', `Đã chuyển máy chủ kết nối sang:\n${cleanUrl}`);
+    Alert.alert('Thành công', `Đang sử dụng máy chủ Production:\n${REMOTE_BACKEND_URL}`);
   };
 
   const validate = (): boolean => {
@@ -376,7 +375,7 @@ export const LoginScreen: React.FC = () => {
             </View>
 
             <Text style={styles.serverModalSubtitle}>
-              Khi chuyển mạng Wi-Fi khác, bạn có thể nhập IP máy tính hoặc chọn cài đặt sẵn bên dưới:
+              Ứng dụng Staff sử dụng máy chủ MediAssistRover Production:
             </Text>
 
             {/* Input URL */}
@@ -384,10 +383,10 @@ export const LoginScreen: React.FC = () => {
               <TextInput
                 style={styles.serverTextInput}
                 value={serverUrlInput}
-                onChangeText={setServerUrlInput}
+                editable={false}
                 autoCapitalize="none"
                 autoCorrect={false}
-                placeholder="http://10.3.90.174:8080/api/v1"
+                placeholder={REMOTE_BACKEND_URL}
                 placeholderTextColor={Colors.textMuted}
               />
             </View>
@@ -458,7 +457,7 @@ export const LoginScreen: React.FC = () => {
 
               <TouchableOpacity
                 style={styles.applyBtn}
-                onPress={() => handleApplyServer(serverUrlInput)}
+                onPress={handleApplyServer}
                 activeOpacity={0.8}
               >
                 <Text style={styles.applyBtnText}>Lưu & Sử dụng</Text>

@@ -1,10 +1,11 @@
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   TouchableOpacity,
   ScrollView,
+  ActivityIndicator,
 } from 'react-native';
 import {
   LogOut,
@@ -16,77 +17,46 @@ import {
   Clock,
   ChevronRight,
   ShieldAlert,
+  RefreshCw,
 } from 'lucide-react-native';
 import { Colors, Spacing, BorderRadius, Shadows } from '../../constants/theme';
 import { StaffHeader } from '../../components/common/StaffHeader';
-
-interface IncidentItem {
-  id: string;
-  code: string;
-  title: string;
-  robot: string;
-  location: string;
-  time: string;
-  status: 'pending' | 'resolving' | 'resolved';
-  severity: 'high' | 'medium' | 'low';
-  description: string;
-}
-
-const INCIDENTS: IncidentItem[] = [
-  {
-    id: '1',
-    code: '#SC-014',
-    title: 'Cảm biến Lidar bị bụi bám / che khuất',
-    robot: 'Robot R001',
-    location: 'Khu chờ · Tầng 2',
-    time: '09:20',
-    status: 'resolving',
-    severity: 'high',
-    description: 'Tầm nhìn 360° giảm 40%. Robot tự giảm tốc độ để đảm bảo an toàn.',
-  },
-  {
-    id: '2',
-    code: '#SC-013',
-    title: 'Mất tín hiệu kết nối Wi-Fi Mesh',
-    robot: 'Robot R002',
-    location: 'Hành lang P. Xét nghiệm',
-    time: '08:45',
-    status: 'resolved',
-    severity: 'medium',
-    description: 'Chuyển đổi trạm phát AP thất bại trong 12 giây. Đã tự khôi phục.',
-  },
-  {
-    id: '3',
-    code: '#SC-012',
-    title: 'Pin dưới mức tiêu chuẩn vận hành (<15%)',
-    robot: 'Robot R003',
-    location: 'Trạm sạc tự động 1',
-    time: '07:30',
-    status: 'resolved',
-    severity: 'low',
-    description: 'Robot đã tự động quay về trạm sạc Docking Station an toàn.',
-  },
-  {
-    id: '4',
-    code: '#SC-011',
-    title: 'Kẹt cơ học bánh xe điều hướng phụ',
-    robot: 'Robot R001',
-    location: 'Dốc chuyển tầng A',
-    time: 'Hôm qua',
-    status: 'resolved',
-    severity: 'medium',
-    description: 'Vướng dây vải y tế. Đội bảo trì kỹ thuật đã xử lý xong.',
-  },
-];
+import { incidentApi } from '../../api/modules/incident.api';
+import { IncidentResponse } from '../../api/types';
 
 export const IncidentScreen: React.FC = () => {
   const [filter, setFilter] = useState<'all' | 'pending' | 'resolved'>('all');
+  const [incidents, setIncidents] = useState<IncidentResponse[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
-  const filteredIncidents = INCIDENTS.filter((item) => {
-    if (filter === 'pending') return item.status !== 'resolved';
-    if (filter === 'resolved') return item.status === 'resolved';
+  const fetchIncidents = useCallback(async () => {
+    setIsLoading(true);
+    setLoadError(null);
+    try {
+      const result = await incidentApi.getAllIncidents();
+      setIncidents(result);
+    } catch (err: any) {
+      setLoadError(err?.message || 'Không thể tải sự cố từ Backend.');
+      setIncidents([]);
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchIncidents();
+  }, [fetchIncidents]);
+
+  const filteredIncidents = useMemo(() => incidents.filter((item) => {
+    const resolved = ['RESOLVED', 'CLOSED', 'FALSE_ALARM'].includes(item.status);
+    if (filter === 'pending') return !resolved;
+    if (filter === 'resolved') return resolved;
     return true;
-  });
+  }), [filter, incidents]);
+
+  const pendingCount = incidents.filter((item) => !['RESOLVED', 'CLOSED', 'FALSE_ALARM'].includes(item.status)).length;
+  const resolvedCount = incidents.length - pendingCount;
 
   return (
     <View style={styles.container}>
@@ -101,7 +71,7 @@ export const IncidentScreen: React.FC = () => {
             <Text style={styles.pageTitle}>Quản lý sự cố Robot</Text>
             <View style={styles.incidentCountBadge}>
               <AlertOctagon size={12} color="#EF4444" />
-              <Text style={styles.incidentCountText}>1 CẦN XỬ LÝ</Text>
+              <Text style={styles.incidentCountText}>{pendingCount} CẦN XỬ LÝ</Text>
             </View>
           </View>
         </View>
@@ -109,9 +79,9 @@ export const IncidentScreen: React.FC = () => {
         {/* ===== FILTER TABS ===== */}
         <View style={styles.filterRow}>
           {[
-            { id: 'all', label: 'Tất cả (4)' },
-            { id: 'pending', label: 'Đang xử lý (1)' },
-            { id: 'resolved', label: 'Đã giải quyết (3)' },
+            { id: 'all', label: `Tất cả (${incidents.length})` },
+            { id: 'pending', label: `Đang xử lý (${pendingCount})` },
+            { id: 'resolved', label: `Đã giải quyết (${resolvedCount})` },
           ].map((tab) => (
             <TouchableOpacity
               key={tab.id}
@@ -128,13 +98,26 @@ export const IncidentScreen: React.FC = () => {
 
         {/* ===== INCIDENTS LIST ===== */}
         <View style={styles.listContainer}>
+          {isLoading && <ActivityIndicator size="small" color={Colors.primary} />}
+          {!isLoading && loadError && <Text style={styles.emptyText}>{loadError}</Text>}
+          {!isLoading && !loadError && filteredIncidents.length === 0 && (
+            <Text style={styles.emptyText}>Backend chưa có sự cố phù hợp bộ lọc.</Text>
+          )}
           {filteredIncidents.map((incident) => {
-            const isHigh = incident.severity === 'high';
-            const isResolved = incident.status === 'resolved';
+            const isHigh = incident.severity === 'CRITICAL';
+            const isResolved = ['RESOLVED', 'CLOSED', 'FALSE_ALARM'].includes(incident.status);
+            const time = incident.occurredAt
+              ? new Date(incident.occurredAt).toLocaleString('vi-VN')
+              : 'Chưa có thời gian';
+            const location = incident.endpointId
+              ? `Endpoint ${incident.endpointId.slice(0, 8)}`
+              : Number.isFinite(incident.xM) && Number.isFinite(incident.yM)
+                ? `X ${incident.xM?.toFixed(2)} · Y ${incident.yM?.toFixed(2)}`
+                : 'Chưa xác định vị trí';
 
             return (
               <View
-                key={incident.id}
+                key={incident.incidentId}
                 style={[
                   styles.incidentCard,
                   isHigh && !isResolved && styles.incidentCardHigh,
@@ -142,7 +125,7 @@ export const IncidentScreen: React.FC = () => {
               >
                 <View style={styles.incidentCardHeader}>
                   <View style={styles.codeTag}>
-                    <Text style={styles.codeTagText}>{incident.code}</Text>
+                    <Text style={styles.codeTagText}>#{incident.incidentId.slice(0, 8).toUpperCase()}</Text>
                   </View>
                   <View
                     style={[
@@ -166,26 +149,25 @@ export const IncidentScreen: React.FC = () => {
                   </View>
                 </View>
 
-                <Text style={styles.incidentTitle}>{incident.title}</Text>
+                <Text style={styles.incidentTitle}>{incident.incidentType || 'Sự cố robot'}</Text>
 
                 <View style={styles.metaRow}>
-                  <Text style={styles.metaText}>🤖 {incident.robot}</Text>
+                  <Text style={styles.metaText}>🤖 {incident.robotId ? incident.robotId.slice(0, 8) : 'N/A'}</Text>
                   <Text style={styles.metaDot}>•</Text>
-                  <Text style={styles.metaText}>📍 {incident.location}</Text>
+                  <Text style={styles.metaText}>📍 {location}</Text>
                   <Text style={styles.metaDot}>•</Text>
-                  <Text style={styles.metaText}>🕒 {incident.time}</Text>
+                  <Text style={styles.metaText}>🕒 {time}</Text>
                 </View>
 
-                <Text style={styles.incidentDesc}>{incident.description}</Text>
+                <Text style={styles.incidentDesc}>{incident.description || 'Không có mô tả.'}</Text>
               </View>
             );
           })}
         </View>
 
-        {/* ===== REPORT BUTTON ===== */}
-        <TouchableOpacity style={styles.reportBtn} activeOpacity={0.85}>
-          <Wrench size={18} color="#FFFFFF" />
-          <Text style={styles.reportBtnText}>Báo cáo sự cố kỹ thuật mới</Text>
+        <TouchableOpacity style={styles.reportBtn} activeOpacity={0.85} onPress={fetchIncidents}>
+          <RefreshCw size={18} color="#FFFFFF" />
+          <Text style={styles.reportBtnText}>Tải lại sự cố từ Backend</Text>
         </TouchableOpacity>
       </ScrollView>
     </View>
@@ -308,6 +290,12 @@ const styles = StyleSheet.create({
   listContainer: {
     gap: 12,
     marginBottom: Spacing.lg,
+  },
+  emptyText: {
+    paddingVertical: 24,
+    textAlign: 'center',
+    color: Colors.textMuted,
+    fontSize: 12,
   },
   incidentCard: {
     backgroundColor: '#FFFFFF',

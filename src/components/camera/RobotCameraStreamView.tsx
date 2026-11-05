@@ -24,7 +24,7 @@ import {
   Layers,
 } from 'lucide-react-native';
 import { cameraApi, CameraHealthResponse } from '../../api/modules/camera.api';
-import { useHospitalMapStore } from '../../store/useHospitalMapStore';
+import { RobotDto } from '../../api/types';
 import { Colors } from '../../constants/theme';
 
 const { width: SCREEN_W } = Dimensions.get('window');
@@ -34,6 +34,7 @@ interface RobotCameraStreamViewProps {
   height?: number;
   showControls?: boolean;
   onExpandPress?: () => void;
+  robot?: RobotDto | null;
 }
 
 export const RobotCameraStreamView: React.FC<RobotCameraStreamViewProps> = ({
@@ -41,8 +42,8 @@ export const RobotCameraStreamView: React.FC<RobotCameraStreamViewProps> = ({
   height = SCREEN_W * 0.62,
   showControls = true,
   onExpandPress,
+  robot,
 }) => {
-  const { robotState } = useHospitalMapStore();
   const [streamSource, setStreamSource] = useState<'robot_pi' | 'ai_vision'>('robot_pi');
   const [cameraStatus, setCameraStatus] = useState<'CONNECTING' | 'STREAMING' | 'OFFLINE'>('CONNECTING');
   const [healthInfo, setHealthInfo] = useState<CameraHealthResponse | null>(null);
@@ -192,7 +193,7 @@ export const RobotCameraStreamView: React.FC<RobotCameraStreamViewProps> = ({
               <View style={styles.fpsBadge}>
                 <Cpu size={12} color="#38BDF8" />
                 <Text style={styles.fpsText}>
-                  {healthInfo?.resolution || '640x480'} · {healthInfo?.fps || (cameraStatus === 'STREAMING' ? 24 : 0)} FPS
+                  {healthInfo?.resolution || '--'} · {healthInfo?.fps ?? 0} FPS
                 </Text>
               </View>
             </View>
@@ -201,10 +202,10 @@ export const RobotCameraStreamView: React.FC<RobotCameraStreamViewProps> = ({
             <View style={styles.bottomHudOverlay} pointerEvents="none">
               <View style={styles.hudTelemetryCol}>
                 <Text style={styles.hudTelemetryText}>
-                  NAV2: ({Math.round(robotState.x)}, {Math.round(robotState.y)}) · {robotState.heading}°
+                  ROBOT: {robot?.robotCode || 'CHƯA XÁC ĐỊNH'} · {robot?.status || 'KHÔNG CÓ DỮ LIỆU'}
                 </Text>
                 <Text style={styles.hudTelemetrySub}>
-                  PIN: {robotState.batteryPercent}% · VẬN TỐC: {robotState.status === 'NAVIGATING' ? `${robotState.speedMps} m/s` : '0.0 m/s'}
+                  PIN: {robot?.batteryPercent ?? robot?.batteryRaw ?? '--'}%
                 </Text>
               </View>
               <View style={styles.hudStatusRight}>

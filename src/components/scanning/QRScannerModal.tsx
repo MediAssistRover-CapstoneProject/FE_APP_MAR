@@ -23,6 +23,7 @@ interface QRScannerModalProps {
   onClose: () => void;
   onConfirm: (itemInfo: QRItemInfo) => void;
   jobId?: string;
+  authJobStepId?: string;
   defaultMode?: 'scan' | 'show';
 }
 
@@ -40,6 +41,7 @@ export const QRScannerModal: React.FC<QRScannerModalProps> = ({
   onClose,
   onConfirm,
   jobId,
+  authJobStepId,
   defaultMode = 'scan',
 }) => {
   const [activeTab, setActiveTab] = useState<ModalTab>(
@@ -48,11 +50,12 @@ export const QRScannerModal: React.FC<QRScannerModalProps> = ({
   const [phase, setPhase] = useState<ScanPhase>('scanning');
   const [permission, requestPermission] = useCameraPermissions();
   const [scannedData, setScannedData] = useState<QRItemInfo>({
-    code: 'Mẫu thuốc #RX-2026',
-    serialNumber: 'SN: MAR-88392',
-    quantity: '1 hộp',
+    code: '',
+    serialNumber: '',
+    quantity: '',
   });
-  const [backendQrCode, setBackendQrCode] = useState<string>('MAR-DELIVERY-VERIFY-001');
+  const [backendQrCode, setBackendQrCode] = useState<string>('');
+  const [challengeError, setChallengeError] = useState<string>('');
   const [isLoadingChallenge, setIsLoadingChallenge] = useState(false);
 
   // Đường quét laser animation
@@ -83,24 +86,22 @@ export const QRScannerModal: React.FC<QRScannerModalProps> = ({
   // Hàm sinh hoặc lấy mã QR Challenge thật từ Backend
   const fetchBackendQrChallenge = async () => {
     setIsLoadingChallenge(true);
+    setChallengeError('');
+    setBackendQrCode('');
     try {
-      if (jobId) {
-        const res = await deliveryApi.issueQrChallenge(jobId, {
-          authJobStepId: '00000000-0000-0000-0000-000000000001',
-          purpose: 'DELIVERY_RECEIVER',
-          validForSeconds: 300,
-        });
-        if (res?.proof) {
-          setBackendQrCode(res.proof);
-        }
-      } else {
-        // Mã định danh vật phẩm thật chuẩn định dạng MediAssistRover
-        const timestamp = new Date().toISOString().replace(/[-:T.Z]/g, '').slice(0, 14);
-        setBackendQrCode(`MAR:DELIVERY:UUID-BN2047:TS-${timestamp}`);
+      if (!jobId || !authJobStepId) {
+        setChallengeError('Cần Job ID và bước xác thực thật từ Backend để tạo QR challenge.');
+        return;
       }
-    } catch {
-      const fallbackCode = `MAR:CHALLENGE:STAFF-CONFIRM:${Date.now()}`;
-      setBackendQrCode(fallbackCode);
+      const res = await deliveryApi.issueQrChallenge(jobId, {
+        authJobStepId,
+        purpose: 'DELIVERY_RECEIVER',
+        validForSeconds: 300,
+      });
+      if (!res?.proof) throw new Error('Backend không trả QR proof');
+      setBackendQrCode(res.proof);
+    } catch (err: any) {
+      setChallengeError(err?.message || 'Không thể tạo QR challenge từ Backend.');
     } finally {
       setIsLoadingChallenge(false);
     }
@@ -110,7 +111,7 @@ export const QRScannerModal: React.FC<QRScannerModalProps> = ({
     if (visible && activeTab === 'show_backend_qr') {
       fetchBackendQrChallenge();
     }
-  }, [visible, activeTab]);
+  }, [visible, activeTab, jobId, authJobStepId]);
 
   const laserTranslate = laserAnim.interpolate({
     inputRange: [0, 1],
@@ -258,26 +259,8 @@ export const QRScannerModal: React.FC<QRScannerModalProps> = ({
                     Tự động nhận diện khi mã QR nằm trong khung hình
                   </Text>
 
-                  {/* Nút thoát / bỏ qua khi không có mã QR */}
+                  {/* Chỉ chấp nhận dữ liệu QR thật từ camera. */}
                   <View style={styles.bottomActionsWrapper}>
-                    <TouchableOpacity
-                      style={styles.manualConfirmBtn}
-                      onPress={() => {
-                        onConfirm({
-                          code: 'Vật phẩm đã kiểm tra thủ công (Không có QR)',
-                          serialNumber: 'SN: MANUAL-' + Date.now().toString().slice(-6),
-                          quantity: '1 đơn vị',
-                        });
-                        onClose();
-                      }}
-                      activeOpacity={0.8}
-                    >
-                      <Check size={16} color="#10B981" strokeWidth={2.5} />
-                      <Text style={styles.manualConfirmBtnText}>
-                        Không có mã QR · Xác nhận thủ công
-                      </Text>
-                    </TouchableOpacity>
-
                     <TouchableOpacity
                       style={styles.outBtn}
                       onPress={onClose}
@@ -347,19 +330,21 @@ export const QRScannerModal: React.FC<QRScannerModalProps> = ({
               <View style={styles.qrCodeBox}>
                 {isLoadingChallenge ? (
                   <ActivityIndicator size="large" color={Colors.primary} />
-                ) : (
+                ) : backendQrCode ? (
                   <QRCode
                     value={backendQrCode}
                     size={FRAME_SIZE * 0.78}
                     color="#0F172A"
                     backgroundColor="#FFFFFF"
                   />
+                ) : (
+                  <Text style={styles.challengeErrorText}>{challengeError || 'Không có QR challenge.'}</Text>
                 )}
               </View>
 
-              <Text style={styles.qrCodeTextPayload} numberOfLines={1}>
-                {backendQrCode}
-              </Text>
+              {backendQrCode ? (
+                <Text style={styles.qrCodeTextPayload} numberOfLines={1}>{backendQrCode}</Text>
+              ) : null}
 
               <TouchableOpacity
                 style={styles.refreshChallengeBtn}
@@ -381,6 +366,7 @@ export const QRScannerModal: React.FC<QRScannerModalProps> = ({
                   onClose();
                 }}
                 activeOpacity={0.8}
+                disabled={!backendQrCode}
               >
                 <Text style={styles.confirmBtnText}>Sử dụng mã QR này</Text>
               </TouchableOpacity>
@@ -674,6 +660,13 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '700',
     color: '#10B981',
+  },
+  challengeErrorText: {
+    paddingHorizontal: 16,
+    color: '#EF4444',
+    fontSize: 12,
+    fontWeight: '700',
+    textAlign: 'center',
   },
   outBtn: {
     flexDirection: 'row',

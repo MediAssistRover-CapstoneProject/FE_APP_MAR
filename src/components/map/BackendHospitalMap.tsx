@@ -12,6 +12,7 @@ import { EndpointResponse, MapResponse, ZoneDto } from '../../api/types';
 
 interface BackendHospitalMapProps {
   map: MapResponse;
+  metadata?: Record<string, any> | null;
   endpoints: EndpointResponse[];
   zones: ZoneDto[];
   token: string | null;
@@ -63,6 +64,7 @@ const readPolygon = (polygonJson: unknown): MapPoint[] => {
 
 export const BackendHospitalMap: React.FC<BackendHospitalMapProps> = ({
   map,
+  metadata,
   endpoints,
   zones,
   token,
@@ -78,14 +80,22 @@ export const BackendHospitalMap: React.FC<BackendHospitalMapProps> = ({
   }, [map.mapId, token]);
 
   const geometry = useMemo(() => {
-    const widthM = Math.max(Number(map.widthM) || 1, 0.01);
-    const heightM = Math.max(Number(map.heightM) || 1, 0.01);
-    const resolution = Math.max(Number(map.resolutionMPerPixel) || 0.05, 0.000001);
-    const pixelWidth = Math.max(1, widthM / resolution);
-    const pixelHeight = Math.max(1, heightM / resolution);
-    const originX = Number(map.originXM) || 0;
-    const originY = Number(map.originYM) || 0;
-    const yaw = Number(map.originYawRad) || 0;
+    const resolution = Math.max(
+      Number(metadata?.resolution ?? metadata?.resolution_m_per_pixel ?? map.resolutionMPerPixel) || 0.05,
+      0.000001
+    );
+    const pixelWidth = Math.max(
+      1,
+      Number(metadata?.width_px) || (Number(map.widthM) || 1) / resolution
+    );
+    const pixelHeight = Math.max(
+      1,
+      Number(metadata?.height_px) || (Number(map.heightM) || 1) / resolution
+    );
+    const origin = Array.isArray(metadata?.origin) ? metadata.origin : [];
+    const originX = Number(metadata?.origin_x_m ?? origin[0] ?? map.originXM) || 0;
+    const originY = Number(metadata?.origin_y_m ?? origin[1] ?? map.originYM) || 0;
+    const yaw = Number(metadata?.origin_yaw_rad ?? origin[2] ?? map.originYawRad) || 0;
     const cos = Math.cos(yaw);
     const sin = Math.sin(yaw);
 
@@ -101,7 +111,7 @@ export const BackendHospitalMap: React.FC<BackendHospitalMapProps> = ({
     };
 
     return { pixelWidth, pixelHeight, toPixel };
-  }, [map]);
+  }, [map, metadata]);
 
   const visibleEndpoints = useMemo(
     () =>

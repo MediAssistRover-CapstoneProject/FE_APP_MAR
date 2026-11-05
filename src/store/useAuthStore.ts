@@ -55,7 +55,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         const meRes = await authApi.getMe();
         set({ user: meRes, isLoading: false });
       } catch (profileError: any) {
-        apiClient.setToken(null);
+        apiClient.setSession(null, null);
         set({
           token: null,
           refreshToken: null,
@@ -89,7 +89,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     set({ isLoading: true, error: null });
     try {
       await authApi.changePassword({ currentPassword, newPassword });
-      apiClient.setToken(null);
+      apiClient.setSession(null, null);
       set({
         token: null,
         refreshToken: null,
@@ -108,10 +108,18 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
 
   logout: async () => {
-    const { refreshToken } = get();
+    const refreshToken = apiClient.getRefreshToken() || get().refreshToken;
     await authApi.logout(refreshToken || undefined);
     set({ token: null, refreshToken: null, user: null, mustChangePassword: false });
   },
 
   setSession: (token, user) => set({ token, user }),
 }));
+
+apiClient.setSessionListener((token, refreshToken) => {
+  useAuthStore.setState((state) => ({
+    token,
+    refreshToken,
+    user: token ? state.user : null,
+  }));
+});

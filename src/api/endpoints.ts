@@ -16,7 +16,6 @@ export const ENDPOINTS = {
   // 2. Thông tin nhân viên & Ca trực (Staff Profile & Shifts)
   STAFF: {
     ME: '/staff/me',
-    PROFILE: '/staff/profile',
     SHIFTS: '/staff/shifts',
     SHIFT_DETAIL: (shiftId: string) => `/staff/shifts/${shiftId}`,
   },
@@ -39,6 +38,7 @@ export const ENDPOINTS = {
     ZONE_DETAIL: (id: string) => `/zones/${id}`,
     MAPS: '/maps',
     MAP_DETAIL: (id: string) => `/maps/${id}`,
+    MAP_IMAGE_METADATA: (id: string) => `/maps/${id}/image-metadata`,
     ENDPOINTS: '/endpoints',
     ENDPOINT_DETAIL: (id: string) => `/endpoints/${id}`,
     ENDPOINT_GROUPS: '/endpoint-groups',
@@ -85,7 +85,6 @@ export const ENDPOINTS = {
     ACKNOWLEDGE: (id: string) => `/alerts/${id}/acknowledge`,
     RESOLVE: (id: string) => `/alerts/${id}/resolve`,
     CLOSE: (id: string) => `/alerts/${id}/close`,
-    DISMISS: (id: string) => `/alerts/${id}/dismiss`,
   },
 
   // 7. Sự cố khẩn cấp (Emergency Incidents)
@@ -101,8 +100,8 @@ export const ENDPOINTS = {
 
   // 8. Workflows
   WORKFLOWS: {
-    LIST: '/workflows',
-    DETAIL: (id: string) => `/workflows/${id}`,
+    LIST: '/workflows/published',
+    DETAIL: (id: string) => `/workflows/published/${id}`,
     STEP_TYPES: '/workflows/step-types',
   },
 

@@ -21,6 +21,16 @@ export const scheduleApi = {
     return apiClient.get<PageResponse<ScheduleResponse>>(`${ENDPOINTS.SCHEDULES.LIST}?${query}`);
   },
 
+  async getAllSchedules(status?: ScheduleQueryParams['status']): Promise<ScheduleResponse[]> {
+    const first = await this.getSchedules({ status, page: 0, size: 100 });
+    const schedules = [...(first.content || [])];
+    for (let page = 1; page < first.totalPages; page += 1) {
+      const next = await this.getSchedules({ status, page, size: 100 });
+      schedules.push(...(next.content || []));
+    }
+    return schedules;
+  },
+
   /**
    * 2. Lấy chi tiết lịch trình theo ID
    */

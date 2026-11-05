@@ -31,6 +31,16 @@ export const incidentApi = {
     );
   },
 
+  async getAllIncidents(params: Omit<IncidentQueryParams, 'page' | 'size'> = {}): Promise<IncidentResponse[]> {
+    const first = await this.getIncidents({ ...params, page: 0, size: 100 });
+    const incidents = [...(first.content || [])];
+    for (let page = 1; page < first.totalPages; page += 1) {
+      const next = await this.getIncidents({ ...params, page, size: 100 });
+      incidents.push(...(next.content || []));
+    }
+    return incidents;
+  },
+
   // 2. Chi tiết sự cố theo ID
   async getIncidentDetail(id: string): Promise<IncidentResponse> {
     return apiClient.get<IncidentResponse>(ENDPOINTS.INCIDENTS.DETAIL(id));

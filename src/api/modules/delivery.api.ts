@@ -38,6 +38,16 @@ export const deliveryApi = {
     );
   },
 
+  async getAllDeliveryRequests(status?: string): Promise<DeliveryResponse[]> {
+    const first = await this.getDeliveryRequests(0, 100, status);
+    const requests = [...(first.content || [])];
+    for (let page = 1; page < first.totalPages; page += 1) {
+      const next = await this.getDeliveryRequests(page, 100, status);
+      requests.push(...(next.content || []));
+    }
+    return requests;
+  },
+
   // 2. Chi tiết 1 yêu cầu giao hàng
   async getDeliveryRequestDetail(id: string): Promise<DeliveryResponse> {
     return apiClient.get<DeliveryResponse>(ENDPOINTS.DELIVERY.REQUEST_DETAIL(id));
@@ -107,13 +117,4 @@ export const deliveryApi = {
     return apiClient.get<AuthVerificationResponse>(`/auth-verifications/${id}`);
   },
 
-  // 10. Gửi phản hồi thực thi cho một bước trong Job (Job Step Response)
-  async respondJobStep(jobStepId: string, responsePayload: any): Promise<any> {
-    const idempotencyKey = generateUUID();
-    return apiClient.post<any>(
-      `/job-steps/${jobStepId}/responses`,
-      responsePayload,
-      { 'Idempotency-Key': idempotencyKey }
-    );
-  },
 };

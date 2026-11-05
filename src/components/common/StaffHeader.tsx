@@ -46,10 +46,8 @@ export const StaffHeader: React.FC<StaffHeaderProps> = ({
       if (res) {
         setStaffData(res);
       }
-      const shiftRes = await staffApi.getStaffShifts({ size: 10 });
-      if (shiftRes?.content) {
-        setShifts(shiftRes.content);
-      }
+      const shiftResult = await staffApi.getAllStaffShifts();
+      setShifts(shiftResult);
     } catch {
       // Giữ dữ liệu hiện tại nếu offline hoặc lỗi mạng nhẹ
     } finally {
@@ -62,12 +60,12 @@ export const StaffHeader: React.FC<StaffHeaderProps> = ({
   }, []);
 
   const displayName =
-    staffName || staffData?.account?.fullName || user?.fullName || 'Nguyễn Thành Trung';
+    staffName || staffData?.account?.fullName || user?.fullName || 'Nhân viên';
   const departmentName =
     staffData?.staffProfile?.departmentCode === 'KHO_DUOC'
       ? 'Kho Dược'
-      : (staffData?.staffProfile?.departmentCode || 'Khoa Dược');
-  const jobTitle = staffData?.staffProfile?.jobTitle || 'Nhân viên kho thuốc';
+      : (staffData?.staffProfile?.departmentCode || 'Chưa cập nhật khoa');
+  const jobTitle = staffData?.staffProfile?.jobTitle || 'Nhân viên';
   const activeShift = staffData?.activeShifts?.[0] || shifts?.[0];
 
   const handleLogout = async () => {
@@ -237,36 +235,27 @@ export const StaffHeader: React.FC<StaffHeaderProps> = ({
                               hour: '2-digit',
                               minute: '2-digit',
                             })
-                          : '07:00'}{' '}
+                          : '--:--'}{' '}
                         -{' '}
                         {activeShift.endsAt
                           ? new Date(activeShift.endsAt).toLocaleTimeString('vi-VN', {
                               hour: '2-digit',
                               minute: '2-digit',
                             })
-                          : '17:00'}
+                          : '--:--'}
                       </Text>
                     </View>
                     <Text style={styles.shiftTitle}>
-                      {activeShift.shiftName || 'Ca trực Kho Dược & Vận chuyển'}
+                      {activeShift.shiftName || 'Ca trực'}
                     </Text>
                     <Text style={styles.shiftSubtext}>
-                      Mã ca: {activeShift.shiftCode || 'CA_NGAY_01'} · Phòng:{' '}
-                      {activeShift.roomCode || 'Kho Dược F1'}
+                      Mã ca: {activeShift.shiftCode || 'Chưa cập nhật'} · Phòng:{' '}
+                      {activeShift.roomCode || 'Chưa cập nhật'}
                     </Text>
                   </View>
                 ) : (
                   <View style={styles.shiftCard}>
-                    <View style={styles.shiftCardTop}>
-                      <View style={styles.shiftBadgeActive}>
-                        <Text style={styles.shiftBadgeActiveText}>CA HÀNH CHÍNH</Text>
-                      </View>
-                      <Text style={styles.shiftTime}>07:00 - 17:00 (Hôm nay)</Text>
-                    </View>
-                    <Text style={styles.shiftTitle}>Ca tiếp nhận và cấp phát thuốc</Text>
-                    <Text style={styles.shiftSubtext}>
-                      Kho Dược bệnh viện · Phụ trách điều phối robot MAR-GAZEBO-01
-                    </Text>
+                    <Text style={styles.shiftTitle}>Backend chưa có ca trực được phân công.</Text>
                   </View>
                 )}
               </View>

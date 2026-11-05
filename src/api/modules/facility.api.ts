@@ -13,6 +13,19 @@ import {
   HospitalInformationResponse,
 } from '../types';
 
+async function getAllPages<T>(
+  fetchPage: (page: number, size: number) => Promise<PageResponse<T>>
+): Promise<T[]> {
+  const size = 100;
+  const first = await fetchPage(0, size);
+  const content = [...(first.content || [])];
+  for (let page = 1; page < first.totalPages; page += 1) {
+    const next = await fetchPage(page, size);
+    content.push(...(next.content || []));
+  }
+  return content;
+}
+
 /**
  * Facility & Operations API Module (Staff Operations)
  * Truy vấn bản đồ, tầng, phòng, zone, tọa độ điểm đến (waypoints), nhóm điểm đến và sự kiện nhiệm vụ
@@ -31,6 +44,14 @@ export const facilityApi = {
     return apiClient.get<MapResponse>(ENDPOINTS.FACILITY.MAP_DETAIL(id));
   },
 
+  async getMapImageMetadata(id: string): Promise<Record<string, any>> {
+    return apiClient.get<Record<string, any>>(ENDPOINTS.FACILITY.MAP_IMAGE_METADATA(id));
+  },
+
+  async getAllMaps(): Promise<MapResponse[]> {
+    return getAllPages((page, size) => this.getMaps(page, size));
+  },
+
   // 2. Tầng (Floors)
   async getFloors(page = 0, size = 10): Promise<PageResponse<FloorResponse>> {
     return apiClient.get<PageResponse<FloorResponse>>(
@@ -40,6 +61,10 @@ export const facilityApi = {
 
   async getFloorDetail(id: string): Promise<FloorResponse> {
     return apiClient.get<FloorResponse>(ENDPOINTS.FACILITY.FLOOR_DETAIL(id));
+  },
+
+  async getAllFloors(): Promise<FloorResponse[]> {
+    return getAllPages((page, size) => this.getFloors(page, size));
   },
 
   // 3. Phòng (Rooms)
@@ -53,6 +78,10 @@ export const facilityApi = {
     return apiClient.get<RoomDto>(ENDPOINTS.FACILITY.ROOM_DETAIL(id));
   },
 
+  async getAllRooms(): Promise<RoomDto[]> {
+    return getAllPages((page, size) => this.getRooms(page, size));
+  },
+
   // 4. Phân khu (Zones)
   async getZones(page = 0, size = 10): Promise<PageResponse<ZoneDto>> {
     return apiClient.get<PageResponse<ZoneDto>>(
@@ -64,6 +93,10 @@ export const facilityApi = {
     return apiClient.get<ZoneDto>(ENDPOINTS.FACILITY.ZONE_DETAIL(id));
   },
 
+  async getAllZones(): Promise<ZoneDto[]> {
+    return getAllPages((page, size) => this.getZones(page, size));
+  },
+
   // 5. Tọa độ điểm đến / Waypoints (Endpoints)
   async getEndpoints(page = 0, size = 10): Promise<PageResponse<EndpointResponse>> {
     return apiClient.get<PageResponse<EndpointResponse>>(
@@ -73,6 +106,10 @@ export const facilityApi = {
 
   async getEndpointDetail(id: string): Promise<EndpointResponse> {
     return apiClient.get<EndpointResponse>(ENDPOINTS.FACILITY.ENDPOINT_DETAIL(id));
+  },
+
+  async getAllEndpoints(): Promise<EndpointResponse[]> {
+    return getAllPages((page, size) => this.getEndpoints(page, size));
   },
 
   // 6. Nhóm điểm đến (Endpoint Groups)

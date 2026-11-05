@@ -47,10 +47,8 @@ export const AlertScreen: React.FC = () => {
   const fetchIncidents = React.useCallback(async () => {
     setIsLoadingIncidents(true);
     try {
-      const res = await incidentApi.getIncidents({ page: 0, size: 5 });
-      if (res?.content) {
-        setLiveIncidents(res.content);
-      }
+      const result = await incidentApi.getAllIncidents();
+      setLiveIncidents(result);
     } catch (err) {
       console.log('Error fetching live incidents:', err);
     } finally {
@@ -61,10 +59,8 @@ export const AlertScreen: React.FC = () => {
   const fetchAlerts = React.useCallback(async () => {
     setIsLoadingAlerts(true);
     try {
-      const res = await alertApi.getAlerts({ page: 0, size: 10 });
-      if (res?.content) {
-        setLiveAlerts(res.content);
-      }
+      const result = await alertApi.getAllAlerts();
+      setLiveAlerts(result);
     } catch (err) {
       console.log('Error fetching live alerts:', err);
     } finally {
@@ -232,7 +228,7 @@ export const AlertScreen: React.FC = () => {
                   </View>
                   <View style={styles.metaCol}>
                     <Text style={styles.metaLabel}>ROBOT TẠI</Text>
-                    <Text style={styles.metaVal}>MAR-GAZEBO-01</Text>
+                    <Text style={styles.metaVal}>{selectedAlert?.dataJson?.robotId || liveIncidents?.[0]?.robotId || 'Chưa xác định'}</Text>
                   </View>
                   <View style={styles.metaCol}>
                     <Text style={styles.metaLabel}>GIỜ</Text>
@@ -352,7 +348,7 @@ export const AlertScreen: React.FC = () => {
       <SOSCallModal
         visible={showSOSCall}
         alertId={selectedAlert?.alertId || liveAlerts?.[0]?.alertId}
-        robotName="Robot MAR-GAZEBO-01"
+        robotName={`Robot ${selectedAlert?.dataJson?.robotId || liveIncidents?.[0]?.robotId || 'chưa xác định'}`}
         location={
           selectedAlert?.zoneId
             ? `Zone ${selectedAlert.zoneId.substring(0, 8)}`
@@ -379,7 +375,7 @@ export const AlertScreen: React.FC = () => {
         visible={showSOSStream}
         alertId={selectedAlert?.alertId || liveAlerts?.[0]?.alertId}
         incidentId={selectedAlert?.incidentId || liveIncidents?.[0]?.incidentId}
-        robotName="Robot MAR-GAZEBO-01"
+        robotName={`Robot ${selectedAlert?.dataJson?.robotId || liveIncidents?.[0]?.robotId || 'chưa xác định'}`}
         location={
           selectedAlert?.zoneId
             ? `Zone ${selectedAlert.zoneId.substring(0, 8)}`
@@ -403,8 +399,8 @@ export const AlertScreen: React.FC = () => {
         visible={showFallDetail}
         onClose={() => setShowFallDetail(false)}
         incidentId={liveIncidents?.[0]?.incidentId}
-        location={liveIncidents?.[0]?.description || 'Khu: 3B · Hành lang Tim mạch'}
-        robotName="Robot MAR-01"
+        location={liveIncidents?.[0]?.description || 'Chưa có vị trí từ Backend'}
+        robotName={`Robot ${liveIncidents?.[0]?.robotId || 'chưa xác định'}`}
         onAcknowledge={() => {
           fetchIncidents();
         }}

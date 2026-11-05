@@ -84,6 +84,11 @@ export interface RoomDto {
   zoneId?: string;
   status?: string;
   description?: string;
+  defaultEndpointGroupId?: string | null;
+  roomType?: string;
+  departmentCode?: string;
+  active?: boolean;
+  publicVisible?: boolean;
 }
 
 export interface FloorDto {
@@ -109,8 +114,17 @@ export interface FloorResponse {
 
 export interface ZoneDto {
   zoneId: string;
+  mapId?: string;
   zoneCode: string;
   zoneName: string;
+  zoneType?: string;
+  polygonJson?: unknown;
+  speedLimitMps?: number;
+  capacityLimit?: number;
+  calibratedAreaM2?: number;
+  active?: boolean;
+  publicVisible?: boolean;
+  description?: string;
   status?: string;
 }
 
@@ -129,7 +143,7 @@ export interface MapResponse {
   frameId: string;
   mapFileUri: string;
   assetHash?: string;
-  status: 'ACTIVE' | 'INACTIVE' | 'ARCHIVED';
+  status: 'DRAFT' | 'ACTIVE' | 'INACTIVE' | 'ARCHIVED';
   commissionedAt?: string;
   createdAt?: string;
   updatedAt?: string;

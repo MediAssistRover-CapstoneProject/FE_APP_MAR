@@ -10,6 +10,7 @@ import {
   Dimensions,
   ActivityIndicator,
   Alert,
+  Platform,
 } from 'react-native';
 import { Colors, Spacing, BorderRadius, Shadows, Typography } from '../../constants/theme';
 import { StaffHeader } from '../../components/common/StaffHeader';
@@ -24,14 +25,18 @@ import {
   MapResponse,
   FloorResponse,
   EndpointResponse,
+  RoomDto,
   ScheduleResponse,
   JobResponse,
+  ZoneDto,
 } from '../../api/types';
 import { SOSCallModal } from '../../components/sos/SOSCallModal';
 import { SOSStreamModal } from '../../components/sos/SOSStreamModal';
 import { HospitalSvgMap } from '../../components/map/HospitalSvgMap';
+import { BackendHospitalMap } from '../../components/map/BackendHospitalMap';
 import { RobotTouchInterfaceModal } from '../../components/map/RobotTouchInterfaceModal';
 import { useHospitalMapStore, HospitalZone } from '../../store/useHospitalMapStore';
+import { useAuthStore } from '../../store/useAuthStore';
 import {
   LogOut,
   Settings,
@@ -58,6 +63,7 @@ import {
   Send,
   UserCheck,
   Bot,
+  X,
 } from 'lucide-react-native';
 
 const { height: SCREEN_HEIGHT } = Dimensions.get('window');
@@ -264,7 +270,14 @@ export const MapScreen: React.FC = () => {
   // Facility & Maps & Schedules state
   const [activeMap, setActiveMap] = useState<MapResponse | null>(null);
   const [activeFloor, setActiveFloor] = useState<FloorResponse | null>(null);
+  const [availableMaps, setAvailableMaps] = useState<MapResponse[]>([]);
+  const [backendFloors, setBackendFloors] = useState<FloorResponse[]>([]);
   const [endpoints, setEndpoints] = useState<EndpointResponse[]>([]);
+  const [backendZones, setBackendZones] = useState<ZoneDto[]>([]);
+  const [backendRooms, setBackendRooms] = useState<RoomDto[]>([]);
+  const [isLoadingFacility, setIsLoadingFacility] = useState(false);
+  const [facilityError, setFacilityError] = useState<string | null>(null);
+  const [showMapPicker, setShowMapPicker] = useState(false);
   const [schedules, setSchedules] = useState<ScheduleResponse[]>([]);
   const [isLoadingSchedules, setIsLoadingSchedules] = useState(false);
   const [actionScheduleId, setActionScheduleId] = useState<string | null>(null);
@@ -276,6 +289,8 @@ export const MapScreen: React.FC = () => {
   const [isDispatching, setIsDispatching] = useState(false);
   const [dispatchMode, setDispatchMode] = useState<'NAV' | 'ESCORT'>('NAV');
   const [cancellingJobId, setCancellingJobId] = useState<string | null>(null);
+  const [selectedEndpointId, setSelectedEndpointId] = useState<string | null>(null);
+  const authToken = useAuthStore((state) => state.token);
 
   // Hospital SVG Map Store (Đồng bộ 1200x680 giữa Staff App và Robot App)
   const {
@@ -292,6 +307,7 @@ export const MapScreen: React.FC = () => {
 
   const handleSelectHospitalZone = useCallback(
     (zone: HospitalZone) => {
+      setSelectedEndpointId(null);
       setSelectedHospitalZone(zone);
       selectZone(zone.id);
       setSelectedRoom({
@@ -305,6 +321,33 @@ export const MapScreen: React.FC = () => {
       setShowRoomSheet(true);
     },
     [selectZone]
+  );
+
+  const handleSelectBackendEndpoint = useCallback((endpoint: EndpointResponse) => {
+    setSelectedEndpointId(endpoint.endpointId);
+    setSelectedHospitalZone(null);
+    setSelectedRoom({
+      id: endpoint.endpointId,
+      name: endpoint.endpointName,
+      row: 0,
+      col: 0,
+      badge: endpoint.endpointCode,
+      color: '#2563EB',
+    });
+    setShowRoomSheet(true);
+  }, []);
+
+  const handleSelectBackendMap = useCallback(
+    (map: MapResponse) => {
+      setActiveMap(map);
+      setActiveFloor(backendFloors.find((floor) => floor.floorId === map.floorId) || null);
+      setSelectedEndpointId(null);
+      setSelectedHospitalZone(null);
+      setSelectedRoom(null);
+      setShowRoomSheet(false);
+      setShowMapPicker(false);
+    },
+    [backendFloors]
   );
 
   // Realtime clock
@@ -370,26 +413,56 @@ export const MapScreen: React.FC = () => {
   }, []);
 
   const fetchFacilityData = useCallback(async () => {
+    setIsLoadingFacility(true);
+    setFacilityError(null);
     try {
-      const [mapsRes, floorsRes, epRes] = await Promise.all([
-        facilityApi.getMaps(0, 5),
-        facilityApi.getFloors(0, 5),
-        facilityApi.getEndpoints(0, 50),
+      const [mapsRes, floorsRes, epRes, zonesRes, roomsRes] = await Promise.all([
+        facilityApi.getMaps(0, 100),
+        facilityApi.getFloors(0, 50),
+        facilityApi.getEndpoints(0, 100),
+        facilityApi.getZones(0, 100),
+        facilityApi.getRooms(0, 100),
       ]);
       if (mapsRes?.content && mapsRes.content.length > 0) {
-        const active = mapsRes.content.find((m) => m.status === 'ACTIVE') || mapsRes.content[0];
-        setActiveMap(active);
+        setAvailableMaps(mapsRes.content);
+        setActiveMap((current) =>
+          mapsRes.content.find((map) => map.mapId === current?.mapId) ||
+          mapsRes.content.find((map) => map.status === 'ACTIVE') ||
+          mapsRes.content[0]
+        );
+      } else {
+        setAvailableMaps([]);
+        setActiveMap(null);
       }
       if (floorsRes?.content && floorsRes.content.length > 0) {
-        setActiveFloor(floorsRes.content[0]);
+        setBackendFloors(floorsRes.content);
+      } else {
+        setBackendFloors([]);
+        setActiveFloor(null);
       }
       if (epRes?.content && epRes.content.length > 0) {
         setEndpoints(epRes.content);
+      } else {
+        setEndpoints([]);
       }
-    } catch (err) {
+      setBackendZones(zonesRes?.content || []);
+      setBackendRooms(roomsRes?.content || []);
+    } catch (err: any) {
+      setFacilityError(err?.message || 'Không thể tải dữ liệu map từ Backend');
       console.log('Error fetching facility data:', err);
+    } finally {
+      setIsLoadingFacility(false);
     }
   }, []);
+
+  useEffect(() => {
+    if (!activeMap) return;
+    setActiveFloor(
+      backendFloors.find((floor) => floor.floorId === activeMap.floorId) ||
+      backendFloors[0] ||
+      null
+    );
+  }, [activeMap, backendFloors]);
 
   const fetchSchedules = useCallback(async () => {
     setIsLoadingSchedules(true);
@@ -456,17 +529,22 @@ export const MapScreen: React.FC = () => {
     if (!selectedRoom) return;
     setIsDispatching(true);
     try {
-      // 1. Kích hoạt thuật toán di chuyển thời gian thực trên bản đồ 1200x680
+      // 1. Chỉ mô phỏng chuyển động khi đang dùng map mẫu local.
       const targetZone =
         selectedHospitalZone ||
         hospitalZones.find((z) => z.id === selectedRoom.id || z.name === selectedRoom.name) ||
         hospitalZones[0];
 
-      dispatchRobotToZone(targetZone.id);
+      if (!selectedEndpointId) {
+        dispatchRobotToZone(targetZone.id);
+      }
 
       // 2. Gửi lệnh điều phối lên Backend Railway (nếu kết nối)
       const mapId = activeMap?.mapId || 'dee53b44-a8ef-446a-947e-c42aa14ce9c2';
-      const targetEp = endpoints.find((e) => e.mapId === mapId) || endpoints[0];
+      const targetEp =
+        endpoints.find((e) => e.endpointId === selectedEndpointId) ||
+        endpoints.find((e) => e.mapId === mapId) ||
+        endpoints[0];
       const epId = targetEp?.endpointId || '74d46e9c-73f0-4b05-91b3-4adabf54bf86';
 
       if (dispatchMode === 'ESCORT') {
@@ -553,6 +631,10 @@ export const MapScreen: React.FC = () => {
     setShowConfirmModal(false);
   }, []);
 
+  const activeMapEndpoints = activeMap
+    ? endpoints.filter((endpoint) => endpoint.mapId === activeMap.mapId)
+    : endpoints;
+
   return (
     <View style={styles.container}>
       {/* ========= REUSABLE STAFF HEADER ========= */}
@@ -606,7 +688,9 @@ export const MapScreen: React.FC = () => {
                   ? 'ROBOT ĐÃ VÀO VỊ TRÍ ĐÍCH'
                   : robotState.status === 'BLOCKED'
                   ? 'ROBOT ĐANG TẠM DỪNG'
-                  : 'SƠ ĐỒ BẢN ĐỒ BỆNH VIỆN 1200x680 (0.05m/px)'}
+                  : activeMap
+                  ? `BE LIVE · ${activeMap.mapName} · ${backendRooms.length} PHÒNG · ${activeMapEndpoints.length} ĐIỂM`
+                  : 'SƠ ĐỒ MAP MẪU · BE CHƯA CÓ DỮ LIỆU'}
               </Text>
             </View>
             <Text style={styles.robotCoordLiveText}>
@@ -614,11 +698,60 @@ export const MapScreen: React.FC = () => {
             </Text>
           </View>
 
-          <HospitalSvgMap
-            interactive={true}
-            mode="staff"
-            onSelectZone={handleSelectHospitalZone}
-          />
+          {activeMap && (
+            <TouchableOpacity
+              style={styles.mapPickerTrigger}
+              onPress={() => setShowMapPicker(true)}
+              activeOpacity={0.8}
+            >
+              <View style={styles.mapPickerTriggerInfo}>
+                <Text style={styles.mapPickerTriggerLabel}>
+                  MAP TỪ BACKEND · {availableMaps.length} MAP
+                </Text>
+                <Text style={styles.mapPickerTriggerName} numberOfLines={1}>
+                  {activeMap.mapName} · {activeMap.mapCode} · v{activeMap.versionNo}
+                </Text>
+                <Text style={styles.mapPickerTriggerId} numberOfLines={1}>
+                  ID: {activeMap.mapId}
+                </Text>
+              </View>
+              <View style={styles.mapPickerChevron}>
+                <ChevronDown size={18} color="#67E8F9" />
+              </View>
+            </TouchableOpacity>
+          )}
+
+          {activeMap ? (
+            <BackendHospitalMap
+              map={activeMap}
+              endpoints={activeMapEndpoints}
+              zones={backendZones}
+              token={authToken}
+              selectedEndpointId={selectedEndpointId}
+              onSelectEndpoint={handleSelectBackendEndpoint}
+            />
+          ) : isLoadingFacility ? (
+            <View style={styles.backendMapState}>
+              <ActivityIndicator size="small" color="#67E8F9" />
+              <Text style={styles.backendMapStateText}>Đang lấy map từ Backend...</Text>
+            </View>
+          ) : (
+            <>
+              {facilityError && (
+                <View style={styles.backendMapErrorBar}>
+                  <Text style={styles.backendMapErrorText}>{facilityError} · đang dùng map mẫu</Text>
+                  <TouchableOpacity onPress={fetchFacilityData}>
+                    <RefreshCw size={15} color="#FFFFFF" />
+                  </TouchableOpacity>
+                </View>
+              )}
+              <HospitalSvgMap
+                interactive={true}
+                mode="staff"
+                onSelectZone={handleSelectHospitalZone}
+              />
+            </>
+          )}
         </View>
 
         {/* ========= TRACKING & FUNCTION DASHBOARD (Hình 5) ========= */}
@@ -1562,10 +1695,10 @@ export const MapScreen: React.FC = () => {
               {/* Waypoints List */}
               <View style={styles.locationDetailSection}>
                 <Text style={styles.locationSectionTitle}>
-                  ĐIỂM ĐÍCH / WAYPOINTS TRÊN BẢN ĐỒ {endpoints.length > 0 ? `(${endpoints.length})` : '(2)'}
+                  ĐIỂM ĐÍCH / WAYPOINTS TRÊN BẢN ĐỒ {activeMapEndpoints.length > 0 ? `(${activeMapEndpoints.length})` : '(0)'}
                 </Text>
-                {endpoints.length > 0 ? (
-                  endpoints.map((ep) => (
+                {activeMapEndpoints.length > 0 ? (
+                  activeMapEndpoints.map((ep) => (
                     <View key={ep.endpointId} style={styles.waypointItem}>
                       <MapPin size={16} color={Colors.primary} />
                       <View style={{ flex: 1, marginLeft: 8 }}>
@@ -1577,22 +1710,7 @@ export const MapScreen: React.FC = () => {
                     </View>
                   ))
                 ) : (
-                  <>
-                    <View style={styles.waypointItem}>
-                      <MapPin size={16} color={Colors.primary} />
-                      <View style={{ flex: 1, marginLeft: 8 }}>
-                        <Text style={styles.waypointName}>Gazebo Test Point (Điểm an toàn Nav2)</Text>
-                        <Text style={styles.waypointCoords}>Mã: EP_TEST_01 · X: 2.05m, Y: 1.50m (WAYPOINT)</Text>
-                      </View>
-                    </View>
-                    <View style={styles.waypointItem}>
-                      <MapPin size={16} color={Colors.primary} />
-                      <View style={{ flex: 1, marginLeft: 8 }}>
-                        <Text style={styles.waypointName}>Gazebo North 04 (Hành lang phía Bắc)</Text>
-                        <Text style={styles.waypointCoords}>Mã: EP_GAZEBO_NORTH_04 · X: 3.50m, Y: 2.12m (WAYPOINT)</Text>
-                      </View>
-                    </View>
-                  </>
+                  <Text style={styles.emptyMapDataText}>Map này chưa có waypoint trên Backend.</Text>
                 )}
               </View>
             </ScrollView>
@@ -1604,6 +1722,67 @@ export const MapScreen: React.FC = () => {
             >
               <Text style={styles.sheetCloseButtonText}>Đóng</Text>
             </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ========================================================
+          DROPDOWN CHỌN MAP TỪ BACKEND
+      ======================================================== */}
+      <Modal visible={showMapPicker} transparent animationType="fade">
+        <View style={styles.modalBackdrop}>
+          <View style={styles.mapPickerModal}>
+            <View style={styles.mapPickerModalHeader}>
+              <View>
+                <Text style={styles.sheetCategoryLabel}>BẢN ĐỒ TRÊN BACKEND</Text>
+                <Text style={styles.queueSheetTitle}>Chọn Map ID</Text>
+              </View>
+              <TouchableOpacity onPress={() => setShowMapPicker(false)}>
+                <X size={20} color={Colors.textSecondary} />
+              </TouchableOpacity>
+            </View>
+
+            <Text style={styles.mapPickerHelp}>
+              Có {availableMaps.length} map. Chọn một map để tải ảnh, zone và waypoint tương ứng.
+            </Text>
+
+            <ScrollView style={styles.mapPickerList} showsVerticalScrollIndicator={false}>
+              {availableMaps.map((map) => {
+                const selected = map.mapId === activeMap?.mapId;
+                const floor = backendFloors.find((item) => item.floorId === map.floorId);
+                return (
+                  <TouchableOpacity
+                    key={map.mapId}
+                    style={[styles.mapPickerItem, selected && styles.mapPickerItemSelected]}
+                    onPress={() => handleSelectBackendMap(map)}
+                    activeOpacity={0.75}
+                  >
+                    <View style={styles.mapPickerItemMain}>
+                      <View style={styles.mapPickerItemTitleRow}>
+                        <Text style={[styles.mapPickerItemName, selected && styles.mapPickerItemNameSelected]} numberOfLines={1}>
+                          {map.mapName}
+                        </Text>
+                        <View
+                          style={[
+                            styles.mapStatusPill,
+                            map.status === 'ACTIVE' ? styles.mapStatusPillActive : styles.mapStatusPillInactive,
+                          ]}
+                        >
+                          <Text style={styles.mapStatusPillText}>{map.status}</Text>
+                        </View>
+                      </View>
+                      <Text style={styles.mapPickerItemMeta}>
+                        {map.mapCode} · v{map.versionNo} · {floor?.floorName || map.floorId}
+                      </Text>
+                      <Text style={styles.mapPickerItemId} numberOfLines={1}>
+                        {map.mapId}
+                      </Text>
+                    </View>
+                    {selected && <Check size={20} color={Colors.primary} strokeWidth={3} />}
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
           </View>
         </View>
       </Modal>
@@ -2790,6 +2969,162 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#94A3B8',
     fontVariant: ['tabular-nums'],
+  },
+  mapPickerTrigger: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    backgroundColor: '#0F172A',
+    borderBottomWidth: 1,
+    borderBottomColor: '#334155',
+  },
+  mapPickerTriggerInfo: {
+    flex: 1,
+    minWidth: 0,
+  },
+  mapPickerTriggerLabel: {
+    color: '#67E8F9',
+    fontSize: 9,
+    fontWeight: '800',
+    letterSpacing: 0.6,
+  },
+  mapPickerTriggerName: {
+    marginTop: 2,
+    color: '#F8FAFC',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  mapPickerTriggerId: {
+    marginTop: 2,
+    color: '#94A3B8',
+    fontSize: 9,
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+  },
+  mapPickerChevron: {
+    width: 34,
+    height: 34,
+    marginLeft: 8,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#1E293B',
+  },
+  mapPickerModal: {
+    width: '92%',
+    maxWidth: 520,
+    maxHeight: SCREEN_HEIGHT * 0.78,
+    borderRadius: 18,
+    padding: 16,
+    backgroundColor: '#FFFFFF',
+  },
+  mapPickerModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  mapPickerHelp: {
+    marginTop: 8,
+    marginBottom: 12,
+    color: Colors.textSecondary,
+    fontSize: 12,
+    lineHeight: 17,
+  },
+  mapPickerList: {
+    flexGrow: 0,
+  },
+  mapPickerItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 8,
+    padding: 12,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: '#E2E8F0',
+    backgroundColor: '#F8FAFC',
+  },
+  mapPickerItemSelected: {
+    borderColor: Colors.primary,
+    backgroundColor: '#EFF6FF',
+  },
+  mapPickerItemMain: {
+    flex: 1,
+    minWidth: 0,
+  },
+  mapPickerItemTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  mapPickerItemName: {
+    flex: 1,
+    color: Colors.textPrimary,
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  mapPickerItemNameSelected: {
+    color: Colors.primary,
+  },
+  mapPickerItemMeta: {
+    marginTop: 4,
+    color: Colors.textSecondary,
+    fontSize: 10,
+  },
+  mapPickerItemId: {
+    marginTop: 3,
+    color: Colors.textMuted,
+    fontSize: 9,
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+  },
+  mapStatusPill: {
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+    borderRadius: 6,
+  },
+  mapStatusPillActive: {
+    backgroundColor: '#DCFCE7',
+  },
+  mapStatusPillInactive: {
+    backgroundColor: '#E2E8F0',
+  },
+  mapStatusPillText: {
+    color: '#334155',
+    fontSize: 8,
+    fontWeight: '800',
+  },
+  emptyMapDataText: {
+    paddingVertical: 12,
+    color: Colors.textMuted,
+    fontSize: 12,
+    textAlign: 'center',
+  },
+  backendMapState: {
+    minHeight: 240,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#0F172A',
+  },
+  backendMapStateText: {
+    color: '#CBD5E1',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  backendMapErrorBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    backgroundColor: '#B45309',
+  },
+  backendMapErrorText: {
+    flex: 1,
+    color: '#FFFFFF',
+    fontSize: 10,
+    fontWeight: '700',
   },
   zoneDetailsBox: {
     backgroundColor: '#F8FAFC',

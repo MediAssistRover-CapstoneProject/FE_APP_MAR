@@ -3,9 +3,12 @@ import { Platform, NativeModules } from 'react-native';
 
 /**
  * API Configuration
- * Kết nối trực tiếp đến Backend Local chạy qua Docker / Spring Boot trên máy (port 8080)
- * Swagger UI: http://localhost:8080/swagger-ui/index.html
+ * Backend production được truy cập qua DuckDNS, không phụ thuộc vào BE local.
+ * Swagger UI: https://mediassistrover.duckdns.org/swagger-ui/index.html
  */
+
+export const REMOTE_BACKEND_URL = 'https://mediassistrover.duckdns.org/api/v1';
+export const REMOTE_BACKEND_HOST = 'mediassistrover.duckdns.org';
 
 // Hàm kiểm tra IP hợp lệ trong mạng LAN (loại trừ các domain tunnel của Expo/Ngrok)
 const isValidLocalIp = (host?: string): boolean => {
@@ -81,15 +84,15 @@ export const ROBOT_CAMERA_PORT = 8090;
 export const AI_VISION_PORT = 8001;
 
 export const API_CONFIG = {
-  // Local Backend URL (tự động theo môi trường)
+  // Backend production cố định; không gọi Spring Boot local qua localhost/LAN.
   get BASE_URL(): string {
-    return `http://${getBackendHost()}:${BACKEND_PORT}/api/v1`;
+    return REMOTE_BACKEND_URL;
   },
   get HOST(): string {
-    return getBackendHost();
+    return REMOTE_BACKEND_HOST;
   },
-  PORT: BACKEND_PORT,
-  SWAGGER_URL: `http://localhost:${BACKEND_PORT}/swagger-ui/index.html`,
+  PORT: 443,
+  SWAGGER_URL: 'https://mediassistrover.duckdns.org/swagger-ui/index.html',
   get ROBOT_CAMERA_STREAM_URL(): string {
     return `http://${getBackendHost()}:${ROBOT_CAMERA_PORT}/video`;
   },

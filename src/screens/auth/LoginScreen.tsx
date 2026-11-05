@@ -30,14 +30,22 @@ import {
   X,
 } from 'lucide-react-native';
 import { useAuthStore } from '../../store/useAuthStore';
-import { API_CONFIG } from '../../api/config';
+import { API_CONFIG, REMOTE_BACKEND_URL } from '../../api/config';
 import { apiClient } from '../../api/client';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList, 'Login'>;
 
 export const LoginScreen: React.FC = () => {
   const navigation = useNavigation<NavigationProp>();
-  const { login, isLoading, error, clearError } = useAuthStore();
+  const {
+    login,
+    logout,
+    changePassword,
+    mustChangePassword,
+    isLoading,
+    error,
+    clearError,
+  } = useAuthStore();
 
   const [username, setUsername] = useState('dieuduong01');
   const [password, setPassword] = useState('12345678');
@@ -52,22 +60,16 @@ export const LoginScreen: React.FC = () => {
   const [currentBaseUrl, setCurrentBaseUrl] = useState(apiClient.getBaseUrl());
   const [isTesting, setIsTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ success: boolean; msg: string } | null>(null);
+  const [showPasswordChangeModal, setShowPasswordChangeModal] = useState(false);
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmNewPassword, setConfirmNewPassword] = useState('');
+  const [passwordChangeError, setPasswordChangeError] = useState('');
 
   const SERVER_PRESETS = [
     {
-      label: 'Wi-Fi Máy tính (Khuyên dùng)',
-      url: 'http://10.3.90.174:8080/api/v1',
-      desc: 'Local Docker trên máy cùng mạng Wi-Fi',
-    },
-    {
-      label: 'Localhost (Simulator/Web)',
-      url: 'http://localhost:8080/api/v1',
-      desc: 'Dành cho máy ảo hoặc trình duyệt Web',
-    },
-    {
-      label: 'Railway Cloud (Production)',
-      url: 'https://bemar-production.up.railway.app/api/v1',
-      desc: 'Máy chủ Cloud đã deploy trên Railway',
+      label: 'MediAssistRover (Production)',
+      url: REMOTE_BACKEND_URL,
+      desc: 'Backend DuckDNS dùng cho ứng dụng',
     },
   ];
 
@@ -137,8 +139,49 @@ export const LoginScreen: React.FC = () => {
 
     const success = await login(username, password);
     if (success) {
+      if (useAuthStore.getState().mustChangePassword) {
+        setPasswordChangeError('');
+        setNewPassword('');
+        setConfirmNewPassword('');
+        setShowPasswordChangeModal(true);
+      } else {
+        navigation.replace('MainTabs', { screen: 'Home' });
+      }
+    }
+  };
+
+  const handleRequiredPasswordChange = async () => {
+    setPasswordChangeError('');
+    if (newPassword.length < 8) {
+      setPasswordChangeError('Mật khẩu mới phải có ít nhất 8 ký tự.');
+      return;
+    }
+    if (newPassword !== confirmNewPassword) {
+      setPasswordChangeError('Hai lần nhập mật khẩu mới không khớp.');
+      return;
+    }
+    if (newPassword === password) {
+      setPasswordChangeError('Mật khẩu mới phải khác mật khẩu tạm thời.');
+      return;
+    }
+
+    const changed = await changePassword(password, newPassword);
+    if (!changed) return;
+
+    const loggedIn = await login(username, newPassword);
+    if (loggedIn && !useAuthStore.getState().mustChangePassword) {
+      setShowPasswordChangeModal(false);
+      setPassword(newPassword);
       navigation.replace('MainTabs', { screen: 'Home' });
     }
+  };
+
+  const handleCancelPasswordChange = async () => {
+    await logout();
+    setShowPasswordChangeModal(false);
+    setNewPassword('');
+    setConfirmNewPassword('');
+    setPasswordChangeError('');
   };
 
   const handleForgotPassword = () => {
@@ -424,6 +467,79 @@ export const LoginScreen: React.FC = () => {
           </View>
         </View>
       </Modal>
+
+      <Modal
+        visible={showPasswordChangeModal && mustChangePassword}
+        transparent
+        animationType="fade"
+        onRequestClose={handleCancelPasswordChange}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.passwordChangeModal}>
+            <View style={styles.passwordChangeIcon}>
+              <ShieldCheck size={28} color="#FFFFFF" />
+            </View>
+            <Text style={styles.passwordChangeTitle}>Đổi mật khẩu lần đầu</Text>
+            <Text style={styles.passwordChangeSubtitle}>
+              Tài khoản đang dùng mật khẩu tạm thời. Bạn phải đổi mật khẩu trước khi truy cập dữ liệu bệnh viện và bản đồ.
+            </Text>
+
+            {passwordChangeError ? (
+              <View style={styles.errorAlertBox}>
+                <AlertCircle size={16} color="#DC2626" />
+                <Text style={styles.errorAlertText}>{passwordChangeError}</Text>
+              </View>
+            ) : null}
+
+            <Text style={styles.inputLabel}>Mật khẩu mới</Text>
+            <View style={styles.inputWrapper}>
+              <TextInput
+                style={styles.textInput}
+                value={newPassword}
+                onChangeText={setNewPassword}
+                secureTextEntry
+                autoCapitalize="none"
+                placeholder="Tối thiểu 8 ký tự"
+                placeholderTextColor={Colors.textMuted}
+              />
+            </View>
+
+            <Text style={[styles.inputLabel, { marginTop: 12 }]}>Nhập lại mật khẩu mới</Text>
+            <View style={styles.inputWrapper}>
+              <TextInput
+                style={styles.textInput}
+                value={confirmNewPassword}
+                onChangeText={setConfirmNewPassword}
+                secureTextEntry
+                autoCapitalize="none"
+                placeholder="Nhập lại mật khẩu mới"
+                placeholderTextColor={Colors.textMuted}
+              />
+            </View>
+
+            <View style={styles.passwordChangeActions}>
+              <TouchableOpacity
+                style={styles.passwordChangeCancelBtn}
+                onPress={handleCancelPasswordChange}
+                disabled={isLoading}
+              >
+                <Text style={styles.passwordChangeCancelText}>Đăng xuất</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.passwordChangeSubmitBtn}
+                onPress={handleRequiredPasswordChange}
+                disabled={isLoading}
+              >
+                {isLoading ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <Text style={styles.passwordChangeSubmitText}>Đổi và tiếp tục</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </KeyboardAvoidingView>
   );
 };
@@ -432,6 +548,68 @@ const styles = StyleSheet.create({
   keyboardView: {
     flex: 1,
     backgroundColor: '#F8FAFC',
+  },
+  passwordChangeModal: {
+    width: '90%',
+    maxWidth: 420,
+    borderRadius: 20,
+    padding: 22,
+    backgroundColor: '#FFFFFF',
+  },
+  passwordChangeIcon: {
+    alignSelf: 'center',
+    width: 54,
+    height: 54,
+    borderRadius: 27,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 12,
+    backgroundColor: Colors.primary,
+  },
+  passwordChangeTitle: {
+    textAlign: 'center',
+    fontSize: 20,
+    fontWeight: '800',
+    color: Colors.textPrimary,
+  },
+  passwordChangeSubtitle: {
+    marginTop: 8,
+    marginBottom: 18,
+    textAlign: 'center',
+    fontSize: 13,
+    lineHeight: 19,
+    color: Colors.textSecondary,
+  },
+  passwordChangeActions: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 20,
+  },
+  passwordChangeCancelBtn: {
+    flex: 1,
+    minHeight: 46,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#F1F5F9',
+  },
+  passwordChangeCancelText: {
+    color: Colors.textSecondary,
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  passwordChangeSubmitBtn: {
+    flex: 1.5,
+    minHeight: 46,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.primary,
+  },
+  passwordChangeSubmitText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '800',
   },
   scrollContent: {
     paddingHorizontal: Spacing.lg,

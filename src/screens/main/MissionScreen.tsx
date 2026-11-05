@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import {
   View,
   Text,
@@ -15,6 +15,8 @@ import {
 import { Colors, Spacing, BorderRadius, Typography, Shadows } from '../../constants/theme';
 import { StaffHeader } from '../../components/common/StaffHeader';
 import { deliveryApi } from '../../api/modules/delivery.api';
+import { facilityApi } from '../../api/modules/facility.api';
+import { EndpointResponse, MapResponse, RoomDto } from '../../api/types';
 import {
   ScanLine,
   Camera,
@@ -53,34 +55,19 @@ const TASK_TYPES: { id: TaskType; label: string }[] = [
   { id: 'dieu_robot_sos',      label: 'Điều robot đến SOS' },
 ];
 
-// Map tên phòng đến UUID Endpoint tương ứng trên hệ thống
-const ROOM_ENDPOINT_MAP: Record<string, string> = {
-  'Tiếp nhận': 'ee457a34-86dc-4233-8ed1-236dfd8d00ff',
-  'P. Nội TH': 'ee457a34-86dc-4233-8ed1-236dfd8d00ff',
-  'P. Tim mạch': '58a69a03-9bb5-4a55-bc2d-5f3c13a073e8',
-  'P. Xét nghiệm': 'c912e960-4889-49db-8ff5-6c7c00e1215b',
-  'P. Siêu âm': '0f25e980-8771-4fb2-a1f4-d5760ee0c3aa',
-  'Nhà thuốc': 'b102b412-4217-49a6-8977-8fa573bc87e1',
-  'P. Nhi khoa': '32e18570-5b12-4eb1-955a-e328bc639145',
-  'Kho': '77891823-1029-4ee2-bb8a-e909a3410b00',
-  'ICU': '90a12e34-1189-4cde-8012-32a10be76591',
-};
-const DEFAULT_PICKUP_ENDPOINT_ID = 'ee457a34-86dc-4233-8ed1-236dfd8d00ff';
-
-const ROOMS = [
-  'Tiếp nhận', 'P. Nội TH', 'P. Tim mạch', 'P. Xét nghiệm',
-  'P. Siêu âm', 'Nhà thuốc', 'P. Nhi khoa', 'Kho', 'ICU',
-];
-
 export const MissionScreen: React.FC = () => {
   // ===== State =====
   const [selectedTasks, setSelectedTasks] = useState<TaskType[]>(['van_chuyen_tai_lieu']);
-  const [itemName, setItemName] = useState('Hồ sơ bệnh án #BN2047');
+  const [itemName, setItemName] = useState('');
   const [quantity, setQuantity] = useState('1');
-  const [fromRoom] = useState('Tiếp nhận');
-  const [toRoom, setToRoom] = useState('P. Nội TH');
-  const [sender, setSender] = useState('KTV. Nguyễn Minh Tuấn');
-  const [receiver, setReceiver] = useState('BS. Trần Thị Lan');
+  const [activeMap, setActiveMap] = useState<MapResponse | null>(null);
+  const [availableEndpoints, setAvailableEndpoints] = useState<EndpointResponse[]>([]);
+  const [rooms, setRooms] = useState<RoomDto[]>([]);
+  const [pickupEndpoint, setPickupEndpoint] = useState<EndpointResponse | null>(null);
+  const [deliveryEndpoint, setDeliveryEndpoint] = useState<EndpointResponse | null>(null);
+  const [isLoadingFacility, setIsLoadingFacility] = useState(false);
+  const [sender, setSender] = useState('');
+  const [receiver, setReceiver] = useState('');
   const [securityLevel, setSecurityLevel] = useState<SecurityLevel>('qr');
   const [priority, setPriority] = useState<PriorityLevel>('high');
   const [deadline, setDeadline] = useState('');
@@ -92,6 +79,43 @@ export const MissionScreen: React.FC = () => {
   const [showFaceScan, setShowFaceScan] = useState(false);
   const [scannedItem, setScannedItem] = useState<QRItemInfo | null>(null);
   const [faceVerified, setFaceVerified] = useState(false);
+
+  const fromRoom = pickupEndpoint?.endpointName || 'Chưa có điểm lấy hàng';
+  const toRoom = deliveryEndpoint?.endpointName || 'Chọn điểm giao từ Backend';
+
+  useEffect(() => {
+    let mounted = true;
+    const loadFacility = async () => {
+      setIsLoadingFacility(true);
+      try {
+        const [maps, endpoints, roomList] = await Promise.all([
+          facilityApi.getAllMaps(),
+          facilityApi.getAllEndpoints(),
+          facilityApi.getAllRooms(),
+        ]);
+        if (!mounted) return;
+        const map = maps.find((item) => item.status === 'ACTIVE') || maps[0] || null;
+        const mapEndpoints = map
+          ? endpoints.filter((endpoint) => endpoint.mapId === map.mapId && endpoint.active !== false)
+          : [];
+        setActiveMap(map);
+        setAvailableEndpoints(mapEndpoints);
+        setRooms(roomList);
+        setPickupEndpoint(mapEndpoints[0] || null);
+        setDeliveryEndpoint(mapEndpoints[1] || mapEndpoints[0] || null);
+      } catch (err: any) {
+        if (mounted) {
+          Alert.alert('Không tải được danh mục', err?.message || 'Không thể lấy map và điểm đến từ Backend.');
+        }
+      } finally {
+        if (mounted) setIsLoadingFacility(false);
+      }
+    };
+    loadFacility();
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   // Danh mục y tế đặc biệt bắt buộc có bảo mật (Thuốc, Máu, Vật tư y tế)
   const isHighSecurityItem = selectedTasks.some((t) =>
@@ -118,6 +142,14 @@ export const MissionScreen: React.FC = () => {
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const handleSubmit = useCallback(async () => {
+    if (!activeMap || !pickupEndpoint || !deliveryEndpoint) {
+      Alert.alert('Thiếu dữ liệu Backend', 'Map hoặc điểm lấy/giao hàng chưa tồn tại trên máy chủ.');
+      return;
+    }
+    if (!itemName.trim() || !receiver.trim()) {
+      Alert.alert('Thiếu thông tin', 'Vui lòng nhập tên vật phẩm và người nhận.');
+      return;
+    }
     // ⚠️ Validate bảo mật y tế: Thuốc, Máu, Vật tư bắt buộc phải có QR hoặc Face ID
     if (isHighSecurityItem && securityLevel === 'none') {
       Alert.alert(
@@ -143,35 +175,36 @@ export const MissionScreen: React.FC = () => {
               // Phân loại vật phẩm dựa trên loại nhiệm vụ được chọn
               let itemCategory = 'DOCUMENT';
               let unit = 'Bộ';
-              let itemCode = 'DOC-BN2047';
+              let itemCodePrefix = 'DOC';
 
               if (selectedTasks.includes('van_chuyen_thuoc')) {
                 itemCategory = 'MEDICATION';
                 unit = 'Hộp';
-                itemCode = 'MED-001';
+                itemCodePrefix = 'MED';
               } else if (selectedTasks.includes('van_chuyen_mau')) {
                 itemCategory = 'LAB_SAMPLE';
                 unit = 'Ống nghiệm';
-                itemCode = 'LAB-SAM-001';
+                itemCodePrefix = 'LAB';
               } else if (selectedTasks.includes('van_chuyen_vat_tu')) {
                 itemCategory = 'SUPPLIES';
                 unit = 'Gói';
-                itemCode = 'SUP-001';
+                itemCodePrefix = 'SUP';
               }
+              const itemCode = `${itemCodePrefix}-${Date.now()}`;
 
               // Gọi API Staff Delivery thật lên server với đầy đủ các trường bắt buộc
               const res = await deliveryApi.createDeliveryRequest({
-                mapId: '28ea152c-aeb2-4d91-ae73-9cdae9ca592f',
+                mapId: activeMap.mapId,
                 targetMode: 'ENDPOINT',
-                pickupEndpointId: DEFAULT_PICKUP_ENDPOINT_ID,
-                deliveryEndpointId: ROOM_ENDPOINT_MAP[toRoom] || DEFAULT_PICKUP_ENDPOINT_ID,
-                recipientName: receiver || 'BS. Trần Thị Lan',
+                pickupEndpointId: pickupEndpoint.endpointId,
+                deliveryEndpointId: deliveryEndpoint.endpointId,
+                recipientName: receiver.trim(),
                 deliveryNote: `${selectedTasks.map((t) => TASK_TYPES.find((x) => x.id === t)?.label || t).join(', ')}: ${itemName} (SL: ${quantity}) - Giao đến: ${toRoom} (Lấy hàng tại Quầy tiếp nhận). Ghi chú: ${notes || 'Không'}`,
                 requiresConfirmation: true,
                 items: [
                   {
                     itemCode,
-                    itemName: itemName.trim() || 'Hồ sơ bệnh án #BN2047',
+                    itemName: itemName.trim(),
                     itemCategory,
                     unit,
                     quantity: parseInt(quantity, 10) || 1,
@@ -197,7 +230,7 @@ export const MissionScreen: React.FC = () => {
         },
       ]
     );
-  }, [selectedTasks, itemName, quantity, fromRoom, toRoom, receiver, notes, securityLevel]);
+  }, [activeMap, pickupEndpoint, deliveryEndpoint, selectedTasks, itemName, quantity, fromRoom, toRoom, receiver, notes, securityLevel]);
 
   return (
     <KeyboardAvoidingView
@@ -604,14 +637,19 @@ export const MissionScreen: React.FC = () => {
             </View>
 
             <ScrollView style={{ maxHeight: 360 }}>
-              {ROOMS.filter((r) => r !== 'Tiếp nhận').map((room) => {
-                const isSelected = toRoom === room;
+              {isLoadingFacility ? (
+                <ActivityIndicator size="small" color={Colors.primary} style={{ marginVertical: 20 }} />
+              ) : availableEndpoints.length === 0 ? (
+                <Text style={styles.emptyFacilityText}>Backend chưa có endpoint cho map đang hoạt động.</Text>
+              ) : availableEndpoints.map((endpoint) => {
+                const isSelected = deliveryEndpoint?.endpointId === endpoint.endpointId;
+                const room = rooms.find((item) => item.roomId === endpoint.roomId);
                 return (
                   <TouchableOpacity
-                    key={room}
+                    key={endpoint.endpointId}
                     style={[styles.roomSelectItem, isSelected && styles.roomSelectItemActive]}
                     onPress={() => {
-                      setToRoom(room);
+                      setDeliveryEndpoint(endpoint);
                       setShowRoomModal(false);
                     }}
                     activeOpacity={0.7}
@@ -620,9 +658,14 @@ export const MissionScreen: React.FC = () => {
                       <View style={[styles.roomSelectRadio, isSelected && styles.roomSelectRadioActive]}>
                         {isSelected && <View style={styles.roomSelectRadioInner} />}
                       </View>
-                      <Text style={[styles.roomSelectText, isSelected && styles.roomSelectTextActive]}>
-                        {room}
-                      </Text>
+                      <View style={{ flex: 1 }}>
+                        <Text style={[styles.roomSelectText, isSelected && styles.roomSelectTextActive]}>
+                          {endpoint.endpointName}
+                        </Text>
+                        <Text style={styles.roomSelectSubText}>
+                          {endpoint.endpointCode} · {room?.roomName || endpoint.endpointType}
+                        </Text>
+                      </View>
                     </View>
                     {isSelected && <Check size={18} color={Colors.primary} />}
                   </TouchableOpacity>
@@ -720,6 +763,17 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: Colors.textPrimary,
     fontWeight: '500',
+  },
+  roomSelectSubText: {
+    marginTop: 2,
+    fontSize: 10,
+    color: Colors.textMuted,
+  },
+  emptyFacilityText: {
+    paddingVertical: 24,
+    textAlign: 'center',
+    color: Colors.textMuted,
+    fontSize: 12,
   },
   roomSelectTextActive: {
     color: Colors.primary,

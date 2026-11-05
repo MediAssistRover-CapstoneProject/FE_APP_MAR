@@ -91,6 +91,16 @@ export const dispatchApi = {
     return apiClient.get<PageResponse<JobResponse>>(`${ENDPOINTS.JOBS.LIST}?${query}`);
   },
 
+  async getAllJobs(params?: Omit<JobQueryParams, 'page' | 'size'>): Promise<JobResponse[]> {
+    const first = await this.getJobs({ ...params, page: 0, size: 100 });
+    const jobs = [...(first.content || [])];
+    for (let page = 1; page < first.totalPages; page += 1) {
+      const next = await this.getJobs({ ...params, page, size: 100 });
+      jobs.push(...(next.content || []));
+    }
+    return jobs;
+  },
+
   /**
    * 6. Chi tiết 1 nhiệm vụ
    * Endpoint: GET /api/v1/jobs/{id}

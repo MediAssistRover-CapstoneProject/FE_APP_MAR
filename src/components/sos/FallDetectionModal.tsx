@@ -107,8 +107,8 @@ export const FallDetectionModal: React.FC<FallDetectionModalProps> = ({
   onClose,
   onAcknowledge,
   incidentId,
-  location = 'Khu: 3B · Hành lang Tim mạch',
-  robotName = 'Robot MAR-01',
+  location = 'Chưa có vị trí từ Backend',
+  robotName = 'Robot chưa xác định',
 }) => {
   const { user } = useAuthStore();
   const [seconds, setSeconds] = useState(14);
@@ -212,7 +212,7 @@ export const FallDetectionModal: React.FC<FallDetectionModalProps> = ({
 
           <View style={styles.headerCenter}>
             <Text style={styles.brandText}>MEDIASSISTROVER · STAFF</Text>
-            <Text style={styles.staffName}>{user?.fullName || 'Nguyễn Thành Trung'}</Text>
+            <Text style={styles.staffName}>{user?.fullName || 'Nhân viên'}</Text>
           </View>
 
           <TouchableOpacity onPress={onClose} style={styles.closeBtn} activeOpacity={0.7}>

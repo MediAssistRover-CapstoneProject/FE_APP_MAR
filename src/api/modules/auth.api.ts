@@ -17,7 +17,7 @@ export const authApi = {
     });
 
     if (res?.accessToken) {
-      apiClient.setToken(res.accessToken);
+      apiClient.setSession(res.accessToken, res.refreshToken);
     }
     return res;
   },
@@ -39,7 +39,7 @@ export const authApi = {
       deviceInfo: 'StaffApp-Mobile',
     });
     if (res?.accessToken) {
-      apiClient.setToken(res.accessToken);
+      apiClient.setSession(res.accessToken, res.refreshToken);
     }
     return res;
   },
@@ -53,7 +53,7 @@ export const authApi = {
     } catch {
       // Ignored on logout
     } finally {
-      apiClient.setToken(null);
+      apiClient.setSession(null, null);
     }
   },
 };

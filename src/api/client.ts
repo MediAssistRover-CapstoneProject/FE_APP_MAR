@@ -10,6 +10,9 @@ import { ApiError } from './types';
 class ApiClient {
   private customBaseUrl: string | null = null;
   private token: string | null = null;
+  private refreshToken: string | null = null;
+  private refreshPromise: Promise<boolean> | null = null;
+  private sessionListener: ((accessToken: string | null, refreshToken: string | null) => void) | null = null;
 
   public getBaseUrl(): string {
     return this.customBaseUrl || API_CONFIG.BASE_URL;
@@ -24,14 +27,35 @@ class ApiClient {
     this.token = token;
   }
 
+  public setRefreshToken(refreshToken: string | null) {
+    this.refreshToken = refreshToken;
+  }
+
+  public setSession(accessToken: string | null, refreshToken: string | null) {
+    this.token = accessToken;
+    this.refreshToken = refreshToken;
+    this.sessionListener?.(accessToken, refreshToken);
+  }
+
+  public setSessionListener(
+    listener: ((accessToken: string | null, refreshToken: string | null) => void) | null
+  ) {
+    this.sessionListener = listener;
+  }
+
   public getToken(): string | null {
     return this.token;
+  }
+
+  public getRefreshToken(): string | null {
+    return this.refreshToken;
   }
 
   // Hàm gọi HTTP cốt lõi với Timeout
   public async request<T>(
     endpoint: string,
-    options: RequestInit = {}
+    options: RequestInit = {},
+    allowRefresh = true
   ): Promise<T> {
     const baseUrl = this.getBaseUrl();
     const url = endpoint.startsWith('http') ? endpoint : `${baseUrl}${endpoint}`;
@@ -69,6 +93,19 @@ class ApiClient {
         console.log(`[API RESPONSE] ${response.status} ${url}`, responseData);
       }
 
+      if (
+        response.status === 401 &&
+        allowRefresh &&
+        this.refreshToken &&
+        !endpoint.includes('/auth/login') &&
+        !endpoint.includes('/auth/refresh')
+      ) {
+        const refreshed = await this.refreshSession();
+        if (refreshed) {
+          return this.request<T>(endpoint, options, false);
+        }
+      }
+
       if (!response.ok) {
         const error: ApiError = {
           status: response.status,
@@ -103,6 +140,40 @@ class ApiClient {
 
       throw err;
     }
+  }
+
+  private async refreshSession(): Promise<boolean> {
+    if (this.refreshPromise) return this.refreshPromise;
+
+    this.refreshPromise = (async () => {
+      try {
+        const response = await fetch(`${this.getBaseUrl()}/auth/refresh`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Accept: 'application/json',
+          },
+          body: JSON.stringify({
+            refreshToken: this.refreshToken,
+            deviceInfo: 'StaffApp-Mobile',
+          }),
+        });
+        const data = await response.json().catch(() => null);
+        if (!response.ok || !data?.accessToken) {
+          this.setSession(null, null);
+          return false;
+        }
+        this.setSession(data.accessToken, data.refreshToken || this.refreshToken);
+        return true;
+      } catch {
+        this.setSession(null, null);
+        return false;
+      } finally {
+        this.refreshPromise = null;
+      }
+    })();
+
+    return this.refreshPromise;
   }
 
   // GET

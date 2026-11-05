@@ -47,7 +47,7 @@ export const SOSStreamModal: React.FC<SOSStreamModalProps> = ({
   onDispatch,
   alertId,
   incidentId,
-  robotName = 'Robot MAR-GAZEBO-01',
+  robotName = 'Robot chưa xác định',
   location = 'Tầng 4 · Khu Hành lang chính',
   onResolve,
 }) => {

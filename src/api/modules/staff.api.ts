@@ -29,6 +29,16 @@ export const staffApi = {
     return apiClient.get<PageResponse<ShiftResponse>>(`${ENDPOINTS.STAFF.SHIFTS}?${query}`);
   },
 
+  async getAllStaffShifts(status?: ShiftQueryParams['status']): Promise<ShiftResponse[]> {
+    const first = await this.getStaffShifts({ status, page: 0, size: 100 });
+    const shifts = [...(first.content || [])];
+    for (let page = 1; page < first.totalPages; page += 1) {
+      const next = await this.getStaffShifts({ status, page, size: 100 });
+      shifts.push(...(next.content || []));
+    }
+    return shifts;
+  },
+
   /**
    * 3. Chi tiết 1 ca trực
    * Endpoint: GET /api/v1/staff/shifts/{shiftId}

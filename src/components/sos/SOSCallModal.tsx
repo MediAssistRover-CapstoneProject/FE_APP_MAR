@@ -28,7 +28,7 @@ interface SOSCallModalProps {
 export const SOSCallModal: React.FC<SOSCallModalProps> = ({
   visible,
   alertId,
-  robotName = 'Robot MAR-GAZEBO-01',
+  robotName = 'Robot chưa xác định',
   location = 'Khu chờ',
   timestamp,
   onAccept,

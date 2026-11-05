@@ -11,6 +11,16 @@ export const robotApi = {
     );
   },
 
+  async getAllRobots(status?: string): Promise<RobotDto[]> {
+    const first = await this.getRobots(0, 100, status);
+    const robots = [...(first.content || [])];
+    for (let page = 1; page < first.totalPages; page += 1) {
+      const next = await this.getRobots(page, 100, status);
+      robots.push(...(next.content || []));
+    }
+    return robots;
+  },
+
   // Chi tiết robot theo ID
   async getRobotDetail(id: string): Promise<RobotDto> {
     return apiClient.get<RobotDto>(ENDPOINTS.ROBOTS.DETAIL(id));

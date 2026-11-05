@@ -28,14 +28,13 @@ import {
   RoomDto,
   ScheduleResponse,
   JobResponse,
+  JobEventResponse,
   ZoneDto,
 } from '../../api/types';
 import { SOSCallModal } from '../../components/sos/SOSCallModal';
 import { SOSStreamModal } from '../../components/sos/SOSStreamModal';
-import { HospitalSvgMap } from '../../components/map/HospitalSvgMap';
 import { BackendHospitalMap } from '../../components/map/BackendHospitalMap';
-import { RobotTouchInterfaceModal } from '../../components/map/RobotTouchInterfaceModal';
-import { useHospitalMapStore, HospitalZone } from '../../store/useHospitalMapStore';
+import { BackendRobotMonitorModal } from '../../components/map/BackendRobotMonitorModal';
 import { useAuthStore } from '../../store/useAuthStore';
 import {
   LogOut,
@@ -68,7 +67,6 @@ import {
 
 const { height: SCREEN_HEIGHT } = Dimensions.get('window');
 
-// ===== Dữ liệu phòng bệnh viện =====
 interface Room {
   id: string;
   name: string;
@@ -81,116 +79,12 @@ interface Room {
   isActive?: boolean;
 }
 
-const ROOMS: Room[] = [
-  { id: 'tiep_nhan',    name: 'Tiếp nhận',     row: 0, col: 0, bgColor: '#FFFFFF' },
-  { id: 'noi_th',       name: 'P. Nội TH',     row: 0, col: 2, bgColor: '#E0F2FE' },
-  { id: 'kho_sos',      name: 'Kho',            row: 1, col: 0, bgColor: '#FEF2F2', hasSOS: true },
-  { id: 'tim_mach',     name: 'P. Tim mạch',   row: 1, col: 2, bgColor: '#F0FDF4' },
-  { id: 'xet_nghiem',   name: 'P. Xét nghiệm', row: 2, col: 0, bgColor: '#FFFBEB' },
-  { id: 'sieu_am',      name: 'P. Siêu âm',    row: 2, col: 2, bgColor: '#F5F3FF' },
-  { id: 'nha_thuoc',    name: 'Nhà thuốc',     row: 3, col: 0, bgColor: '#FFF7ED' },
-  { id: 'nhi_khoa',     name: 'P. Nhi khoa',   row: 3, col: 2, bgColor: '#E0F2FE', isActive: true },
-];
-
 const LEGEND = [
   { color: '#10B981', label: 'Robot' },
   { color: '#3B82F6', label: 'Điểm đến' },
   { color: '#F59E0B', label: 'Đông người' },
   { color: '#EA580C', label: 'Chặn' },
   { color: '#EF4444', label: 'SOS' },
-];
-
-// ===== 19 Bước Tiến Trình Nhiệm Vụ =====
-interface TaskStep {
-  id: number;
-  label: string;
-  status: 'completed' | 'in_progress' | 'upcoming';
-}
-
-const TASK_STEPS: TaskStep[] = [
-  { id: 1,  label: 'Đã tạo nhiệm vụ',      status: 'completed' },
-  { id: 2,  label: 'Đang chờ xử lý',       status: 'completed' },
-  { id: 3,  label: 'Robot đã nhận',        status: 'completed' },
-  { id: 4,  label: 'Đến nơi gửi',          status: 'completed' },
-  { id: 5,  label: 'Chờ đặt vật phẩm',     status: 'completed' },
-  { id: 6,  label: 'Xác nhận vật phẩm',    status: 'completed' },
-  { id: 7,  label: 'Đã nhận vật phẩm',     status: 'completed' },
-  { id: 8,  label: 'Đã khóa thùng',        status: 'completed' },
-  { id: 9,  label: 'Đang vận chuyển',      status: 'in_progress' },
-  { id: 10, label: 'Đã đến điểm giao',     status: 'upcoming' },
-  { id: 11, label: 'Chờ xác nhận',         status: 'upcoming' },
-  { id: 12, label: 'Đang xác minh',        status: 'upcoming' },
-  { id: 13, label: 'Xác minh thành công',  status: 'upcoming' },
-  { id: 14, label: 'Đã mở thùng',          status: 'upcoming' },
-  { id: 15, label: 'Chờ lấy vật phẩm',     status: 'upcoming' },
-  { id: 16, label: 'Vật phẩm đã lấy',      status: 'upcoming' },
-  { id: 17, label: 'Đã đóng thùng',        status: 'upcoming' },
-  { id: 18, label: 'Đã bàn giao',          status: 'upcoming' },
-  { id: 19, label: 'Hoàn thành',           status: 'upcoming' },
-];
-
-// ===== Hàng đợi nhiệm vụ =====
-interface QueueItem {
-  id: number;
-  title: string;
-  subtitle: string;
-  type: 'medicine' | 'document' | 'blood';
-  color: string;
-}
-
-const QUEUE_ITEMS: QueueItem[] = [
-  {
-    id: 1,
-    title: 'Đơn thuốc #BN2047',
-    subtitle: 'Nhà thuốc → P. Tim mạch',
-    type: 'medicine',
-    color: '#EF4444',
-  },
-  {
-    id: 2,
-    title: 'Hồ sơ bệnh án #BN1983',
-    subtitle: 'Phòng lưu trữ → P. Nội TH',
-    type: 'document',
-    color: '#F59E0B',
-  },
-  {
-    id: 3,
-    title: '4 ống mẫu máu #XN0388',
-    subtitle: 'P. Nội TH → P. Xét nghiệm',
-    type: 'blood',
-    color: '#EF4444',
-  },
-];
-
-// ===== Lịch trình mẫu khi máy chủ chưa phát sinh lịch mới =====
-const DEFAULT_SCHEDULES = [
-  {
-    scheduleId: 'SCH-01',
-    scheduleName: 'Khử khuẩn hành lang ca đêm',
-    scheduleType: 'DISINFECTION',
-    cronExpression: '0 22 * * * (22:00 hằng ngày)',
-    nextRunAt: '2026-10-20T22:00:00Z',
-    status: 'ACTIVE' as const,
-    intervalSec: 86400,
-  },
-  {
-    scheduleId: 'SCH-02',
-    scheduleName: 'Tuần tra an ninh & phát hiện sự cố SOS',
-    scheduleType: 'PATROL',
-    cronExpression: '*/30 8-18 * * * (Mỗi 30 phút)',
-    nextRunAt: '2026-10-20T14:00:00Z',
-    status: 'ACTIVE' as const,
-    intervalSec: 1800,
-  },
-  {
-    scheduleId: 'SCH-03',
-    scheduleName: 'Giao mẫu xét nghiệm định kỳ',
-    scheduleType: 'DELIVERY',
-    cronExpression: '0 9,11,14,16 * * *',
-    nextRunAt: '2026-10-20T16:00:00Z',
-    status: 'PAUSED' as const,
-    intervalSec: 7200,
-  },
 ];
 
 // ===== Helper chuyển đổi thông tin Job sang tên nhiệm vụ thân thiện =====
@@ -260,6 +154,7 @@ export const MapScreen: React.FC = () => {
   const [showSOSStream, setShowSOSStream] = useState(false);
   const [showScheduleSheet, setShowScheduleSheet] = useState(false);
   const [showLocationSheet, setShowLocationSheet] = useState(false);
+  const [showRobotMonitor, setShowRobotMonitor] = useState(false);
   const [isExpanded, setIsExpanded] = useState(true);
   const [robotStatus, setRobotStatus] = useState<'running' | 'paused'>('running');
 
@@ -271,6 +166,7 @@ export const MapScreen: React.FC = () => {
   const [activeMap, setActiveMap] = useState<MapResponse | null>(null);
   const [activeFloor, setActiveFloor] = useState<FloorResponse | null>(null);
   const [availableMaps, setAvailableMaps] = useState<MapResponse[]>([]);
+  const [mapImageMetadata, setMapImageMetadata] = useState<Record<string, any> | null>(null);
   const [backendFloors, setBackendFloors] = useState<FloorResponse[]>([]);
   const [endpoints, setEndpoints] = useState<EndpointResponse[]>([]);
   const [backendZones, setBackendZones] = useState<ZoneDto[]>([]);
@@ -285,6 +181,10 @@ export const MapScreen: React.FC = () => {
   // Jobs & Dispatch state (Nhiệm vụ & Điều phối Robot)
   const [jobs, setJobs] = useState<JobResponse[]>([]);
   const [isLoadingJobs, setIsLoadingJobs] = useState(false);
+  const [selectedTimelineJob, setSelectedTimelineJob] = useState<JobResponse | null>(null);
+  const [selectedTimelineDelivery, setSelectedTimelineDelivery] = useState<DeliveryResponse | null>(null);
+  const [jobEvents, setJobEvents] = useState<JobEventResponse[]>([]);
+  const [isLoadingJobEvents, setIsLoadingJobEvents] = useState(false);
   const [queueTab, setQueueTab] = useState<'jobs' | 'deliveries'>('jobs');
   const [isDispatching, setIsDispatching] = useState(false);
   const [dispatchMode, setDispatchMode] = useState<'NAV' | 'ESCORT'>('NAV');
@@ -292,40 +192,8 @@ export const MapScreen: React.FC = () => {
   const [selectedEndpointId, setSelectedEndpointId] = useState<string | null>(null);
   const authToken = useAuthStore((state) => state.token);
 
-  // Hospital SVG Map Store (Đồng bộ 1200x680 giữa Staff App và Robot App)
-  const {
-    zones: hospitalZones,
-    robotState,
-    selectedZoneId,
-    selectZone,
-    dispatchRobotToZone,
-    isRobotScreenOpen,
-    setRobotScreenOpen,
-  } = useHospitalMapStore();
-
-  const [selectedHospitalZone, setSelectedHospitalZone] = useState<HospitalZone | null>(null);
-
-  const handleSelectHospitalZone = useCallback(
-    (zone: HospitalZone) => {
-      setSelectedEndpointId(null);
-      setSelectedHospitalZone(zone);
-      selectZone(zone.id);
-      setSelectedRoom({
-        id: zone.id,
-        name: zone.name,
-        row: 0,
-        col: 0,
-        color: zone.color,
-        badge: zone.code,
-      });
-      setShowRoomSheet(true);
-    },
-    [selectZone]
-  );
-
   const handleSelectBackendEndpoint = useCallback((endpoint: EndpointResponse) => {
     setSelectedEndpointId(endpoint.endpointId);
-    setSelectedHospitalZone(null);
     setSelectedRoom({
       id: endpoint.endpointId,
       name: endpoint.endpointName,
@@ -342,7 +210,6 @@ export const MapScreen: React.FC = () => {
       setActiveMap(map);
       setActiveFloor(backendFloors.find((floor) => floor.floorId === map.floorId) || null);
       setSelectedEndpointId(null);
-      setSelectedHospitalZone(null);
       setSelectedRoom(null);
       setShowRoomSheet(false);
       setShowMapPicker(false);
@@ -401,12 +268,15 @@ export const MapScreen: React.FC = () => {
   const fetchRobot = useCallback(async () => {
     setIsLoadingRobot(true);
     try {
-      const res = await robotApi.getRobots(0, 5);
-      if (res?.content && res.content.length > 0) {
-        setRobotData(res.content[0]);
-      }
+      const robots = await robotApi.getAllRobots();
+      setRobotData(
+        robots.find((robot) => robot.status === 'BUSY')
+        || robots.find((robot) => robot.status === 'IDLE')
+        || robots[0]
+        || null
+      );
     } catch (err) {
-      console.log('Using default robot data:', err);
+      console.log('Error fetching robots:', err);
     } finally {
       setIsLoadingRobot(false);
     }
@@ -416,37 +286,33 @@ export const MapScreen: React.FC = () => {
     setIsLoadingFacility(true);
     setFacilityError(null);
     try {
-      const [mapsRes, floorsRes, epRes, zonesRes, roomsRes] = await Promise.all([
-        facilityApi.getMaps(0, 100),
-        facilityApi.getFloors(0, 50),
-        facilityApi.getEndpoints(0, 100),
-        facilityApi.getZones(0, 100),
-        facilityApi.getRooms(0, 100),
+      const [maps, floors, endpointList, zones, rooms] = await Promise.all([
+        facilityApi.getAllMaps(),
+        facilityApi.getAllFloors(),
+        facilityApi.getAllEndpoints(),
+        facilityApi.getAllZones(),
+        facilityApi.getAllRooms(),
       ]);
-      if (mapsRes?.content && mapsRes.content.length > 0) {
-        setAvailableMaps(mapsRes.content);
+      if (maps.length > 0) {
+        setAvailableMaps(maps);
         setActiveMap((current) =>
-          mapsRes.content.find((map) => map.mapId === current?.mapId) ||
-          mapsRes.content.find((map) => map.status === 'ACTIVE') ||
-          mapsRes.content[0]
+          maps.find((map) => map.mapId === current?.mapId) ||
+          maps.find((map) => map.status === 'ACTIVE') ||
+          maps[0]
         );
       } else {
         setAvailableMaps([]);
         setActiveMap(null);
       }
-      if (floorsRes?.content && floorsRes.content.length > 0) {
-        setBackendFloors(floorsRes.content);
+      if (floors.length > 0) {
+        setBackendFloors(floors);
       } else {
         setBackendFloors([]);
         setActiveFloor(null);
       }
-      if (epRes?.content && epRes.content.length > 0) {
-        setEndpoints(epRes.content);
-      } else {
-        setEndpoints([]);
-      }
-      setBackendZones(zonesRes?.content || []);
-      setBackendRooms(roomsRes?.content || []);
+      setEndpoints(endpointList);
+      setBackendZones(zones);
+      setBackendRooms(rooms);
     } catch (err: any) {
       setFacilityError(err?.message || 'Không thể tải dữ liệu map từ Backend');
       console.log('Error fetching facility data:', err);
@@ -464,13 +330,30 @@ export const MapScreen: React.FC = () => {
     );
   }, [activeMap, backendFloors]);
 
+  useEffect(() => {
+    let mounted = true;
+    if (!activeMap) {
+      setMapImageMetadata(null);
+      return;
+    }
+    facilityApi
+      .getMapImageMetadata(activeMap.mapId)
+      .then((metadata) => {
+        if (mounted) setMapImageMetadata(metadata);
+      })
+      .catch(() => {
+        if (mounted) setMapImageMetadata(null);
+      });
+    return () => {
+      mounted = false;
+    };
+  }, [activeMap]);
+
   const fetchSchedules = useCallback(async () => {
     setIsLoadingSchedules(true);
     try {
-      const res = await scheduleApi.getSchedules({ page: 0, size: 10 });
-      if (res?.content) {
-        setSchedules(res.content);
-      }
+      const result = await scheduleApi.getAllSchedules();
+      setSchedules(result);
     } catch (err) {
       console.log('Error fetching schedules:', err);
     } finally {
@@ -481,10 +364,8 @@ export const MapScreen: React.FC = () => {
   const fetchDeliveryQueue = useCallback(async () => {
     setIsLoadingQueue(true);
     try {
-      const res = await deliveryApi.getDeliveryRequests(0, 10);
-      if (res?.content) {
-        setDeliveryRequests(res.content);
-      }
+      const result = await deliveryApi.getAllDeliveryRequests();
+      setDeliveryRequests(result);
     } catch (err) {
       console.log('Error fetching delivery queue:', err);
     } finally {
@@ -514,10 +395,8 @@ export const MapScreen: React.FC = () => {
   const fetchJobs = useCallback(async () => {
     setIsLoadingJobs(true);
     try {
-      const res = await dispatchApi.getJobs({ page: 0, size: 20 });
-      if (res?.content) {
-        setJobs(res.content);
-      }
+      const result = await dispatchApi.getAllJobs();
+      setJobs(result);
     } catch (err) {
       console.log('Error fetching jobs:', err);
     } finally {
@@ -525,55 +404,67 @@ export const MapScreen: React.FC = () => {
     }
   }, []);
 
+  const openTimeline = useCallback(async (
+    job: JobResponse | null,
+    delivery: DeliveryResponse | null = null
+  ) => {
+    setSelectedTimelineJob(job);
+    setSelectedTimelineDelivery(delivery);
+    setJobEvents([]);
+    setShowTimelineSheet(true);
+    if (!job) return;
+
+    setIsLoadingJobEvents(true);
+    try {
+      const events = await facilityApi.getJobEvents(job.jobId);
+      setJobEvents(events || []);
+    } catch (err) {
+      console.log('Error fetching job events:', err);
+    } finally {
+      setIsLoadingJobEvents(false);
+    }
+  }, []);
+
   const handleDispatchRobot = async () => {
     if (!selectedRoom) return;
     setIsDispatching(true);
     try {
-      // 1. Chỉ mô phỏng chuyển động khi đang dùng map mẫu local.
-      const targetZone =
-        selectedHospitalZone ||
-        hospitalZones.find((z) => z.id === selectedRoom.id || z.name === selectedRoom.name) ||
-        hospitalZones[0];
-
-      if (!selectedEndpointId) {
-        dispatchRobotToZone(targetZone.id);
+      if (!activeMap) {
+        throw new Error('Backend chưa có map để điều phối robot.');
       }
-
-      // 2. Gửi lệnh điều phối lên Backend Railway (nếu kết nối)
-      const mapId = activeMap?.mapId || 'dee53b44-a8ef-446a-947e-c42aa14ce9c2';
+      const mapId = activeMap.mapId;
       const targetEp =
         endpoints.find((e) => e.endpointId === selectedEndpointId) ||
         endpoints.find((e) => e.mapId === mapId) ||
         endpoints[0];
-      const epId = targetEp?.endpointId || '74d46e9c-73f0-4b05-91b3-4adabf54bf86';
+      if (!targetEp) {
+        throw new Error('Map được chọn chưa có endpoint điều hướng.');
+      }
+      const epId = targetEp.endpointId;
 
       if (dispatchMode === 'ESCORT') {
-        dispatchApi
-          .dispatchEscortToJob({
+        await dispatchApi.dispatchEscortToJob({
             mapId,
             endpointId: epId,
             patientReference: `Bệnh nhân đến ${selectedRoom.name}`,
             note: `Dẫn đường bệnh nhân đến ${selectedRoom.name} từ Staff App`,
             walkingSpeedMps: 0.2,
             priority: 60,
-          })
-          .catch((err) => console.log('Escort API note:', err.message));
+          });
       } else {
-        dispatchApi
-          .dispatchNavigationToJob({
+        await dispatchApi.dispatchNavigationToJob({
             mapId,
             endpointId: epId,
             note: `Điều robot đến ${selectedRoom.name} từ Staff App`,
             passengerCount: 1,
             priority: 50,
-          })
-          .catch((err) => console.log('Nav API note:', err.message));
+          });
       }
 
       setShowRoomSheet(false);
       Alert.alert(
         'Đã điều phối Robot! 🚀',
-        `Robot MAR-01 đang tự hành di chuyển dọc theo tuyến đường đến ${selectedRoom.name}.\n\nBạn có thể nhấn nút "Màn hình Robot AMR" ở trên để xem trực tiếp góc nhìn cảm ứng của Robot!`
+        `${robotData?.robotName || 'Robot'} đang di chuyển đến ${selectedRoom.name}.`
       );
       await fetchJobs();
     } catch (err: any) {
@@ -634,6 +525,35 @@ export const MapScreen: React.FC = () => {
   const activeMapEndpoints = activeMap
     ? endpoints.filter((endpoint) => endpoint.mapId === activeMap.mapId)
     : endpoints;
+  const activeMapRooms = activeMap
+    ? backendRooms.filter((room) => !room.floorId || room.floorId === activeMap.floorId)
+    : backendRooms;
+  const timelineDisplay = selectedTimelineJob
+    ? getJobDisplayInfo(selectedTimelineJob, endpoints)
+    : null;
+  const timelineTitle = selectedTimelineDelivery?.request?.title
+    || selectedTimelineDelivery?.items?.[0]?.itemName
+    || timelineDisplay?.title
+    || 'Chi tiết nhiệm vụ';
+  const timelineCode = selectedTimelineJob?.jobCode
+    || selectedTimelineDelivery?.request?.requestCode
+    || selectedTimelineDelivery?.request?.requestId
+    || '';
+  const timelineStatus = selectedTimelineJob?.status
+    || selectedTimelineDelivery?.request?.status
+    || 'CHƯA CÓ JOB';
+  const timelineOrigin = selectedTimelineDelivery?.pickupEndpointId
+    ? endpoints.find((endpoint) => endpoint.endpointId === selectedTimelineDelivery.pickupEndpointId)?.endpointName
+    : timelineDisplay?.originName;
+  const timelineDestination = selectedTimelineDelivery?.deliveryEndpointId
+    ? endpoints.find((endpoint) => endpoint.endpointId === selectedTimelineDelivery.deliveryEndpointId)?.endpointName
+    : timelineDisplay?.destinationName;
+  const timelineNote = selectedTimelineDelivery?.deliveryNote
+    || selectedTimelineJob?.inputJson?.note
+    || selectedTimelineJob?.failureReason;
+  const activeRobotJob = jobs.find((job) => job.status === 'RUNNING')
+    || jobs.find((job) => job.status === 'QUEUED')
+    || null;
 
   return (
     <View style={styles.container}>
@@ -654,7 +574,7 @@ export const MapScreen: React.FC = () => {
           </View>
           <TouchableOpacity
             style={styles.openRobotKioskBtn}
-            onPress={() => setRobotScreenOpen(true)}
+            onPress={() => setShowRobotMonitor(true)}
             activeOpacity={0.8}
           >
             <Video size={16} color="#FFFFFF" />
@@ -671,30 +591,30 @@ export const MapScreen: React.FC = () => {
                   styles.statusDotLive,
                   {
                     backgroundColor:
-                      robotState.status === 'NAVIGATING'
+                      robotData?.status === 'BUSY'
                         ? '#06B6D4'
-                        : robotState.status === 'ARRIVED'
+                        : robotData?.status === 'IDLE'
                         ? '#10B981'
-                        : robotState.status === 'BLOCKED'
+                        : robotData?.status === 'EMERGENCY_STOP' || robotData?.status === 'ERROR'
                         ? '#EF4444'
                         : '#3B82F6',
                   },
                 ]}
               />
               <Text style={styles.mapStatusBadgeText}>
-                {robotState.status === 'NAVIGATING'
-                  ? `ROBOT ĐANG DI CHUYỂN: ${hospitalZones.find((z) => z.id === robotState.targetZoneId)?.name || 'PHÒNG BỆNH'}`
-                  : robotState.status === 'ARRIVED'
-                  ? 'ROBOT ĐÃ VÀO VỊ TRÍ ĐÍCH'
-                  : robotState.status === 'BLOCKED'
-                  ? 'ROBOT ĐANG TẠM DỪNG'
+                {robotData?.status === 'BUSY'
+                  ? `ROBOT ĐANG DI CHUYỂN${selectedRoom?.name ? `: ${selectedRoom.name}` : ''}`
+                  : robotData?.status === 'EMERGENCY_STOP'
+                  ? 'ROBOT ĐANG DỪNG KHẨN CẤP'
+                  : robotData?.status === 'ERROR'
+                  ? 'ROBOT ĐANG BÁO LỖI'
                   : activeMap
-                  ? `BE LIVE · ${activeMap.mapName} · ${backendRooms.length} PHÒNG · ${activeMapEndpoints.length} ĐIỂM`
-                  : 'SƠ ĐỒ MAP MẪU · BE CHƯA CÓ DỮ LIỆU'}
+                  ? `BE LIVE · ${activeMap.mapName} · ${activeMapRooms.length} PHÒNG · ${activeMapEndpoints.length} ĐIỂM`
+                  : 'BACKEND CHƯA CÓ MAP KHẢ DỤNG'}
               </Text>
             </View>
             <Text style={styles.robotCoordLiveText}>
-              Robot MAR-01: ({Math.round(robotState.x)}, {Math.round(robotState.y)}) · {robotState.heading}°
+              {robotData ? `${robotData.robotName} · ${robotData.status}` : 'Chưa có dữ liệu robot từ Backend'}
             </Text>
           </View>
 
@@ -724,6 +644,7 @@ export const MapScreen: React.FC = () => {
           {activeMap ? (
             <BackendHospitalMap
               map={activeMap}
+              metadata={mapImageMetadata}
               endpoints={activeMapEndpoints}
               zones={backendZones}
               token={authToken}
@@ -736,21 +657,14 @@ export const MapScreen: React.FC = () => {
               <Text style={styles.backendMapStateText}>Đang lấy map từ Backend...</Text>
             </View>
           ) : (
-            <>
-              {facilityError && (
-                <View style={styles.backendMapErrorBar}>
-                  <Text style={styles.backendMapErrorText}>{facilityError} · đang dùng map mẫu</Text>
-                  <TouchableOpacity onPress={fetchFacilityData}>
-                    <RefreshCw size={15} color="#FFFFFF" />
-                  </TouchableOpacity>
-                </View>
-              )}
-              <HospitalSvgMap
-                interactive={true}
-                mode="staff"
-                onSelectZone={handleSelectHospitalZone}
-              />
-            </>
+            <View style={styles.backendMapState}>
+              <Text style={styles.backendMapStateText}>
+                {facilityError || 'Backend chưa có map khả dụng.'}
+              </Text>
+              <TouchableOpacity onPress={fetchFacilityData} style={styles.mapPickerChevron}>
+                <RefreshCw size={15} color="#67E8F9" />
+              </TouchableOpacity>
+            </View>
           )}
         </View>
 
@@ -774,7 +688,7 @@ export const MapScreen: React.FC = () => {
               </Text>
             </View>
             <View style={styles.statusRight}>
-              <Text style={styles.batteryText}>🔋 {robotData?.batteryRaw ?? 100}%</Text>
+              <Text style={styles.batteryText}>🔋 {robotData?.batteryPercent ?? robotData?.batteryRaw ?? '--'}%</Text>
               {isExpanded ? (
                 <ChevronUp size={18} color={Colors.textSecondary} />
               ) : (
@@ -909,7 +823,14 @@ export const MapScreen: React.FC = () => {
 
                 <TouchableOpacity
                   style={styles.progressBtn}
-                  onPress={() => setShowTimelineSheet(true)}
+                  onPress={() => {
+                    const activeJob = jobs.find((job) => job.status === 'RUNNING') || jobs.find((job) => job.status === 'QUEUED');
+                    if (activeJob) {
+                      openTimeline(activeJob);
+                    } else {
+                      Alert.alert('Chưa có nhiệm vụ', 'Máy chủ hiện không có nhiệm vụ robot đang chạy hoặc chờ xử lý.');
+                    }
+                  }}
                   activeOpacity={0.8}
                 >
                   <Text style={styles.progressBtnText}>Tiến trình ➔</Text>
@@ -961,7 +882,7 @@ export const MapScreen: React.FC = () => {
                 activeOpacity={0.8}
               >
                 <Text style={[styles.queueTabText, queueTab === 'deliveries' && styles.queueTabTextActive]}>
-                  Đơn vận chuyển ({deliveryRequests.length > 0 ? deliveryRequests.length : QUEUE_ITEMS.length})
+                  Đơn vận chuyển ({deliveryRequests.length})
                 </Text>
               </TouchableOpacity>
             </View>
@@ -1002,7 +923,12 @@ export const MapScreen: React.FC = () => {
                       const display = getJobDisplayInfo(job, endpoints);
 
                       return (
-                        <View key={job.jobId} style={styles.jobCard}>
+                        <TouchableOpacity
+                          key={job.jobId}
+                          style={styles.jobCard}
+                          onPress={() => openTimeline(job)}
+                          activeOpacity={0.8}
+                        >
                           <View style={styles.jobCardTop}>
                             <View style={{ flex: 1, marginRight: 8 }}>
                               <Text style={styles.jobTitleText} numberOfLines={1}>
@@ -1051,7 +977,7 @@ export const MapScreen: React.FC = () => {
                               )}
                             </TouchableOpacity>
                           )}
-                        </View>
+                        </TouchableOpacity>
                       );
                     })
                   ) : (
@@ -1068,18 +994,18 @@ export const MapScreen: React.FC = () => {
                   {deliveryRequests.length === 0 && (
                     <View style={styles.sampleDataBanner}>
                       <Text style={styles.sampleDataText}>
-                        (Dữ liệu minh họa · Chưa phát sinh đơn mới trên máy chủ)
+                        Chưa có đơn vận chuyển trên máy chủ.
                       </Text>
                     </View>
                   )}
-                  {deliveryRequests.length > 0
-                    ? deliveryRequests.map((req, idx) => (
+                  {deliveryRequests.map((req, idx) => (
                         <TouchableOpacity
                           key={req.request?.requestId || idx}
                           style={styles.queueCard}
                           onPress={() => {
                             setShowQueueSheet(false);
-                            setShowTimelineSheet(true);
+                            const linkedJob = jobs.find((job) => job.serviceRequestId === req.request?.requestId) || null;
+                            openTimeline(linkedJob, req);
                           }}
                           activeOpacity={0.75}
                         >
@@ -1093,29 +1019,6 @@ export const MapScreen: React.FC = () => {
                             <Text style={styles.queueItemSubtitle}>
                               Đến: {req.recipientName || 'Nhân viên trực'} · Trạng thái: {req.request?.status || 'QUEUED'}
                             </Text>
-                          </View>
-                          <ArrowRight size={16} color={Colors.primary} />
-                        </TouchableOpacity>
-                      ))
-                    : QUEUE_ITEMS.map((item) => (
-                        <TouchableOpacity
-                          key={item.id}
-                          style={styles.queueCard}
-                          onPress={() => {
-                            setShowQueueSheet(false);
-                            setShowTimelineSheet(true);
-                          }}
-                          activeOpacity={0.75}
-                        >
-                          <View style={[styles.queueNumberBadge, { backgroundColor: item.color }]}>
-                            <Text style={styles.queueNumberText}>{item.id}</Text>
-                          </View>
-                          <View style={styles.queueCardContent}>
-                            <Text style={styles.queueItemTitle}>
-                              {item.type === 'medicine' ? '💊 ' : item.type === 'document' ? '📋 ' : '🧪 '}
-                              {item.title}
-                            </Text>
-                            <Text style={styles.queueItemSubtitle}>{item.subtitle}</Text>
                           </View>
                           <ArrowRight size={16} color={Colors.primary} />
                         </TouchableOpacity>
@@ -1150,51 +1053,61 @@ export const MapScreen: React.FC = () => {
                   <Pill size={24} color="#EF4444" />
                 </View>
                 <View style={styles.taskDetailInfo}>
-                  <Text style={styles.taskDetailCode}>#TD01 · 09:05</Text>
-                  <Text style={styles.taskDetailTitle}>Vận chuyển thuốc</Text>
-                  <Text style={styles.taskDetailSubtitle}>Đơn thuốc #BN2047</Text>
+                  <Text style={styles.taskDetailCode}>{timelineCode ? `#${timelineCode}` : 'DỮ LIỆU TỪ MÁY CHỦ'}</Text>
+                  <Text style={styles.taskDetailTitle}>{timelineTitle}</Text>
+                  <Text style={styles.taskDetailSubtitle}>Trạng thái: {timelineStatus}</Text>
                 </View>
               </View>
 
-              {/* Badges Row */}
+              {/* Thông tin thực tế từ job/delivery */}
               <View style={styles.badgesRow}>
-                <View style={styles.badgeRed}>
-                  <Text style={styles.badgeRedText}>🔴 Ưu tiên cao</Text>
-                </View>
-                <View style={styles.badgeTeal}>
-                  <Text style={styles.badgeTealText}>👤 Xác nhận khuôn mặt</Text>
-                </View>
                 <View style={styles.badgeBlue}>
-                  <Text style={styles.badgeBlueText}>⏰ 09:30</Text>
+                  <Text style={styles.badgeBlueText}>{timelineStatus}</Text>
                 </View>
+                {selectedTimelineJob && (
+                  <View style={styles.badgeTeal}>
+                    <Text style={styles.badgeTealText}>Ưu tiên {selectedTimelineJob.priority}</Text>
+                  </View>
+                )}
+                {selectedTimelineDelivery?.requiresConfirmation && (
+                  <View style={styles.badgeRed}>
+                    <Text style={styles.badgeRedText}>Cần xác nhận giao nhận</Text>
+                  </View>
+                )}
               </View>
 
               {/* Route Card */}
               <View style={styles.routeCard}>
                 <View style={styles.routeItem}>
                   <Text style={styles.routeLabel}>TỪ</Text>
-                  <Text style={styles.routeName}>Nhà thuốc</Text>
+                  <Text style={styles.routeName}>{timelineOrigin || 'Không có dữ liệu'}</Text>
                 </View>
                 <ArrowRight size={18} color={Colors.textSecondary} style={{ marginHorizontal: 8 }} />
                 <View style={styles.routeItem}>
                   <Text style={styles.routeLabel}>ĐẾN</Text>
-                  <Text style={styles.routeName}>P. Tim mạch</Text>
+                  <Text style={styles.routeName}>{timelineDestination || 'Không có dữ liệu'}</Text>
                 </View>
               </View>
 
-              {/* 19-Step Vertical Timeline */}
-              <Text style={styles.timelineSectionTitle}>TIẾN TRÌNH NHIỆM VỤ</Text>
+              <Text style={styles.timelineSectionTitle}>SỰ KIỆN NHIỆM VỤ TỪ BACKEND</Text>
               <View style={styles.timelineList}>
-                {TASK_STEPS.map((step, index) => {
-                  const isCompleted = step.status === 'completed';
-                  const isInProgress = step.status === 'in_progress';
-                  const isLast = index === TASK_STEPS.length - 1;
+                {isLoadingJobEvents ? (
+                  <ActivityIndicator size="small" color={Colors.primary} />
+                ) : jobEvents.length === 0 ? (
+                  <Text style={styles.sampleDataText}>
+                    {selectedTimelineJob
+                      ? 'Backend chưa ghi nhận sự kiện cho nhiệm vụ này.'
+                      : 'Đơn vận chuyển này chưa được liên kết với một job robot.'}
+                  </Text>
+                ) : jobEvents.map((event, index) => {
+                  const isLast = index === jobEvents.length - 1;
+                  const isInProgress = isLast && selectedTimelineJob?.status === 'RUNNING';
 
                   return (
-                    <View key={step.id} style={styles.timelineItem}>
+                    <View key={event.jobEventId} style={styles.timelineItem}>
                       {/* Left icon / connector */}
                       <View style={styles.timelineLeftColumn}>
-                        {isCompleted && (
+                        {!isInProgress && (
                           <View style={styles.timelineCheckCircle}>
                             <Check size={12} color="#FFFFFF" strokeWidth={3} />
                           </View>
@@ -1209,14 +1122,11 @@ export const MapScreen: React.FC = () => {
                             <View style={styles.timelineActiveInner} />
                           </Animated.View>
                         )}
-                        {!isCompleted && !isInProgress && (
-                          <View style={styles.timelineUpcomingCircle} />
-                        )}
                         {!isLast && (
                           <View
                             style={[
                               styles.timelineLine,
-                              isCompleted && styles.timelineLineCompleted,
+                              styles.timelineLineCompleted,
                             ]}
                           />
                         )}
@@ -1227,54 +1137,27 @@ export const MapScreen: React.FC = () => {
                         <Text
                           style={[
                             styles.timelineLabel,
-                            isCompleted && styles.timelineLabelCompleted,
+                            !isInProgress && styles.timelineLabelCompleted,
                             isInProgress && styles.timelineLabelActive,
                           ]}
                         >
-                          {step.label}
+                          {event.eventType}{event.newStatus ? ` · ${event.newStatus}` : ''}
                         </Text>
-                        {isInProgress && (
-                          <Text style={styles.timelineSubtext}>● Đang thực hiện</Text>
-                        )}
+                        <Text style={styles.timelineSubtext}>
+                          {event.occurredAt ? new Date(event.occurredAt).toLocaleString('vi-VN') : event.producerType}
+                        </Text>
                       </View>
                     </View>
                   );
                 })}
               </View>
 
-              {/* Staff Actions Grid */}
-              <Text style={styles.staffActionSectionTitle}>HÀNH ĐỘNG CỦA STAFF</Text>
-              <View style={styles.staffActionGrid}>
-                <TouchableOpacity
-                  style={styles.staffActionBtnOrange}
-                  onPress={() => setShowConfirmModal(true)}
-                  activeOpacity={0.8}
-                >
-                  <Pause size={16} color="#D97706" />
-                  <Text style={styles.staffActionTextOrange}>Tạm dừng</Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity style={styles.staffActionBtnOrange} activeOpacity={0.8}>
-                  <RotateCcw size={16} color="#D97706" />
-                  <Text style={styles.staffActionTextOrange}>Trả vật phẩm</Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity style={styles.staffActionBtnTeal} activeOpacity={0.8}>
-                  <Clock size={16} color={Colors.tealDark} />
-                  <Text style={styles.staffActionTextTeal}>Chờ thêm</Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity style={styles.staffActionBtnBlue} activeOpacity={0.8}>
-                  <Radio size={16} color={Colors.primary} />
-                  <Text style={styles.staffActionTextBlue}>Xác minh lại</Text>
-                </TouchableOpacity>
-              </View>
-
-              {/* Note Box */}
-              <View style={styles.noteBox}>
-                <Text style={styles.noteBoxLabel}>GHI CHÚ</Text>
-                <Text style={styles.noteBoxContent}>Thuốc huyết áp khẩn</Text>
-              </View>
+              {timelineNote ? (
+                <View style={styles.noteBox}>
+                  <Text style={styles.noteBoxLabel}>GHI CHÚ TỪ BACKEND</Text>
+                  <Text style={styles.noteBoxContent}>{timelineNote}</Text>
+                </View>
+              ) : null}
 
               {/* Close Button */}
               <TouchableOpacity
@@ -1331,41 +1214,8 @@ export const MapScreen: React.FC = () => {
             <View style={styles.sheetHandle} />
             <Text style={styles.sheetLabel}>ĐIỀU ROBOT ĐẾN PHÒNG</Text>
             <Text style={styles.sheetRoomName}>
-              {selectedHospitalZone?.name || selectedRoom?.name}
+              {selectedRoom?.name}
             </Text>
-
-            {selectedHospitalZone && (
-              <View style={styles.zoneDetailsBox}>
-                <Text style={styles.zoneDepartmentText}>
-                  🏢 {selectedHospitalZone.department}
-                </Text>
-                <Text style={styles.zoneCoordsText}>
-                  📍 Tọa độ đích (dockPoint): ({selectedHospitalZone.dockPoint.x}, {selectedHospitalZone.dockPoint.y})
-                </Text>
-                <Text style={styles.zoneDescText}>
-                  {selectedHospitalZone.description}
-                </Text>
-              </View>
-            )}
-
-            {selectedRoom?.id === '2' && (
-              <View style={styles.roomSosAlertBanner}>
-                <Text style={styles.roomSosAlertTitle}>🆘 TÍN HIỆU SOS ĐANG KÍCH HOẠT</Text>
-                <Text style={styles.roomSosAlertSubtitle}>
-                  Có tín hiệu gọi khẩn cấp từ bệnh nhân tại vị trí này.
-                </Text>
-                <TouchableOpacity
-                  style={styles.roomSosCallBtn}
-                  onPress={() => {
-                    setShowRoomSheet(false);
-                    setShowSOSCall(true);
-                  }}
-                  activeOpacity={0.85}
-                >
-                  <Text style={styles.roomSosCallBtnText}>Xem cuộc gọi SOS ngay ➔</Text>
-                </TouchableOpacity>
-              </View>
-            )}
 
             {/* Chế độ điều robot (Navigation vs Escort) */}
             <View style={styles.dispatchModeRow}>
@@ -1437,8 +1287,8 @@ export const MapScreen: React.FC = () => {
       ======================================================== */}
       <SOSCallModal
         visible={showSOSCall}
-        robotName="Robot MAR-GAZEBO-01"
-        location={selectedRoom?.name || 'Kho · Tầng 4'}
+        robotName={robotData?.robotName || 'Robot chưa xác định'}
+        location={selectedRoom?.name || 'Chưa có vị trí từ Backend'}
         onAccept={() => {
           setShowSOSCall(false);
           setShowSOSStream(true);
@@ -1448,8 +1298,8 @@ export const MapScreen: React.FC = () => {
 
       <SOSStreamModal
         visible={showSOSStream}
-        robotName="Robot MAR-GAZEBO-01"
-        location={selectedRoom?.name || 'Kho · Tầng 4'}
+        robotName={robotData?.robotName || 'Robot chưa xác định'}
+        location={selectedRoom?.name || 'Chưa có vị trí từ Backend'}
         onClose={() => setShowSOSStream(false)}
       />
 
@@ -1465,7 +1315,7 @@ export const MapScreen: React.FC = () => {
               <View>
                 <Text style={styles.sheetCategoryLabel}>HỆ THỐNG ĐIỀU HÀNH · LỊCH TRÌNH</Text>
                 <Text style={styles.queueSheetTitle}>
-                  Lịch trình định kỳ robot {schedules.length > 0 ? `(${schedules.length})` : `(${DEFAULT_SCHEDULES.length})`}
+                  Lịch trình định kỳ robot ({schedules.length})
                 </Text>
               </View>
               {isLoadingSchedules ? (
@@ -1477,17 +1327,9 @@ export const MapScreen: React.FC = () => {
               )}
             </View>
 
-            {schedules.length === 0 && (
-              <View style={styles.sampleDataBanner}>
-                <Text style={styles.sampleDataText}>
-                  (Dữ liệu minh họa · Chưa phát sinh lịch trình mới trên máy chủ)
-                </Text>
-              </View>
-            )}
-
             <ScrollView showsVerticalScrollIndicator={false} style={{ marginVertical: 8 }}>
-              {schedules.length > 0
-                ? schedules.map((sch) => {
+              {schedules.length > 0 ? (
+                schedules.map((sch) => {
                     const isActive = sch.status === 'ACTIVE';
                     const isToggling = actionScheduleId === sch.scheduleId;
                     return (
@@ -1541,49 +1383,11 @@ export const MapScreen: React.FC = () => {
                       </View>
                     );
                   })
-                : DEFAULT_SCHEDULES.map((sch) => (
-                    <View key={sch.scheduleId} style={styles.scheduleCard}>
-                      <View style={styles.scheduleCardTop}>
-                        <View style={styles.scheduleIconCircle}>
-                          <Calendar size={18} color={Colors.primary} />
-                        </View>
-                        <View style={{ flex: 1 }}>
-                          <Text style={styles.scheduleTitle}>{sch.scheduleName}</Text>
-                          <Text style={styles.scheduleCode}>
-                            {sch.scheduleId} · {sch.scheduleType}
-                          </Text>
-                        </View>
-                        <View style={[styles.scheduleStatusBadge, sch.status === 'ACTIVE' ? styles.badgeGreen : styles.badgeOrange]}>
-                          <Text style={[styles.scheduleStatusText, sch.status === 'ACTIVE' ? styles.textGreen : styles.textOrange]}>
-                            {sch.status === 'ACTIVE' ? 'Đang chạy' : 'Tạm dừng'}
-                          </Text>
-                        </View>
-                      </View>
-
-                      <View style={styles.scheduleMetaGrid}>
-                        <View style={styles.scheduleMetaItem}>
-                          <Text style={styles.scheduleMetaLabel}>CHU KỲ</Text>
-                          <Text style={styles.scheduleMetaVal}>{sch.cronExpression}</Text>
-                        </View>
-                        <View style={styles.scheduleMetaItem}>
-                          <Text style={styles.scheduleMetaLabel}>ROBOT GÁN</Text>
-                          <Text style={styles.scheduleMetaVal}>MAR-GAZEBO-01</Text>
-                        </View>
-                      </View>
-
-                      <TouchableOpacity
-                        style={[styles.scheduleToggleBtn, sch.status === 'ACTIVE' ? styles.scheduleBtnPause : styles.scheduleBtnResume]}
-                        onPress={() => {
-                          Alert.alert('Thông báo', `Đã chuyển đổi trạng thái lịch trình: ${sch.scheduleName}`);
-                        }}
-                        activeOpacity={0.8}
-                      >
-                        <Text style={[styles.scheduleToggleBtnText, sch.status === 'ACTIVE' ? styles.textOrange : styles.textGreen]}>
-                          {sch.status === 'ACTIVE' ? '⏸ Tạm dừng lịch trình' : '▶ Kích hoạt lại'}
-                        </Text>
-                      </TouchableOpacity>
-                    </View>
-                  ))}
+              ) : (
+                <View style={styles.backendMapState}>
+                  <Text style={styles.backendMapStateText}>Backend chưa có lịch trình.</Text>
+                </View>
+              )}
             </ScrollView>
 
             <TouchableOpacity
@@ -1630,10 +1434,10 @@ export const MapScreen: React.FC = () => {
                   </View>
                   <View>
                     <Text style={styles.telemetryRobotName}>
-                      {robotData?.robotName || 'MediAssist Rover Gazebo'}
+                      {robotData?.robotName || 'Chưa có dữ liệu robot'}
                     </Text>
                     <Text style={styles.telemetryRobotCode}>
-                      Mã: {robotData?.robotCode || 'MAR-GAZEBO-01'} · Model: {robotData?.model || 'TurtleBot3'}
+                      Mã: {robotData?.robotCode || 'Chưa cập nhật'} · Model: {robotData?.model || 'Chưa cập nhật'}
                     </Text>
                   </View>
                 </View>
@@ -1704,7 +1508,7 @@ export const MapScreen: React.FC = () => {
                       <View style={{ flex: 1, marginLeft: 8 }}>
                         <Text style={styles.waypointName}>{ep.endpointName}</Text>
                         <Text style={styles.waypointCoords}>
-                          Mã: {ep.endpointCode} · X: {ep.xM.toFixed(2)}m, Y: {ep.yM.toFixed(2)}m ({ep.endpointType})
+                          Mã: {ep.endpointCode} · X: {Number(ep.xM).toFixed(2)}m, Y: {Number(ep.yM).toFixed(2)}m ({ep.endpointType})
                         </Text>
                       </View>
                     </View>
@@ -1790,9 +1594,16 @@ export const MapScreen: React.FC = () => {
       {/* ========================================================
           MODAL 7: MÀN HÌNH CẢM ỨNG GẮN TRÊN ROBOT (ROBOT INTERFACE KIOSK)
       ======================================================== */}
-      <RobotTouchInterfaceModal
-        visible={isRobotScreenOpen}
-        onClose={() => setRobotScreenOpen(false)}
+      <BackendRobotMonitorModal
+        visible={showRobotMonitor}
+        onClose={() => setShowRobotMonitor(false)}
+        robot={robotData}
+        map={activeMap}
+        metadata={mapImageMetadata}
+        endpoints={activeMapEndpoints}
+        zones={backendZones}
+        token={authToken}
+        activeJob={activeRobotJob}
       />
     </View>
   );

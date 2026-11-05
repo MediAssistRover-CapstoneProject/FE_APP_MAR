@@ -25,6 +25,16 @@ export const alertApi = {
     return apiClient.get<PageResponse<AlertResponse>>(`${ENDPOINTS.ALERTS.LIST}?${query}`);
   },
 
+  async getAllAlerts(params: Omit<AlertQueryParams, 'page' | 'size'> = {}): Promise<AlertResponse[]> {
+    const first = await this.getAlerts({ ...params, page: 0, size: 100 });
+    const alerts = [...(first.content || [])];
+    for (let page = 1; page < first.totalPages; page += 1) {
+      const next = await this.getAlerts({ ...params, page, size: 100 });
+      alerts.push(...(next.content || []));
+    }
+    return alerts;
+  },
+
   /**
    * 2. Lấy thông tin chi tiết cảnh báo theo Alert ID
    */

@@ -439,90 +439,23 @@ export const BackendHospitalMap: React.FC<BackendHospitalMapProps> = ({
             />
           )}
 
-          {/* 3. Vẽ các điểm dừng (Endpoints) kèm hướng mũi tên & nhãn tên điểm rõ nét */}
+          {/* 3. Vùng chạm ẩn của các điểm dừng (Endpoints) — ẩn chấm xanh trên map theo yêu cầu */}
           {visibleEndpoints.map((endpoint) => {
             const point = geometry.toViewPixel({
               x: Number(endpoint.xM),
               y: Number(endpoint.yM),
             });
-            const selected = selectedEndpointId === endpoint.endpointId;
-            const radius = Math.max(3.6, viewWidth / 48);
-            const r = selected ? radius * 1.28 : radius;
-            const headingRad = geometry.toViewHeadingRad(Number(endpoint.yawRad) || 0);
-            const tipX = point.x + Math.cos(headingRad) * (r * 1.75);
-            const tipY = point.y + Math.sin(headingRad) * (r * 1.75);
-
-            const label = (endpoint.endpointName || endpoint.endpointCode || '').trim();
-            const fontSize = Math.max(5.0, viewWidth / 38);
-            const badgeWidth = Math.max(label.length * fontSize * 0.56 + 5, 16);
-            const badgeHeight = fontSize + 3.2;
-            const badgeX = point.x - badgeWidth / 2;
-            const badgeY = point.y - r - badgeHeight - 2;
-
-            const fillColor = selected ? '#F97316' : '#2563EB';
+            const hitRadius = Math.max(12, viewWidth / 16);
 
             return (
               <G key={endpoint.endpointId} onPress={() => onSelectEndpoint(endpoint)}>
-                {/* Vòng hào quang khi chọn */}
-                {selected && (
-                  <Circle
-                    cx={point.x}
-                    cy={point.y}
-                    r={r * 1.55}
-                    fill="rgba(249, 115, 22, 0.24)"
-                  />
-                )}
-
-                {/* Kim chỉ hướng yawRad của Endpoint */}
-                <Line
-                  x1={point.x}
-                  y1={point.y}
-                  x2={tipX}
-                  y2={tipY}
-                  stroke={fillColor}
-                  strokeWidth={Math.max(1.3, r * 0.4)}
-                  strokeLinecap="round"
-                />
-
-                {/* Chấm tròn Endpoint */}
                 <Circle
                   cx={point.x}
                   cy={point.y}
-                  r={r}
-                  fill={fillColor}
-                  stroke="#FFFFFF"
-                  strokeWidth={Math.max(1.1, r * 0.3)}
+                  r={hitRadius}
+                  fill="rgba(0, 0, 0, 0.001)"
+                  stroke="none"
                 />
-                <Circle
-                  cx={point.x}
-                  cy={point.y}
-                  r={r * 0.34}
-                  fill="#FFFFFF"
-                />
-
-                {/* Nhãn tên Endpoint dễ đọc trên nền trắng */}
-                {label ? (
-                  <G>
-                    <Rect
-                      x={badgeX}
-                      y={badgeY}
-                      width={badgeWidth}
-                      height={badgeHeight}
-                      rx={badgeHeight / 2}
-                      fill={selected ? '#EA580C' : 'rgba(15, 23, 42, 0.86)'}
-                    />
-                    <SvgText
-                      x={point.x}
-                      y={badgeY + badgeHeight - fontSize * 0.26}
-                      textAnchor="middle"
-                      fontSize={fontSize}
-                      fontWeight="700"
-                      fill="#FFFFFF"
-                    >
-                      {label}
-                    </SvgText>
-                  </G>
-                ) : null}
               </G>
             );
           })}
@@ -618,10 +551,6 @@ export const BackendHospitalMap: React.FC<BackendHospitalMapProps> = ({
       {/* Thanh chú thích & trạng thái định vị Robot đồng bộ từ mapping.html */}
       <View style={styles.legendBar}>
         <View style={styles.legendRow}>
-          <View style={styles.legendItem}>
-            <View style={[styles.legendDot, { backgroundColor: '#2563EB' }]} />
-            <Text style={styles.legendLabel}>Điểm đến ({visibleEndpoints.length})</Text>
-          </View>
           <View style={styles.legendItem}>
             <View style={[styles.legendDot, { backgroundColor: '#0284C7' }]} />
             <Text style={styles.legendLabel}>Giảm tốc</Text>

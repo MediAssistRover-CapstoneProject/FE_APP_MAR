@@ -4,18 +4,21 @@ import {
   Image,
   StyleSheet,
   Text,
+  TouchableOpacity,
   View,
 } from 'react-native';
 import Svg, {
   Circle,
+  Defs,
   G,
   Line,
-  Path,
+  Pattern,
   Polygon,
   Polyline,
   Rect,
   Text as SvgText,
 } from 'react-native-svg';
+import { Layers, Lock } from 'lucide-react-native';
 import { API_CONFIG } from '../../api/config';
 import { EndpointResponse, MapResponse, ZoneDto } from '../../api/types';
 
@@ -53,6 +56,8 @@ interface MapPoint {
   y: number;
 }
 
+type MapFilterMode = 'otto_cad' | 'otto_dark' | 'raw';
+
 /**
  * Góc xoay cố định (-20 độ) giúp bản đồ SLAM ở trường (final o truong)
  * hiển thị ngay ngắn theo phương ngang/dọc ngay khi vào màn hình mà không cần Staff tự chỉnh.
@@ -81,9 +86,6 @@ const createViewTransform = (width: number, height: number, degrees: number) => 
   const c = Math.cos(radians);
   const s = Math.sin(radians);
 
-  // Khi ảnh SLAM bị nghiêng 20° được xoay thẳng lại, phần diện tích phòng thực tế nằm gọn ở trung tâm
-  // (chiếm khoảng 86% chiều ngang và 74% chiều dọc của ảnh PNG gốc).
-  // Thu nhỏ khung viewBox vào đúng vùng trung tâm này giúp phóng to bản đồ lấp kín khung.
   const cropScaleX = degrees !== 0 ? 0.86 : 1;
   const cropScaleY = degrees !== 0 ? 0.74 : 1;
   const w = Math.max(1, width * cropScaleX);
@@ -157,6 +159,7 @@ export const BackendHospitalMap: React.FC<BackendHospitalMapProps> = ({
   const [isLoadingImage, setIsLoadingImage] = useState(true);
   const [imageFailed, setImageFailed] = useState(false);
   const [naturalSize, setNaturalSize] = useState<{ width: number; height: number } | null>(null);
+  const [filterMode, setFilterMode] = useState<MapFilterMode>('otto_cad');
 
   const imageUrl = `${API_CONFIG.BASE_URL}/maps/${map.mapId}/image.png`;
   const fixedRotationDeg = useMemo(() => getFixedMapRotationDeg(map), [map]);
@@ -200,8 +203,6 @@ export const BackendHospitalMap: React.FC<BackendHospitalMapProps> = ({
       metadata?.height_px ?? metadata?.heightPx ?? metadata?.imageHeightPx ?? metadata?.height
     );
 
-    // Ưu tiên width_px / height_px từ image-metadata của BE (khớp 100% với mapping.html),
-    // sau đó đến naturalSize của ảnh PNG
     const pixelWidth = Math.max(
       1,
       (metaWidthPx > 0 ? metaWidthPx : 0) ||
@@ -246,8 +247,6 @@ export const BackendHospitalMap: React.FC<BackendHospitalMapProps> = ({
 
     const view = createViewTransform(pixelWidth, pixelHeight, fixedRotationDeg);
 
-    // Công thức mapToPixel khớp 100% với map-navigation.js trên mapping.html,
-    // sau đó qua view.forward(u, v) để xoay cố định -20° và phóng to lấp đầy khung
     const toViewPixel = (point: MapPoint) => {
       const dx = point.x - originX;
       const dy = point.y - originY;
@@ -262,7 +261,6 @@ export const BackendHospitalMap: React.FC<BackendHospitalMapProps> = ({
       };
     };
 
-    // Tính góc hướng mũi tên (radian) trên khung nhìn đã xoay cố định
     const toViewHeadingRad = (yawRad: number) => {
       const safeYaw = Number.isFinite(yawRad) ? yawRad : 0;
       return -(safeYaw - originYaw) + view.radians;
@@ -322,6 +320,12 @@ export const BackendHospitalMap: React.FC<BackendHospitalMapProps> = ({
     };
   }, [map.mapId, robotPose]);
 
+  const cycleFilterMode = () => {
+    setFilterMode((prev) =>
+      prev === 'otto_cad' ? 'otto_dark' : prev === 'otto_dark' ? 'raw' : 'otto_cad'
+    );
+  };
+
   const viewWidth = geometry.view.width;
   const viewHeight = geometry.view.height;
   const aspectRatio = viewWidth / viewHeight;
@@ -331,9 +335,20 @@ export const BackendHospitalMap: React.FC<BackendHospitalMapProps> = ({
   const imageLeftPct = ((viewWidth - geometry.pixelWidth) / (2 * viewWidth)) * 100;
   const imageTopPct = ((viewHeight - geometry.pixelHeight) / (2 * viewHeight)) * 100;
 
+  // Bước lưới 1 mét chuẩn CAD (quy đổi sang đơn vị viewBox)
+  const gridStepPx = Math.max(12, 1 / geometry.resolution);
+
   return (
     <View style={styles.outerWrapper}>
-      <View style={[styles.canvasContainer, { aspectRatio }]}>
+      <View
+        style={[
+          styles.canvasContainer,
+          {
+            aspectRatio,
+            backgroundColor: filterMode === 'otto_dark' ? '#1E242B' : '#F1F5F9',
+          },
+        ]}
+      >
         <View style={styles.gridBackground} />
 
         {!imageFailed && (
@@ -351,6 +366,7 @@ export const BackendHospitalMap: React.FC<BackendHospitalMapProps> = ({
                 height: `${imageHeightPct}%`,
                 left: `${imageLeftPct}%`,
                 top: `${imageTopPct}%`,
+                opacity: filterMode === 'otto_dark' ? 0.88 : 0.96,
                 transform: [{ rotate: `${geometry.view.degrees}deg` }],
               },
             ]}
@@ -370,6 +386,17 @@ export const BackendHospitalMap: React.FC<BackendHospitalMapProps> = ({
           />
         )}
 
+        {/* Lớp phủ Filter công nghiệp chuẩn OTTO Fleet Manager */}
+        {filterMode !== 'raw' && (
+          <View
+            pointerEvents="none"
+            style={[
+              styles.fullSize,
+              filterMode === 'otto_cad' ? styles.ottoCadTint : styles.ottoDarkTint,
+            ]}
+          />
+        )}
+
         <Svg
           width="100%"
           height="100%"
@@ -377,7 +404,91 @@ export const BackendHospitalMap: React.FC<BackendHospitalMapProps> = ({
           preserveAspectRatio="none"
           style={styles.fullSize}
         >
-          {/* 1. Vẽ các phân khu (Zones: vùng giảm tốc SPEED / vùng cấm KEEP_OUT) */}
+          <Defs>
+            {/* Lưới tọa độ kỹ thuật 1m x 1m chuẩn OTTO Fleet Manager */}
+            <Pattern
+              id="ottoCadGrid"
+              width={gridStepPx}
+              height={gridStepPx}
+              patternUnits="userSpaceOnUse"
+            >
+              <Line
+                x1="0"
+                y1="0"
+                x2={gridStepPx}
+                y2="0"
+                stroke={
+                  filterMode === 'otto_dark'
+                    ? 'rgba(56, 189, 248, 0.14)'
+                    : 'rgba(14, 116, 144, 0.11)'
+                }
+                strokeWidth="0.45"
+              />
+              <Line
+                x1="0"
+                y1="0"
+                x2="0"
+                y2={gridStepPx}
+                stroke={
+                  filterMode === 'otto_dark'
+                    ? 'rgba(56, 189, 248, 0.14)'
+                    : 'rgba(14, 116, 144, 0.11)'
+                }
+                strokeWidth="0.45"
+              />
+            </Pattern>
+
+            {/* Sọc chéo cảnh báo công nghiệp cho Exclusion Zone (Vùng cấm KEEP_OUT) */}
+            <Pattern
+              id="ottoHazardStripe"
+              width="6"
+              height="6"
+              patternUnits="userSpaceOnUse"
+              patternTransform="rotate(45)"
+            >
+              <Rect width="6" height="6" fill="rgba(239, 68, 68, 0.18)" />
+              <Line
+                x1="0"
+                y1="0"
+                x2="0"
+                y2="6"
+                stroke="rgba(220, 38, 38, 0.52)"
+                strokeWidth="2.2"
+              />
+            </Pattern>
+
+            {/* Sọc mịn cho Speed Limit Zone (Vùng giảm tốc SPEED) */}
+            <Pattern
+              id="ottoSpeedPattern"
+              width="5"
+              height="5"
+              patternUnits="userSpaceOnUse"
+              patternTransform="rotate(-30)"
+            >
+              <Rect width="5" height="5" fill="rgba(14, 165, 233, 0.18)" />
+              <Line
+                x1="0"
+                y1="0"
+                x2="0"
+                y2="5"
+                stroke="rgba(2, 132, 199, 0.36)"
+                strokeWidth="1.4"
+              />
+            </Pattern>
+          </Defs>
+
+          {/* 0. Lớp lưới kỹ thuật CAD đè lên mặt sàn */}
+          {filterMode !== 'raw' && (
+            <Rect
+              x="0"
+              y="0"
+              width={viewWidth}
+              height={viewHeight}
+              fill="url(#ottoCadGrid)"
+            />
+          )}
+
+          {/* 1. Vẽ các phân khu Traffic Control (Zones) theo chuẩn OTTO Fleet Manager */}
           {visibleZones.map(({ zone, points }) => {
             const pixelPoints = points.map(geometry.toViewPixel);
             const pointsText = pixelPoints.map((point) => `${point.x},${point.y}`).join(' ');
@@ -389,23 +500,46 @@ export const BackendHospitalMap: React.FC<BackendHospitalMapProps> = ({
               (endpoint) => endpoint.zoneId === zone.zoneId
             );
             const isKeepOut = zone.zoneType === 'KEEP_OUT';
-            const fillColor = isKeepOut
-              ? 'rgba(220, 38, 38, 0.20)'
-              : 'rgba(14, 165, 233, 0.18)';
-            const strokeColor = isKeepOut ? '#DC2626' : '#0284C7';
-            const textColor = isKeepOut ? '#991B1B' : '#075985';
-            const zoneFontSize = Math.max(5.5, viewWidth / 32);
+            const strokeColor = isKeepOut ? '#EF4444' : '#0284C7';
+            const innerDashColor = isKeepOut ? '#FCA5A5' : '#38BDF8';
+            const badgeBg = isKeepOut
+              ? 'rgba(153, 27, 27, 0.90)'
+              : 'rgba(3, 105, 161, 0.90)';
+            const zoneLabel = (zone.zoneName || zone.zoneCode || '').trim();
+            const zoneFontSize = Math.max(4.6, viewWidth / 38);
+            const badgeW = Math.max(zoneLabel.length * zoneFontSize * 0.58 + 7, 18);
+            const badgeH = zoneFontSize + 3.4;
 
             return (
               <G
                 key={zone.zoneId}
                 onPress={zoneEndpoint ? () => onSelectEndpoint(zoneEndpoint) : undefined}
               >
+                {/* Lớp nền sọc kỹ thuật OTTO */}
                 <Polygon
                   points={pointsText}
-                  fill={fillColor}
+                  fill={isKeepOut ? 'url(#ottoHazardStripe)' : 'url(#ottoSpeedPattern)'}
                   stroke={strokeColor}
-                  strokeWidth={Math.max(1.2, viewWidth / 175)}
+                  strokeWidth={Math.max(1.3, viewWidth / 165)}
+                />
+                {/* Đường viền nét đứt kỹ thuật chuẩn OTTO Traffic Control */}
+                <Polygon
+                  points={pointsText}
+                  fill="none"
+                  stroke={innerDashColor}
+                  strokeWidth={Math.max(0.7, viewWidth / 280)}
+                  strokeDasharray="3,2"
+                />
+                {/* Nhãn Pill chuyên nghiệp giữa vùng Zone */}
+                <Rect
+                  x={labelX - badgeW / 2}
+                  y={labelY - badgeH / 2}
+                  width={badgeW}
+                  height={badgeH}
+                  rx={badgeH / 2}
+                  fill={badgeBg}
+                  stroke={innerDashColor}
+                  strokeWidth={0.5}
                 />
                 <SvgText
                   x={labelX}
@@ -413,33 +547,45 @@ export const BackendHospitalMap: React.FC<BackendHospitalMapProps> = ({
                   textAnchor="middle"
                   fontSize={zoneFontSize}
                   fontWeight="800"
-                  fill={textColor}
+                  fill="#FFFFFF"
                 >
-                  {zone.zoneName || zone.zoneCode}
+                  {zoneLabel}
                 </SvgText>
               </G>
             );
           })}
 
-          {/* 2. Vẽ đường đi dự kiến Nav2 (nếu Robot đang thực hiện lệnh MOVE) */}
-          {validPlannedPath && (
-            <Polyline
-              points={validPlannedPath
-                .map((pt) => {
-                  const p = geometry.toViewPixel({ x: Number(pt.xM), y: Number(pt.yM) });
-                  return `${p.x},${p.y}`;
-                })
-                .join(' ')}
-              fill="none"
-              stroke="#2563EB"
-              strokeWidth={Math.max(1.5, viewWidth / 130)}
-              strokeDasharray="4,2.5"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          )}
+          {/* 2. Vẽ đường dẫn Nav2 phát sáng (Glowing Trajectory) chuẩn OTTO Fleet Manager */}
+          {validPlannedPath && (() => {
+            const polyPoints = validPlannedPath
+              .map((pt) => {
+                const p = geometry.toViewPixel({ x: Number(pt.xM), y: Number(pt.yM) });
+                return `${p.x},${p.y}`;
+              })
+              .join(' ');
+            return (
+              <G>
+                <Polyline
+                  points={polyPoints}
+                  fill="none"
+                  stroke="rgba(14, 165, 233, 0.35)"
+                  strokeWidth={Math.max(3.4, viewWidth / 70)}
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+                <Polyline
+                  points={polyPoints}
+                  fill="none"
+                  stroke="#0EA5E9"
+                  strokeWidth={Math.max(1.5, viewWidth / 140)}
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </G>
+            );
+          })()}
 
-          {/* 3. Vùng chạm ẩn của các điểm dừng (Endpoints) — ẩn chấm xanh trên map theo yêu cầu */}
+          {/* 3. Vùng chạm ẩn của các điểm dừng (Endpoints) — giữ tương tác điều phối khi nhấn vào phòng */}
           {visibleEndpoints.map((endpoint) => {
             const point = geometry.toViewPixel({
               x: Number(endpoint.xM),
@@ -460,77 +606,131 @@ export const BackendHospitalMap: React.FC<BackendHospitalMapProps> = ({
             );
           })}
 
-          {/* 4. Vẽ vị trí và hướng Robot thời gian thực (từ API /robots/{id}/snapshot) */}
+          {/* 4. Vẽ thân xe AMR (OTTO Chassis Footprint + Safety LiDAR Field) */}
           {validRobotPose && (() => {
             const robotPt = geometry.toViewPixel({
               x: validRobotPose.xM,
               y: validRobotPose.yM,
             });
-            const headingRad = geometry.toViewHeadingRad(validRobotPose.yawRad);
-            const r = Math.max(4.8, viewWidth / 36);
-            const cosH = Math.cos(headingRad);
-            const sinH = Math.sin(headingRad);
+            const headingDeg =
+              (geometry.toViewHeadingRad(validRobotPose.yawRad) * 180) / Math.PI;
+            const chassisLen = Math.max(9.5, viewWidth / 22);
+            const chassisWid = chassisLen * 0.72;
+            const safetyLen = chassisLen * 1.36;
+            const safetyWid = chassisWid * 1.38;
 
-            // Mũi tên chỉ hướng đầu Robot giống mapping.html
-            const tipX = robotPt.x + cosH * (r * 2.1);
-            const tipY = robotPt.y + sinH * (r * 2.1);
-            const leftX = robotPt.x + cosH * (r * 0.25) - sinH * (r * 0.85);
-            const leftY = robotPt.y + sinH * (r * 0.25) + cosH * (r * 0.85);
-            const rightX = robotPt.x + cosH * (r * 0.25) + sinH * (r * 0.85);
-            const rightY = robotPt.y + sinH * (r * 0.25) - cosH * (r * 0.85);
-            const arrowPath = `M ${tipX} ${tipY} L ${leftX} ${leftY} L ${rightX} ${rightY} Z`;
-
-            const mainColor = isPoseLive ? '#0879EE' : '#64748B';
-            const arrowColor = isPoseLive ? '#FF7900' : '#94A3B8';
-            const fontSize = Math.max(5.2, viewWidth / 36);
-            const tagText = isPoseLive ? 'ROBOT LIVE' : 'ROBOT (CUỐI)';
-            const tagWidth = tagText.length * fontSize * 0.58 + 7;
-            const tagHeight = fontSize + 3.6;
+            const safetyStroke = isPoseLive ? '#0EA5E9' : '#64748B';
+            const safetyFill = isPoseLive
+              ? 'rgba(14, 165, 233, 0.22)'
+              : 'rgba(100, 116, 139, 0.18)';
+            const frontLedColor = isPoseLive ? '#10B981' : '#94A3B8';
 
             return (
-              <G>
-                <Circle
-                  cx={robotPt.x}
-                  cy={robotPt.y}
-                  r={r * 1.7}
-                  fill={isPoseLive ? 'rgba(8, 121, 238, 0.22)' : 'rgba(100, 116, 139, 0.18)'}
+              <G
+                transform={`translate(${robotPt.x}, ${robotPt.y}) rotate(${headingDeg})`}
+              >
+                {/* Vùng đệm an toàn LiDAR (Blue Safety Field chuẩn OTTO) */}
+                <Rect
+                  x={-safetyLen / 2}
+                  y={-safetyWid / 2}
+                  width={safetyLen}
+                  height={safetyWid}
+                  rx={safetyWid * 0.26}
+                  fill={safetyFill}
+                  stroke={safetyStroke}
+                  strokeWidth={Math.max(0.9, viewWidth / 210)}
                 />
-                <Circle
-                  cx={robotPt.x}
-                  cy={robotPt.y}
-                  r={r}
-                  fill={mainColor}
-                  stroke="#FFFFFF"
-                  strokeWidth={Math.max(1.2, r * 0.28)}
+                {/* Thân robot AMR màu trắng công nghiệp */}
+                <Rect
+                  x={-chassisLen / 2}
+                  y={-chassisWid / 2}
+                  width={chassisLen}
+                  height={chassisWid}
+                  rx={chassisWid * 0.2}
+                  fill="#FFFFFF"
+                  stroke="#0F172A"
+                  strokeWidth={Math.max(0.7, viewWidth / 260)}
                 />
-                <Path
-                  d={arrowPath}
-                  fill={arrowColor}
-                  stroke="#FFFFFF"
-                  strokeWidth={Math.max(0.7, r * 0.14)}
+                {/* Đèn LED trạng thái mũi xe (Xanh lục chuẩn OTTO) */}
+                <Rect
+                  x={chassisLen * 0.18}
+                  y={-chassisWid * 0.32}
+                  width={chassisLen * 0.22}
+                  height={chassisWid * 0.64}
+                  rx={chassisWid * 0.12}
+                  fill={frontLedColor}
+                />
+                {/* Đèn hậu đỏ ở đuôi xe */}
+                <Rect
+                  x={-chassisLen * 0.44}
+                  y={-chassisWid * 0.34}
+                  width={chassisLen * 0.1}
+                  height={chassisWid * 0.2}
+                  rx={0.6}
+                  fill="#EF4444"
                 />
                 <Rect
-                  x={robotPt.x - tagWidth / 2}
-                  y={robotPt.y + r + 2}
-                  width={tagWidth}
-                  height={tagHeight}
-                  rx={tagHeight / 2}
-                  fill={isPoseLive ? '#0369A1' : '#475569'}
+                  x={-chassisLen * 0.44}
+                  y={chassisWid * 0.14}
+                  width={chassisLen * 0.1}
+                  height={chassisWid * 0.2}
+                  rx={0.6}
+                  fill="#EF4444"
                 />
-                <SvgText
-                  x={robotPt.x}
-                  y={robotPt.y + r + 2 + tagHeight - fontSize * 0.26}
-                  textAnchor="middle"
-                  fontSize={fontSize}
-                  fontWeight="800"
-                  fill="#FFFFFF"
-                >
-                  {tagText}
-                </SvgText>
               </G>
             );
           })()}
         </Svg>
+
+        {/* HUD 1 (Góc dưới trái): Hệ trục tọa độ 0°/90° & Tọa độ mét chuẩn OTTO Fleet Manager */}
+        <View style={styles.ottoAxisHud} pointerEvents="none">
+          <Svg width={28} height={28} viewBox="0 0 28 28">
+            <Line x1="14" y1="23" x2="14" y2="5" stroke="#94A3B8" strokeWidth="1.2" />
+            <Polygon points="14,3 11.8,7 16.2,7" fill="#E2E8F0" />
+            <Line x1="5" y1="14" x2="23" y2="14" stroke="#94A3B8" strokeWidth="1.2" />
+            <Polygon points="25,14 21,11.8 21,16.2" fill="#E2E8F0" />
+            <Circle cx="14" cy="14" r="1.8" fill="#38BDF8" />
+            <SvgText x="14" y="2.8" fontSize="4.2" fill="#CBD5E1" textAnchor="middle">
+              0°
+            </SvgText>
+          </Svg>
+          <View style={styles.ottoAxisTextCol}>
+            <Text style={styles.ottoAxisCoordText}>
+              x: {validRobotPose ? `${validRobotPose.xM.toFixed(2)} m` : '-- m'}
+            </Text>
+            <Text style={styles.ottoAxisCoordText}>
+              y: {validRobotPose ? `${validRobotPose.yM.toFixed(2)} m` : '-- m'}
+            </Text>
+          </View>
+        </View>
+
+        {/* HUD 2 (Chính giữa dưới): Nhãn khóa phiên bản Live Map chuẩn OTTO Fleet Manager */}
+        <View style={styles.ottoLivePillWrap} pointerEvents="none">
+          <View style={styles.ottoLivePill}>
+            <View style={styles.ottoLiveLockIcon}>
+              <Lock size={9} color="#052E16" strokeWidth={2.8} />
+            </View>
+            <Text style={styles.ottoLivePillText} numberOfLines={1}>
+              Live {'>'} v{map.versionNo || 1}: {map.mapName || 'final_o_truong'}
+            </Text>
+          </View>
+        </View>
+
+        {/* HUD 3 (Góc trên phải): Nút chuyển chế độ Filter lớp bản đồ */}
+        <TouchableOpacity
+          style={styles.ottoFilterBtn}
+          onPress={cycleFilterMode}
+          activeOpacity={0.8}
+        >
+          <Layers size={12} color="#38BDF8" />
+          <Text style={styles.ottoFilterBtnText}>
+            {filterMode === 'otto_cad'
+              ? 'OTTO CAD'
+              : filterMode === 'otto_dark'
+              ? 'OTTO DARK'
+              : 'RAW MAP'}
+          </Text>
+        </TouchableOpacity>
 
         {isLoadingImage && !imageFailed && (
           <View style={styles.loadingOverlay} pointerEvents="none">
@@ -548,28 +748,34 @@ export const BackendHospitalMap: React.FC<BackendHospitalMapProps> = ({
         )}
       </View>
 
-      {/* Thanh chú thích & trạng thái định vị Robot đồng bộ từ mapping.html */}
+      {/* Thanh chú thích Traffic Control chuẩn OTTO Fleet Manager */}
       <View style={styles.legendBar}>
         <View style={styles.legendRow}>
           <View style={styles.legendItem}>
             <View style={[styles.legendDot, { backgroundColor: '#0284C7' }]} />
-            <Text style={styles.legendLabel}>Giảm tốc</Text>
+            <Text style={styles.legendLabel}>Speed Limit Zone</Text>
           </View>
           <View style={styles.legendItem}>
-            <View style={[styles.legendDot, { backgroundColor: '#DC2626' }]} />
-            <Text style={styles.legendLabel}>Vùng cấm</Text>
+            <View style={[styles.legendDot, { backgroundColor: '#EF4444' }]} />
+            <Text style={styles.legendLabel}>Exclusion Zone</Text>
           </View>
           <View style={styles.legendItem}>
             <View
               style={[
                 styles.legendDot,
-                { backgroundColor: validRobotPose ? (isPoseLive ? '#0879EE' : '#64748B') : '#94A3B8' },
+                {
+                  backgroundColor: validRobotPose
+                    ? isPoseLive
+                      ? '#10B981'
+                      : '#64748B'
+                    : '#94A3B8',
+                },
               ]}
             />
             <Text style={styles.legendLabel}>
               {validRobotPose
-                ? `Robot (${validRobotPose.xM.toFixed(2)}m, ${validRobotPose.yM.toFixed(2)}m · ${Math.round((validRobotPose.yawRad * 180) / Math.PI)}°)`
-                : 'Robot: Chưa có pose trên map này'}
+                ? `AMR (${validRobotPose.xM.toFixed(2)}m, ${validRobotPose.yM.toFixed(2)}m · ${Math.round((validRobotPose.yawRad * 180) / Math.PI)}°)`
+                : 'AMR: Chờ định vị AMCL'}
             </Text>
           </View>
         </View>
@@ -581,14 +787,15 @@ export const BackendHospitalMap: React.FC<BackendHospitalMapProps> = ({
 const styles = StyleSheet.create({
   outerWrapper: {
     width: '100%',
-    backgroundColor: '#FFFFFF',
+    backgroundColor: '#0F172A',
     overflow: 'hidden',
   },
   canvasContainer: {
     width: '100%',
     position: 'relative',
     overflow: 'hidden',
-    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#1E293B',
   },
   rotatedMapImage: {
     position: 'absolute',
@@ -602,6 +809,12 @@ const styles = StyleSheet.create({
     width: '100%',
     height: '100%',
   },
+  ottoCadTint: {
+    backgroundColor: 'rgba(14, 116, 144, 0.07)',
+  },
+  ottoDarkTint: {
+    backgroundColor: 'rgba(15, 23, 42, 0.24)',
+  },
   gridBackground: {
     position: 'absolute',
     top: 0,
@@ -609,6 +822,80 @@ const styles = StyleSheet.create({
     bottom: 0,
     left: 0,
     backgroundColor: '#FFFFFF',
+  },
+  ottoAxisHud: {
+    position: 'absolute',
+    left: 8,
+    bottom: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 7,
+    paddingVertical: 5,
+    borderRadius: 6,
+    backgroundColor: 'rgba(15, 23, 42, 0.88)',
+    borderWidth: 1,
+    borderColor: 'rgba(148, 163, 184, 0.28)',
+  },
+  ottoAxisTextCol: {
+    justifyContent: 'center',
+  },
+  ottoAxisCoordText: {
+    color: '#E2E8F0',
+    fontSize: 9,
+    fontWeight: '700',
+    fontVariant: ['tabular-nums'],
+  },
+  ottoLivePillWrap: {
+    position: 'absolute',
+    bottom: 8,
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+  },
+  ottoLivePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+    borderRadius: 999,
+    backgroundColor: 'rgba(15, 23, 42, 0.90)',
+    borderWidth: 1.2,
+    borderColor: '#10B981',
+  },
+  ottoLiveLockIcon: {
+    width: 15,
+    height: 15,
+    borderRadius: 7.5,
+    backgroundColor: '#10B981',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  ottoLivePillText: {
+    color: '#F8FAFC',
+    fontSize: 9.5,
+    fontWeight: '700',
+  },
+  ottoFilterBtn: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 4.5,
+    borderRadius: 7,
+    backgroundColor: 'rgba(15, 23, 42, 0.86)',
+    borderWidth: 1,
+    borderColor: 'rgba(56, 189, 248, 0.35)',
+  },
+  ottoFilterBtnText: {
+    color: '#E0F2FE',
+    fontSize: 9.5,
+    fontWeight: '800',
+    letterSpacing: 0.3,
   },
   loadingOverlay: {
     position: 'absolute',
@@ -630,7 +917,7 @@ const styles = StyleSheet.create({
     position: 'absolute',
     left: 8,
     right: 8,
-    bottom: 8,
+    bottom: 38,
     paddingHorizontal: 8,
     paddingVertical: 5,
     borderRadius: 7,
@@ -641,20 +928,6 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: '700',
     textAlign: 'center',
-  },
-  sourceBadge: {
-    position: 'absolute',
-    top: 6,
-    right: 6,
-    paddingHorizontal: 7,
-    paddingVertical: 3,
-    borderRadius: 6,
-    backgroundColor: 'rgba(15, 23, 42, 0.78)',
-  },
-  sourceText: {
-    color: '#67E8F9',
-    fontSize: 9,
-    fontWeight: '800',
   },
   legendBar: {
     backgroundColor: '#0F172A',
@@ -667,7 +940,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     alignItems: 'center',
-    gap: 10,
+    justifyContent: 'space-between',
+    gap: 8,
   },
   legendItem: {
     flexDirection: 'row',

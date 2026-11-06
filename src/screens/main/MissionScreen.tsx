@@ -94,7 +94,23 @@ export const MissionScreen: React.FC = () => {
           facilityApi.getAllRooms(),
         ]);
         if (!mounted) return;
-        const map = maps.find((item) => item.status === 'ACTIVE') || maps[0] || null;
+        const map =
+          maps.find(
+            (item) =>
+              item.status === 'ACTIVE' &&
+              (item.mapId === 'e571fe71-d3ea-4aa5-a673-ffd857ac9f09' ||
+                (item.mapName || '').toLowerCase().includes('truong') ||
+                (item.mapName || '').toLowerCase().includes('final'))
+          ) ||
+          maps.find((item) => item.mapId === 'e571fe71-d3ea-4aa5-a673-ffd857ac9f09') ||
+          maps.find(
+            (item) =>
+              (item.mapName || '').toLowerCase().includes('truong') ||
+              (item.mapName || '').toLowerCase().includes('final')
+          ) ||
+          maps.find((item) => item.status === 'ACTIVE') ||
+          maps[0] ||
+          null;
         const mapEndpoints = map
           ? endpoints.filter((endpoint) => endpoint.mapId === map.mapId && endpoint.active !== false)
           : [];

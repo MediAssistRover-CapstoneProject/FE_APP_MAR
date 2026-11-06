@@ -613,12 +613,6 @@ export const BackendHospitalMap: React.FC<BackendHospitalMapProps> = ({
             </Text>
           </View>
         )}
-
-        <View style={styles.sourceBadge} pointerEvents="none">
-          <Text style={styles.sourceText}>
-            LIVE BE · {map.mapCode}
-          </Text>
-        </View>
       </View>
 
       {/* Thanh chú thích & trạng thái định vị Robot đồng bộ từ mapping.html */}

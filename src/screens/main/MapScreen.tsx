@@ -340,11 +340,23 @@ export const MapScreen: React.FC = () => {
       ]);
       if (maps.length > 0) {
         setAvailableMaps(maps);
-        setActiveMap((current) =>
-          maps.find((map) => map.mapId === current?.mapId) ||
+        const primaryMap =
+          maps.find(
+            (map) =>
+              map.status === 'ACTIVE' &&
+              (map.mapId === 'e571fe71-d3ea-4aa5-a673-ffd857ac9f09' ||
+                (map.mapName || '').toLowerCase().includes('truong') ||
+                (map.mapName || '').toLowerCase().includes('final'))
+          ) ||
+          maps.find((map) => map.mapId === 'e571fe71-d3ea-4aa5-a673-ffd857ac9f09') ||
+          maps.find(
+            (map) =>
+              (map.mapName || '').toLowerCase().includes('truong') ||
+              (map.mapName || '').toLowerCase().includes('final')
+          ) ||
           maps.find((map) => map.status === 'ACTIVE') ||
-          maps[0]
-        );
+          maps[0];
+        setActiveMap(primaryMap);
       } else {
         setAvailableMaps([]);
         setActiveMap(null);
@@ -662,29 +674,6 @@ export const MapScreen: React.FC = () => {
               {robotData ? `${robotData.robotName} · ${robotData.status}` : 'Chưa có dữ liệu robot từ Backend'}
             </Text>
           </View>
-
-          {activeMap && (
-            <TouchableOpacity
-              style={styles.mapPickerTrigger}
-              onPress={() => setShowMapPicker(true)}
-              activeOpacity={0.8}
-            >
-              <View style={styles.mapPickerTriggerInfo}>
-                <Text style={styles.mapPickerTriggerLabel}>
-                  MAP TỪ BACKEND · {availableMaps.length} MAP
-                </Text>
-                <Text style={styles.mapPickerTriggerName} numberOfLines={1}>
-                  {activeMap.mapName} · {activeMap.mapCode} · v{activeMap.versionNo}
-                </Text>
-                <Text style={styles.mapPickerTriggerId} numberOfLines={1}>
-                  ID: {activeMap.mapId}
-                </Text>
-              </View>
-              <View style={styles.mapPickerChevron}>
-                <ChevronDown size={18} color="#67E8F9" />
-              </View>
-            </TouchableOpacity>
-          )}
 
           {activeMap ? (
             <BackendHospitalMap

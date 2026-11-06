@@ -72,20 +72,26 @@ const getFixedMapRotationDeg = (map: MapResponse): number => {
 };
 
 /**
- * Phép biến đổi góc nhìn (viewTransform) đồng bộ từ mapping.html / map-navigation.js:
- * Xoay toàn bộ khung nhìn quanh tâm ảnh gốc (width/2, height/2) và mở rộng bounding box (w, h)
- * để không bị cắt mất 4 góc bản đồ, đồng thời giữ toàn bộ chữ (tên Endpoint, Zone, Robot) nằm ngang dễ đọc.
+ * Phép biến đổi góc nhìn (viewTransform) kết hợp phóng to (crop sát viền tường sau khi xoay -20°)
+ * để lấp đầy khung hiển thị, loại bỏ các mảng xám/khoảng trống thừa ở 4 góc ảnh SLAM gốc,
+ * đồng thời giữ 100% độ chính xác tọa độ của Endpoint, Zone và Robot.
  */
 const createViewTransform = (width: number, height: number, degrees: number) => {
   const radians = ((Number.isFinite(degrees) ? degrees : 0) * Math.PI) / 180;
   const c = Math.cos(radians);
   const s = Math.sin(radians);
-  const w = Math.abs(c) * width + Math.abs(s) * height;
-  const h = Math.abs(s) * width + Math.abs(c) * height;
+
+  // Khi ảnh SLAM bị nghiêng 20° được xoay thẳng lại, phần diện tích phòng thực tế nằm gọn ở trung tâm
+  // (chiếm khoảng 86% chiều ngang và 74% chiều dọc của ảnh PNG gốc).
+  // Thu nhỏ khung viewBox vào đúng vùng trung tâm này giúp phóng to bản đồ lấp kín khung.
+  const cropScaleX = degrees !== 0 ? 0.86 : 1;
+  const cropScaleY = degrees !== 0 ? 0.74 : 1;
+  const w = Math.max(1, width * cropScaleX);
+  const h = Math.max(1, height * cropScaleY);
 
   return {
-    width: Math.max(1, w),
-    height: Math.max(1, h),
+    width: w,
+    height: h,
     radians,
     degrees,
     forward(u: number, v: number) {
@@ -241,7 +247,7 @@ export const BackendHospitalMap: React.FC<BackendHospitalMapProps> = ({
     const view = createViewTransform(pixelWidth, pixelHeight, fixedRotationDeg);
 
     // Công thức mapToPixel khớp 100% với map-navigation.js trên mapping.html,
-    // sau đó qua view.forward(u, v) để xoay cố định -20°
+    // sau đó qua view.forward(u, v) để xoay cố định -20° và phóng to lấp đầy khung
     const toViewPixel = (point: MapPoint) => {
       const dx = point.x - originX;
       const dy = point.y - originY;
@@ -388,7 +394,7 @@ export const BackendHospitalMap: React.FC<BackendHospitalMapProps> = ({
               : 'rgba(14, 165, 233, 0.18)';
             const strokeColor = isKeepOut ? '#DC2626' : '#0284C7';
             const textColor = isKeepOut ? '#991B1B' : '#075985';
-            const zoneFontSize = Math.max(6.5, viewWidth / 34);
+            const zoneFontSize = Math.max(5.5, viewWidth / 32);
 
             return (
               <G
@@ -399,7 +405,7 @@ export const BackendHospitalMap: React.FC<BackendHospitalMapProps> = ({
                   points={pointsText}
                   fill={fillColor}
                   stroke={strokeColor}
-                  strokeWidth={Math.max(1.4, viewWidth / 190)}
+                  strokeWidth={Math.max(1.2, viewWidth / 175)}
                 />
                 <SvgText
                   x={labelX}
@@ -426,8 +432,8 @@ export const BackendHospitalMap: React.FC<BackendHospitalMapProps> = ({
                 .join(' ')}
               fill="none"
               stroke="#2563EB"
-              strokeWidth={Math.max(1.8, viewWidth / 140)}
-              strokeDasharray="5,3"
+              strokeWidth={Math.max(1.5, viewWidth / 130)}
+              strokeDasharray="4,2.5"
               strokeLinecap="round"
               strokeLinejoin="round"
             />
@@ -440,18 +446,18 @@ export const BackendHospitalMap: React.FC<BackendHospitalMapProps> = ({
               y: Number(endpoint.yM),
             });
             const selected = selectedEndpointId === endpoint.endpointId;
-            const radius = Math.max(4.2, viewWidth / 52);
+            const radius = Math.max(3.6, viewWidth / 48);
             const r = selected ? radius * 1.28 : radius;
             const headingRad = geometry.toViewHeadingRad(Number(endpoint.yawRad) || 0);
             const tipX = point.x + Math.cos(headingRad) * (r * 1.75);
             const tipY = point.y + Math.sin(headingRad) * (r * 1.75);
 
             const label = (endpoint.endpointName || endpoint.endpointCode || '').trim();
-            const fontSize = Math.max(5.8, viewWidth / 40);
-            const badgeWidth = Math.max(label.length * fontSize * 0.58 + 6, 18);
-            const badgeHeight = fontSize + 4;
+            const fontSize = Math.max(5.0, viewWidth / 38);
+            const badgeWidth = Math.max(label.length * fontSize * 0.56 + 5, 16);
+            const badgeHeight = fontSize + 3.2;
             const badgeX = point.x - badgeWidth / 2;
-            const badgeY = point.y - r - badgeHeight - 2.5;
+            const badgeY = point.y - r - badgeHeight - 2;
 
             const fillColor = selected ? '#F97316' : '#2563EB';
 
@@ -474,7 +480,7 @@ export const BackendHospitalMap: React.FC<BackendHospitalMapProps> = ({
                   x2={tipX}
                   y2={tipY}
                   stroke={fillColor}
-                  strokeWidth={Math.max(1.5, r * 0.42)}
+                  strokeWidth={Math.max(1.3, r * 0.4)}
                   strokeLinecap="round"
                 />
 
@@ -485,7 +491,7 @@ export const BackendHospitalMap: React.FC<BackendHospitalMapProps> = ({
                   r={r}
                   fill={fillColor}
                   stroke="#FFFFFF"
-                  strokeWidth={Math.max(1.3, r * 0.32)}
+                  strokeWidth={Math.max(1.1, r * 0.3)}
                 />
                 <Circle
                   cx={point.x}
@@ -528,7 +534,7 @@ export const BackendHospitalMap: React.FC<BackendHospitalMapProps> = ({
               y: validRobotPose.yM,
             });
             const headingRad = geometry.toViewHeadingRad(validRobotPose.yawRad);
-            const r = Math.max(5.5, viewWidth / 40);
+            const r = Math.max(4.8, viewWidth / 36);
             const cosH = Math.cos(headingRad);
             const sinH = Math.sin(headingRad);
 
@@ -543,10 +549,10 @@ export const BackendHospitalMap: React.FC<BackendHospitalMapProps> = ({
 
             const mainColor = isPoseLive ? '#0879EE' : '#64748B';
             const arrowColor = isPoseLive ? '#FF7900' : '#94A3B8';
-            const fontSize = Math.max(6, viewWidth / 38);
+            const fontSize = Math.max(5.2, viewWidth / 36);
             const tagText = isPoseLive ? 'ROBOT LIVE' : 'ROBOT (CUỐI)';
-            const tagWidth = tagText.length * fontSize * 0.6 + 8;
-            const tagHeight = fontSize + 4.5;
+            const tagWidth = tagText.length * fontSize * 0.58 + 7;
+            const tagHeight = fontSize + 3.6;
 
             return (
               <G>
@@ -562,17 +568,17 @@ export const BackendHospitalMap: React.FC<BackendHospitalMapProps> = ({
                   r={r}
                   fill={mainColor}
                   stroke="#FFFFFF"
-                  strokeWidth={Math.max(1.5, r * 0.28)}
+                  strokeWidth={Math.max(1.2, r * 0.28)}
                 />
                 <Path
                   d={arrowPath}
                   fill={arrowColor}
                   stroke="#FFFFFF"
-                  strokeWidth={Math.max(0.8, r * 0.14)}
+                  strokeWidth={Math.max(0.7, r * 0.14)}
                 />
                 <Rect
                   x={robotPt.x - tagWidth / 2}
-                  y={robotPt.y + r + 2.5}
+                  y={robotPt.y + r + 2}
                   width={tagWidth}
                   height={tagHeight}
                   rx={tagHeight / 2}
@@ -580,7 +586,7 @@ export const BackendHospitalMap: React.FC<BackendHospitalMapProps> = ({
                 />
                 <SvgText
                   x={robotPt.x}
-                  y={robotPt.y + r + 2.5 + tagHeight - fontSize * 0.26}
+                  y={robotPt.y + r + 2 + tagHeight - fontSize * 0.26}
                   textAnchor="middle"
                   fontSize={fontSize}
                   fontWeight="800"
@@ -610,8 +616,7 @@ export const BackendHospitalMap: React.FC<BackendHospitalMapProps> = ({
 
         <View style={styles.sourceBadge} pointerEvents="none">
           <Text style={styles.sourceText}>
-            LIVE BE · {map.mapCode} ({Math.round(geometry.pixelWidth)}x
-            {Math.round(geometry.pixelHeight)}px)
+            LIVE BE · {map.mapCode}
           </Text>
         </View>
       </View>
@@ -653,14 +658,14 @@ export const BackendHospitalMap: React.FC<BackendHospitalMapProps> = ({
 const styles = StyleSheet.create({
   outerWrapper: {
     width: '100%',
-    backgroundColor: '#E2E8F0',
+    backgroundColor: '#FFFFFF',
     overflow: 'hidden',
   },
   canvasContainer: {
     width: '100%',
     position: 'relative',
     overflow: 'hidden',
-    backgroundColor: '#E2E8F0',
+    backgroundColor: '#FFFFFF',
   },
   rotatedMapImage: {
     position: 'absolute',
@@ -680,9 +685,7 @@ const styles = StyleSheet.create({
     right: 0,
     bottom: 0,
     left: 0,
-    backgroundColor: '#F8FAFC',
-    borderColor: '#CBD5E1',
-    borderWidth: 1,
+    backgroundColor: '#FFFFFF',
   },
   loadingOverlay: {
     position: 'absolute',
@@ -718,12 +721,12 @@ const styles = StyleSheet.create({
   },
   sourceBadge: {
     position: 'absolute',
-    top: 8,
-    right: 8,
+    top: 6,
+    right: 6,
     paddingHorizontal: 7,
-    paddingVertical: 4,
+    paddingVertical: 3,
     borderRadius: 6,
-    backgroundColor: 'rgba(15, 23, 42, 0.82)',
+    backgroundColor: 'rgba(15, 23, 42, 0.78)',
   },
   sourceText: {
     color: '#67E8F9',

@@ -21,6 +21,11 @@ import Svg, {
 import { Layers, Lock } from 'lucide-react-native';
 import { API_CONFIG } from '../../api/config';
 import { EndpointResponse, MapResponse, ZoneDto } from '../../api/types';
+import {
+  analyzeSlamMapGeometry,
+  decodePngGrayscale,
+  SlamAutoAlignResult,
+} from './slamMapAutoAlign';
 
 export interface MapRobotPose {
   robotId?: string;
@@ -57,55 +62,6 @@ interface MapPoint {
 }
 
 type MapFilterMode = 'otto_cad' | 'otto_dark' | 'raw';
-
-/**
- * Góc xoay cố định (-20 độ) giúp bản đồ SLAM ở trường (final o truong)
- * hiển thị ngay ngắn theo phương ngang/dọc ngay khi vào màn hình mà không cần Staff tự chỉnh.
- */
-const getFixedMapRotationDeg = (map: MapResponse): number => {
-  const name = (map.mapName || '').toLowerCase();
-  const code = (map.mapCode || '').toLowerCase();
-  if (
-    map.mapId === 'e571fe71-d3ea-4aa5-a673-ffd857ac9f09' ||
-    name.includes('final') ||
-    name.includes('truong') ||
-    code.includes('c91abd2e7ba64992a843d5bcb5e40540')
-  ) {
-    return -20;
-  }
-  return -20;
-};
-
-/**
- * Phép biến đổi góc nhìn (viewTransform) kết hợp phóng to (crop sát viền tường sau khi xoay -20°)
- * để lấp đầy khung hiển thị, loại bỏ các mảng xám/khoảng trống thừa ở 4 góc ảnh SLAM gốc,
- * đồng thời giữ 100% độ chính xác tọa độ của Endpoint, Zone và Robot.
- */
-const createViewTransform = (width: number, height: number, degrees: number) => {
-  const radians = ((Number.isFinite(degrees) ? degrees : 0) * Math.PI) / 180;
-  const c = Math.cos(radians);
-  const s = Math.sin(radians);
-
-  const cropScaleX = degrees !== 0 ? 0.86 : 1;
-  const cropScaleY = degrees !== 0 ? 0.74 : 1;
-  const w = Math.max(1, width * cropScaleX);
-  const h = Math.max(1, height * cropScaleY);
-
-  return {
-    width: w,
-    height: h,
-    radians,
-    degrees,
-    forward(u: number, v: number) {
-      const x = u - width / 2;
-      const y = v - height / 2;
-      return {
-        u: c * x - s * y + w / 2,
-        v: s * x + c * y + h / 2,
-      };
-    },
-  };
-};
 
 const readPoint = (value: any): MapPoint | null => {
   if (Array.isArray(value) && value.length >= 2) {
@@ -159,123 +115,59 @@ export const BackendHospitalMap: React.FC<BackendHospitalMapProps> = ({
   const [isLoadingImage, setIsLoadingImage] = useState(true);
   const [imageFailed, setImageFailed] = useState(false);
   const [naturalSize, setNaturalSize] = useState<{ width: number; height: number } | null>(null);
+  const [autoAlign, setAutoAlign] = useState<SlamAutoAlignResult | null>(null);
   const [filterMode, setFilterMode] = useState<MapFilterMode>('otto_cad');
 
   const imageUrl = `${API_CONFIG.BASE_URL}/maps/${map.mapId}/image.png`;
-  const fixedRotationDeg = useMemo(() => getFixedMapRotationDeg(map), [map]);
 
   useEffect(() => {
+    let cancelled = false;
     setIsLoadingImage(true);
     setImageFailed(false);
     setNaturalSize(null);
+    setAutoAlign(null);
 
-    if (imageUrl && typeof Image.getSizeWithHeaders === 'function') {
-      Image.getSizeWithHeaders(
-        imageUrl,
-        token ? { Authorization: `Bearer ${token}` } : {},
-        (width, height) => {
-          if (width > 0 && height > 0) {
-            setNaturalSize({ width, height });
-          }
-        },
-        () => {
-          // Fallback to metadata or onLoad
+    // Tải trực tiếp binary PNG từ Backend để tự động nhận diện góc nghiêng của tường (Wall Alignment)
+    // và tìm khung chữ nhật bao quanh viền tường (Tight Bounding Box) cho bất kỳ map mới nào quét từ Raspi.
+    const analyzeMapBinary = async () => {
+      try {
+        const res = await fetch(imageUrl, {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        });
+        if (!res.ok) return;
+        const buffer = await res.arrayBuffer();
+        if (cancelled) return;
+        const decoded = decodePngGrayscale(new Uint8Array(buffer));
+        if (!decoded || cancelled) return;
+
+        setNaturalSize({ width: decoded.width, height: decoded.height });
+        const aligned = analyzeSlamMapGeometry(decoded.width, decoded.height, decoded.gray);
+        if (!cancelled) {
+          setAutoAlign(aligned);
         }
-      );
-    }
+      } catch {
+        // Fallback sang Image.getSizeWithHeaders nếu không đọc được binary
+        if (!cancelled && imageUrl && typeof Image.getSizeWithHeaders === 'function') {
+          Image.getSizeWithHeaders(
+            imageUrl,
+            token ? { Authorization: `Bearer ${token}` } : {},
+            (width, height) => {
+              if (!cancelled && width > 0 && height > 0) {
+                setNaturalSize({ width, height });
+              }
+            },
+            () => {}
+          );
+        }
+      }
+    };
+
+    analyzeMapBinary();
+
+    return () => {
+      cancelled = true;
+    };
   }, [imageUrl, map.mapId, token]);
-
-  const geometry = useMemo(() => {
-    const resolution = Math.max(
-      Number(
-        metadata?.resolution ??
-          metadata?.resolution_m_per_pixel ??
-          metadata?.resolutionMPerPixel ??
-          map.resolutionMPerPixel
-      ) || 0.05,
-      0.000001
-    );
-
-    const metaWidthPx = Number(
-      metadata?.width_px ?? metadata?.widthPx ?? metadata?.imageWidthPx ?? metadata?.width
-    );
-    const metaHeightPx = Number(
-      metadata?.height_px ?? metadata?.heightPx ?? metadata?.imageHeightPx ?? metadata?.height
-    );
-
-    const pixelWidth = Math.max(
-      1,
-      (metaWidthPx > 0 ? metaWidthPx : 0) ||
-        (naturalSize?.width && naturalSize.width > 0 ? naturalSize.width : 0) ||
-        (Number(map.widthM) > 0 ? Number(map.widthM) / resolution : 1)
-    );
-    const pixelHeight = Math.max(
-      1,
-      (metaHeightPx > 0 ? metaHeightPx : 0) ||
-        (naturalSize?.height && naturalSize.height > 0 ? naturalSize.height : 0) ||
-        (Number(map.heightM) > 0 ? Number(map.heightM) / resolution : 1)
-    );
-
-    const origin = Array.isArray(metadata?.origin) ? metadata.origin : [];
-    const originX =
-      Number(
-        metadata?.origin_x_m ??
-          metadata?.originXM ??
-          metadata?.originX ??
-          origin[0] ??
-          map.originXM
-      ) || 0;
-    const originY =
-      Number(
-        metadata?.origin_y_m ??
-          metadata?.originYM ??
-          metadata?.originY ??
-          origin[1] ??
-          map.originYM
-      ) || 0;
-    const originYaw =
-      Number(
-        metadata?.origin_yaw_rad ??
-          metadata?.originYawRad ??
-          metadata?.originYaw ??
-          metadata?.yaw ??
-          origin[2] ??
-          map.originYawRad
-      ) || 0;
-    const cos = Math.cos(originYaw);
-    const sin = Math.sin(originYaw);
-
-    const view = createViewTransform(pixelWidth, pixelHeight, fixedRotationDeg);
-
-    const toViewPixel = (point: MapPoint) => {
-      const dx = point.x - originX;
-      const dy = point.y - originY;
-      const u = (cos * dx + sin * dy) / resolution;
-      const v = pixelHeight - (-sin * dx + cos * dy) / resolution;
-      const rotated = view.forward(u, v);
-      return {
-        x: rotated.u,
-        y: rotated.v,
-        rawU: u,
-        rawV: v,
-      };
-    };
-
-    const toViewHeadingRad = (yawRad: number) => {
-      const safeYaw = Number.isFinite(yawRad) ? yawRad : 0;
-      return -(safeYaw - originYaw) + view.radians;
-    };
-
-    return {
-      pixelWidth,
-      pixelHeight,
-      resolution,
-      originYaw,
-      view,
-      toViewPixel,
-      toViewHeadingRad,
-    };
-  }, [fixedRotationDeg, map, metadata, naturalSize]);
 
   const visibleEndpoints = useMemo(
     () =>
@@ -320,20 +212,174 @@ export const BackendHospitalMap: React.FC<BackendHospitalMapProps> = ({
     };
   }, [map.mapId, robotPose]);
 
+  const geometry = useMemo(() => {
+    const resolution = Math.max(
+      Number(
+        metadata?.resolution ??
+          metadata?.resolution_m_per_pixel ??
+          metadata?.resolutionMPerPixel ??
+          map.resolutionMPerPixel
+      ) || 0.05,
+      0.000001
+    );
+
+    const metaWidthPx = Number(
+      metadata?.width_px ?? metadata?.widthPx ?? metadata?.imageWidthPx ?? metadata?.width
+    );
+    const metaHeightPx = Number(
+      metadata?.height_px ?? metadata?.heightPx ?? metadata?.imageHeightPx ?? metadata?.height
+    );
+
+    const pixelWidth = Math.max(
+      1,
+      (autoAlign?.width && autoAlign.width > 0 ? autoAlign.width : 0) ||
+        (metaWidthPx > 0 ? metaWidthPx : 0) ||
+        (naturalSize?.width && naturalSize.width > 0 ? naturalSize.width : 0) ||
+        (Number(map.widthM) > 0 ? Number(map.widthM) / resolution : 1)
+    );
+    const pixelHeight = Math.max(
+      1,
+      (autoAlign?.height && autoAlign.height > 0 ? autoAlign.height : 0) ||
+        (metaHeightPx > 0 ? metaHeightPx : 0) ||
+        (naturalSize?.height && naturalSize.height > 0 ? naturalSize.height : 0) ||
+        (Number(map.heightM) > 0 ? Number(map.heightM) / resolution : 1)
+    );
+
+    const origin = Array.isArray(metadata?.origin) ? metadata.origin : [];
+    const originX =
+      Number(
+        metadata?.origin_x_m ??
+          metadata?.originXM ??
+          metadata?.originX ??
+          origin[0] ??
+          map.originXM
+      ) || 0;
+    const originY =
+      Number(
+        metadata?.origin_y_m ??
+          metadata?.originYM ??
+          metadata?.originY ??
+          origin[1] ??
+          map.originYM
+      ) || 0;
+    const originYaw =
+      Number(
+        metadata?.origin_yaw_rad ??
+          metadata?.originYawRad ??
+          metadata?.originYaw ??
+          metadata?.yaw ??
+          origin[2] ??
+          map.originYawRad
+      ) || 0;
+    const cosO = Math.cos(originYaw);
+    const sinO = Math.sin(originYaw);
+
+    // Góc xoay tự động từ bộ nhận diện viền tường SLAM (fallback -20° khi đang tải ảnh)
+    const rotationDeg = autoAlign ? autoAlign.rotationDeg : -20;
+    const rotationRad = (rotationDeg * Math.PI) / 180;
+    const cosR = Math.cos(rotationRad);
+    const sinR = Math.sin(rotationRad);
+
+    // Quy đổi tọa độ mét (xM, yM) sang tọa độ xoay quanh tâm ảnh (pixelWidth/2, pixelHeight/2)
+    const worldToRotatedCenter = (point: MapPoint) => {
+      const dx = point.x - originX;
+      const dy = point.y - originY;
+      const u = (cosO * dx + sinO * dy) / resolution;
+      const v = pixelHeight - (-sinO * dx + cosO * dy) / resolution;
+      const relU = u - pixelWidth / 2;
+      const relV = v - pixelHeight / 2;
+      return {
+        rx: cosR * relU - sinR * relV,
+        ry: sinR * relU + cosR * relV,
+        rawU: u,
+        rawV: v,
+      };
+    };
+
+    // Khung bao từ thuật toán nhận diện viền tường SLAM
+    let xMin = autoAlign ? autoAlign.xMin : -pixelWidth * 0.45;
+    let xMax = autoAlign ? autoAlign.xMax : pixelWidth * 0.45;
+    let yMin = autoAlign ? autoAlign.yMin : -pixelHeight * 0.42;
+    let yMax = autoAlign ? autoAlign.yMax : pixelHeight * 0.42;
+
+    // Đảm bảo mọi Zone, Endpoint và vị trí Robot trên map cũng nằm trọn trong khung nhìn
+    const expandWithPoint = (pt: MapPoint) => {
+      const { rx, ry } = worldToRotatedCenter(pt);
+      const margin = 6;
+      if (rx - margin < xMin) xMin = rx - margin;
+      if (rx + margin > xMax) xMax = rx + margin;
+      if (ry - margin < yMin) yMin = ry - margin;
+      if (ry + margin > yMax) yMax = ry + margin;
+    };
+
+    visibleEndpoints.forEach((ep) =>
+      expandWithPoint({ x: Number(ep.xM), y: Number(ep.yM) })
+    );
+    visibleZones.forEach(({ points }) => points.forEach(expandWithPoint));
+    if (validRobotPose) {
+      expandWithPoint({ x: validRobotPose.xM, y: validRobotPose.yM });
+    }
+
+    const viewWidth = Math.max(10, xMax - xMin);
+    const viewHeight = Math.max(10, yMax - yMin);
+
+    const toViewPixel = (point: MapPoint) => {
+      const { rx, ry, rawU, rawV } = worldToRotatedCenter(point);
+      return {
+        x: rx - xMin,
+        y: ry - yMin,
+        rawU,
+        rawV,
+      };
+    };
+
+    const toViewHeadingRad = (yawRad: number) => {
+      const safeYaw = Number.isFinite(yawRad) ? yawRad : 0;
+      return -(safeYaw - originYaw) + rotationRad;
+    };
+
+    return {
+      pixelWidth,
+      pixelHeight,
+      resolution,
+      originYaw,
+      rotationDeg,
+      rotationRad,
+      xMin,
+      xMax,
+      yMin,
+      yMax,
+      viewWidth,
+      viewHeight,
+      toViewPixel,
+      toViewHeadingRad,
+    };
+  }, [
+    autoAlign,
+    map,
+    metadata,
+    naturalSize,
+    validRobotPose,
+    visibleEndpoints,
+    visibleZones,
+  ]);
+
   const cycleFilterMode = () => {
     setFilterMode((prev) =>
       prev === 'otto_cad' ? 'otto_dark' : prev === 'otto_dark' ? 'raw' : 'otto_cad'
     );
   };
 
-  const viewWidth = geometry.view.width;
-  const viewHeight = geometry.view.height;
+  const viewWidth = geometry.viewWidth;
+  const viewHeight = geometry.viewHeight;
   const aspectRatio = viewWidth / viewHeight;
 
+  // Đặt tâm của ảnh PNG gốc tại đúng tọa độ (-xMin, -yMin) trong hệ quy chiếu [0..viewWidth, 0..viewHeight]
+  // để dù Robot bắt đầu quét SLAM ở góc phòng hay giữa phòng thì bản đồ vẫn luôn căn giữa và hiện đủ 4 viền tường!
   const imageWidthPct = (geometry.pixelWidth / viewWidth) * 100;
   const imageHeightPct = (geometry.pixelHeight / viewHeight) * 100;
-  const imageLeftPct = ((viewWidth - geometry.pixelWidth) / (2 * viewWidth)) * 100;
-  const imageTopPct = ((viewHeight - geometry.pixelHeight) / (2 * viewHeight)) * 100;
+  const imageLeftPct = ((-geometry.xMin - geometry.pixelWidth / 2) / viewWidth) * 100;
+  const imageTopPct = ((-geometry.yMin - geometry.pixelHeight / 2) / viewHeight) * 100;
 
   // Bước lưới 1 mét chuẩn CAD (quy đổi sang đơn vị viewBox)
   const gridStepPx = Math.max(12, 1 / geometry.resolution);
@@ -345,7 +391,7 @@ export const BackendHospitalMap: React.FC<BackendHospitalMapProps> = ({
           styles.canvasContainer,
           {
             aspectRatio,
-            backgroundColor: filterMode === 'otto_dark' ? '#1E242B' : '#F1F5F9',
+            backgroundColor: filterMode === 'otto_dark' ? '#1E242B' : '#CDCDCD',
           },
         ]}
       >
@@ -366,15 +412,15 @@ export const BackendHospitalMap: React.FC<BackendHospitalMapProps> = ({
                 height: `${imageHeightPct}%`,
                 left: `${imageLeftPct}%`,
                 top: `${imageTopPct}%`,
-                opacity: filterMode === 'otto_dark' ? 0.88 : 0.96,
-                transform: [{ rotate: `${geometry.view.degrees}deg` }],
+                opacity: filterMode === 'otto_dark' ? 0.88 : 0.98,
+                transform: [{ rotate: `${geometry.rotationDeg}deg` }],
               },
             ]}
             onLoadStart={() => setIsLoadingImage(true)}
             onLoad={(event) => {
               const src = event.nativeEvent?.source;
               if (src?.width && src?.height) {
-                setNaturalSize({ width: src.width, height: src.height });
+                setNaturalSize((prev) => prev || { width: src.width, height: src.height });
               }
               setIsLoadingImage(false);
             }}
@@ -515,14 +561,12 @@ export const BackendHospitalMap: React.FC<BackendHospitalMapProps> = ({
                 key={zone.zoneId}
                 onPress={zoneEndpoint ? () => onSelectEndpoint(zoneEndpoint) : undefined}
               >
-                {/* Lớp nền sọc kỹ thuật OTTO */}
                 <Polygon
                   points={pointsText}
                   fill={isKeepOut ? 'url(#ottoHazardStripe)' : 'url(#ottoSpeedPattern)'}
                   stroke={strokeColor}
                   strokeWidth={Math.max(1.3, viewWidth / 165)}
                 />
-                {/* Đường viền nét đứt kỹ thuật chuẩn OTTO Traffic Control */}
                 <Polygon
                   points={pointsText}
                   fill="none"
@@ -530,7 +574,6 @@ export const BackendHospitalMap: React.FC<BackendHospitalMapProps> = ({
                   strokeWidth={Math.max(0.7, viewWidth / 280)}
                   strokeDasharray="3,2"
                 />
-                {/* Nhãn Pill chuyên nghiệp giữa vùng Zone */}
                 <Rect
                   x={labelX - badgeW / 2}
                   y={labelY - badgeH / 2}
@@ -585,7 +628,7 @@ export const BackendHospitalMap: React.FC<BackendHospitalMapProps> = ({
             );
           })()}
 
-          {/* 3. Vùng chạm ẩn của các điểm dừng (Endpoints) — giữ tương tác điều phối khi nhấn vào phòng */}
+          {/* 3. Vùng chạm ẩn của các điểm dừng (Endpoints) */}
           {visibleEndpoints.map((endpoint) => {
             const point = geometry.toViewPixel({
               x: Number(endpoint.xM),
@@ -629,7 +672,6 @@ export const BackendHospitalMap: React.FC<BackendHospitalMapProps> = ({
               <G
                 transform={`translate(${robotPt.x}, ${robotPt.y}) rotate(${headingDeg})`}
               >
-                {/* Vùng đệm an toàn LiDAR (Blue Safety Field chuẩn OTTO) */}
                 <Rect
                   x={-safetyLen / 2}
                   y={-safetyWid / 2}
@@ -640,7 +682,6 @@ export const BackendHospitalMap: React.FC<BackendHospitalMapProps> = ({
                   stroke={safetyStroke}
                   strokeWidth={Math.max(0.9, viewWidth / 210)}
                 />
-                {/* Thân robot AMR màu trắng công nghiệp */}
                 <Rect
                   x={-chassisLen / 2}
                   y={-chassisWid / 2}
@@ -651,7 +692,6 @@ export const BackendHospitalMap: React.FC<BackendHospitalMapProps> = ({
                   stroke="#0F172A"
                   strokeWidth={Math.max(0.7, viewWidth / 260)}
                 />
-                {/* Đèn LED trạng thái mũi xe (Xanh lục chuẩn OTTO) */}
                 <Rect
                   x={chassisLen * 0.18}
                   y={-chassisWid * 0.32}
@@ -660,7 +700,6 @@ export const BackendHospitalMap: React.FC<BackendHospitalMapProps> = ({
                   rx={chassisWid * 0.12}
                   fill={frontLedColor}
                 />
-                {/* Đèn hậu đỏ ở đuôi xe */}
                 <Rect
                   x={-chassisLen * 0.44}
                   y={-chassisWid * 0.34}
@@ -735,7 +774,7 @@ export const BackendHospitalMap: React.FC<BackendHospitalMapProps> = ({
         {isLoadingImage && !imageFailed && (
           <View style={styles.loadingOverlay} pointerEvents="none">
             <ActivityIndicator size="small" color="#2563EB" />
-            <Text style={styles.loadingText}>Đang tải ảnh map từ BE...</Text>
+            <Text style={styles.loadingText}>Đang tải & căn chỉnh viền map...</Text>
           </View>
         )}
 
@@ -821,7 +860,7 @@ const styles = StyleSheet.create({
     right: 0,
     bottom: 0,
     left: 0,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: '#CDCDCD',
   },
   ottoAxisHud: {
     position: 'absolute',

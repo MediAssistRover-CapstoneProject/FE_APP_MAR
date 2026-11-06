@@ -20,10 +20,13 @@ export const ENDPOINTS = {
     SHIFT_DETAIL: (shiftId: string) => `/staff/shifts/${shiftId}`,
   },
 
-  // 3. Robot & Điều khiển
+  // 3. Robot, Định vị & Điều khiển (Staff Operations)
   ROBOTS: {
     LIST: '/robots',
     DETAIL: (id: string) => `/robots/${id}`,
+    SNAPSHOT: (id: string) => `/robots/${id}/snapshot`,
+    LOCATION_HISTORY: (id: string) => `/robots/${id}/location-history`,
+    STREAM: (id: string) => `/robots/${id}/stream`,
     MAINTENANCE: (id: string) => `/robots/${id}/maintenance`,
     RECONCILE: (id: string) => `/robots/${id}/reconcile`,
   },

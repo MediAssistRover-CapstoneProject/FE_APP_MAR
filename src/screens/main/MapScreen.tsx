@@ -14,7 +14,7 @@ import {
 } from 'react-native';
 import { Colors, Spacing, BorderRadius, Shadows, Typography } from '../../constants/theme';
 import { StaffHeader } from '../../components/common/StaffHeader';
-import { robotApi } from '../../api/modules/robot.api';
+import { robotApi, RobotPoseDto, RobotSnapshotResponse } from '../../api/modules/robot.api';
 import { deliveryApi } from '../../api/modules/delivery.api';
 import { scheduleApi } from '../../api/modules/schedule.api';
 import { facilityApi } from '../../api/modules/facility.api';
@@ -261,26 +261,71 @@ export const MapScreen: React.FC = () => {
   }, []);
 
   const [robotData, setRobotData] = useState<RobotDto | null>(null);
+  const [robotSnapshot, setRobotSnapshot] = useState<RobotSnapshotResponse | null>(null);
+  const [robotPose, setRobotPose] = useState<RobotPoseDto | null>(null);
+  const [isPoseLive, setIsPoseLive] = useState(false);
   const [isLoadingRobot, setIsLoadingRobot] = useState(false);
   const [deliveryRequests, setDeliveryRequests] = useState<DeliveryResponse[]>([]);
   const [isLoadingQueue, setIsLoadingQueue] = useState(false);
+
+  const fetchRobotPoseById = useCallback(async (robotId: string) => {
+    try {
+      const snapshot = await robotApi.getRobotSnapshot(robotId);
+      setRobotSnapshot(snapshot);
+      if (snapshot?.robot) {
+        setRobotData(snapshot.robot);
+      }
+      const pose = snapshot?.latestPose;
+      if (pose && Number.isFinite(Number(pose.xM)) && Number.isFinite(Number(pose.yM))) {
+        setRobotPose(pose);
+        setIsPoseLive(
+          Boolean(snapshot?.mqttConnected && snapshot?.heartbeatFresh && pose.fresh !== false)
+        );
+        return;
+      }
+    } catch {
+      // Fallback sang location-history nếu snapshot chưa khả dụng
+    }
+
+    try {
+      const history = await robotApi.getRobotLocationHistory(robotId, 0, 1);
+      const lastPose = history?.content?.[0];
+      if (lastPose && Number.isFinite(Number(lastPose.xM)) && Number.isFinite(Number(lastPose.yM))) {
+        setRobotPose(lastPose);
+        setIsPoseLive(Boolean(lastPose.fresh));
+      }
+    } catch {
+      // Giữ pose gần nhất
+    }
+  }, []);
 
   const fetchRobot = useCallback(async () => {
     setIsLoadingRobot(true);
     try {
       const robots = await robotApi.getAllRobots();
-      setRobotData(
+      const selected =
         robots.find((robot) => robot.status === 'BUSY')
         || robots.find((robot) => robot.status === 'IDLE')
         || robots[0]
-        || null
-      );
+        || null;
+      setRobotData(selected);
+      if (selected?.robotId) {
+        await fetchRobotPoseById(selected.robotId);
+      }
     } catch (err) {
       console.log('Error fetching robots:', err);
     } finally {
       setIsLoadingRobot(false);
     }
-  }, []);
+  }, [fetchRobotPoseById]);
+
+  useEffect(() => {
+    if (!robotData?.robotId) return;
+    const interval = setInterval(() => {
+      fetchRobotPoseById(robotData.robotId);
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [robotData?.robotId, fetchRobotPoseById]);
 
   const fetchFacilityData = useCallback(async () => {
     setIsLoadingFacility(true);
@@ -650,6 +695,9 @@ export const MapScreen: React.FC = () => {
               token={authToken}
               selectedEndpointId={selectedEndpointId}
               onSelectEndpoint={handleSelectBackendEndpoint}
+              robotPose={robotPose}
+              isPoseLive={isPoseLive}
+              plannedPath={robotSnapshot?.navigationPlan?.points || null}
             />
           ) : isLoadingFacility ? (
             <View style={styles.backendMapState}>
@@ -727,7 +775,9 @@ export const MapScreen: React.FC = () => {
                 >
                   <Text style={styles.infoCardLabel}>TỌA ĐỘ NAV2</Text>
                   <Text style={[styles.infoCardValue, { color: Colors.primary }]} numberOfLines={1}>
-                    X: 2.05 | Y: 1.50
+                    {robotPose
+                      ? `X: ${Number(robotPose.xM).toFixed(2)} | Y: ${Number(robotPose.yM).toFixed(2)}`
+                      : 'Chưa định vị'}
                   </Text>
                 </TouchableOpacity>
 
@@ -1483,15 +1533,21 @@ export const MapScreen: React.FC = () => {
                 <View style={styles.coordsRow}>
                   <View style={styles.coordBox}>
                     <Text style={styles.coordLabel}>TRỤC X</Text>
-                    <Text style={styles.coordVal}>2.050 m</Text>
+                    <Text style={styles.coordVal}>
+                      {robotPose ? `${Number(robotPose.xM).toFixed(3)} m` : '-- m'}
+                    </Text>
                   </View>
                   <View style={styles.coordBox}>
                     <Text style={styles.coordLabel}>TRỤC Y</Text>
-                    <Text style={styles.coordVal}>1.500 m</Text>
+                    <Text style={styles.coordVal}>
+                      {robotPose ? `${Number(robotPose.yM).toFixed(3)} m` : '-- m'}
+                    </Text>
                   </View>
                   <View style={styles.coordBox}>
                     <Text style={styles.coordLabel}>GÓC YAW</Text>
-                    <Text style={styles.coordVal}>0.000 rad</Text>
+                    <Text style={styles.coordVal}>
+                      {robotPose ? `${Number(robotPose.yawRad || 0).toFixed(3)} rad` : '-- rad'}
+                    </Text>
                   </View>
                 </View>
               </View>
@@ -1604,6 +1660,9 @@ export const MapScreen: React.FC = () => {
         zones={backendZones}
         token={authToken}
         activeJob={activeRobotJob}
+        robotPose={robotPose}
+        isPoseLive={isPoseLive}
+        plannedPath={robotSnapshot?.navigationPlan?.points || null}
       />
     </View>
   );

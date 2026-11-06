@@ -11,7 +11,7 @@ import {
 import { Bot, LogOut, Map as MapIcon, Video } from 'lucide-react-native';
 import { EndpointResponse, JobResponse, MapResponse, RobotDto, ZoneDto } from '../../api/types';
 import { RobotCameraStreamView } from '../camera/RobotCameraStreamView';
-import { BackendHospitalMap } from './BackendHospitalMap';
+import { BackendHospitalMap, MapPlanPoint, MapRobotPose } from './BackendHospitalMap';
 
 interface Props {
   visible: boolean;
@@ -23,6 +23,9 @@ interface Props {
   zones: ZoneDto[];
   token: string | null;
   activeJob: JobResponse | null;
+  robotPose?: MapRobotPose | null;
+  isPoseLive?: boolean;
+  plannedPath?: MapPlanPoint[] | null;
 }
 
 export const BackendRobotMonitorModal: React.FC<Props> = ({
@@ -35,6 +38,9 @@ export const BackendRobotMonitorModal: React.FC<Props> = ({
   zones,
   token,
   activeJob,
+  robotPose,
+  isPoseLive,
+  plannedPath,
 }) => {
   const [view, setView] = useState<'camera' | 'map'>('camera');
   const battery = robot?.batteryPercent ?? robot?.batteryRaw;
@@ -74,9 +80,11 @@ export const BackendRobotMonitorModal: React.FC<Props> = ({
               <Text style={styles.statValue}>{battery == null ? '--' : `${battery}%`}</Text>
             </View>
             <View style={styles.statCard}>
-              <Text style={styles.statLabel}>JOB HIỆN TẠI</Text>
+              <Text style={styles.statLabel}>TỌA ĐỘ NAV2</Text>
               <Text style={styles.statValue} numberOfLines={1}>
-                {activeJob?.jobCode || 'Không có'}
+                {robotPose
+                  ? `${robotPose.xM.toFixed(2)}, ${robotPose.yM.toFixed(2)}`
+                  : 'Chưa định vị'}
               </Text>
             </View>
             <View style={styles.statCard}>
@@ -118,6 +126,9 @@ export const BackendRobotMonitorModal: React.FC<Props> = ({
               zones={zones}
               token={token}
               onSelectEndpoint={() => undefined}
+              robotPose={robotPose}
+              isPoseLive={isPoseLive}
+              plannedPath={plannedPath}
             />
           ) : (
             <View style={styles.emptyState}>

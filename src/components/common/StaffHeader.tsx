@@ -9,7 +9,7 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { Colors, Spacing, BorderRadius, Shadows } from '../../constants/theme';
-import { LogOut, ArrowLeft, User, Briefcase, Clock, MapPin, X, RefreshCw } from 'lucide-react-native';
+import { LogOut, ArrowLeft, User, Briefcase, Clock, MapPin, X, RefreshCw, Lock } from 'lucide-react-native';
 import { useAuthStore } from '../../store/useAuthStore';
 import { useNavigation } from '@react-navigation/native';
 import { staffApi } from '../../api/modules/staff.api';
@@ -265,6 +265,20 @@ export const StaffHeader: React.FC<StaffHeaderProps> = ({
             </ScrollView>
 
             <TouchableOpacity
+              style={styles.sheetChangePasswordBtn}
+              onPress={() => {
+                setShowProfileModal(false);
+                navigation.navigate('FirstLoginPasswordChange', {
+                  username: user?.username || staffData?.account?.username || 'staff1',
+                });
+              }}
+              activeOpacity={0.8}
+            >
+              <Lock size={15} color={Colors.primary} />
+              <Text style={styles.sheetChangePasswordText}>Đổi mật khẩu tài khoản</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
               style={styles.sheetCloseButton}
               onPress={() => setShowProfileModal(false)}
               activeOpacity={0.8}
@@ -517,6 +531,23 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
 
+  sheetChangePasswordBtn: {
+    height: 44,
+    borderRadius: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#E0F2FE',
+    borderWidth: 1.5,
+    borderColor: '#BAE6FD',
+    marginBottom: 8,
+  },
+  sheetChangePasswordText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: Colors.primaryDark,
+  },
   sheetCloseButton: {
     height: 44,
     borderRadius: 12,

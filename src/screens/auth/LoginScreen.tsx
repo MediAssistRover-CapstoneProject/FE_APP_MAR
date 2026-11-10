@@ -393,6 +393,23 @@ export const LoginScreen: React.FC = () => {
               </>
             )}
           </TouchableOpacity>
+
+          {/* Lần đầu đăng nhập: Kích hoạt tài khoản & Đổi mật khẩu */}
+          <TouchableOpacity
+            style={styles.firstLoginBtn}
+            onPress={() => {
+              navigation.navigate('FirstLoginPasswordChange', {
+                username: username.trim() || 'staff1',
+                currentPassword: password || '12345678',
+              });
+            }}
+            activeOpacity={0.75}
+          >
+            <ShieldCheck size={16} color={Colors.primary} />
+            <Text style={styles.firstLoginBtnText}>
+              Lần đầu đăng nhập? Đổi mật khẩu để kích hoạt
+            </Text>
+          </TouchableOpacity>
         </View>
 
         {/* Thông tin kết nối Backend thực tế (Chạm vào để đổi IP máy chủ) */}
@@ -887,6 +904,24 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontWeight: '700',
     fontSize: 15,
+  },
+  firstLoginBtn: {
+    marginTop: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    backgroundColor: '#E0F2FE',
+    borderWidth: 1,
+    borderColor: '#BAE6FD',
+  },
+  firstLoginBtnText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: Colors.primaryDark,
   },
   connectionBadge: {
     flexDirection: 'row',

@@ -174,10 +174,10 @@ export const LoginScreen: React.FC = () => {
     const success = await login(username, password);
     if (success) {
       if (useAuthStore.getState().mustChangePassword) {
-        setPasswordChangeError('');
-        setNewPassword('');
-        setConfirmNewPassword('');
-        setShowPasswordChangeModal(true);
+        navigation.navigate('FirstLoginPasswordChange', {
+          username: username.trim(),
+          currentPassword: password,
+        });
       } else {
         navigation.replace('MainTabs', { screen: 'Home' });
       }

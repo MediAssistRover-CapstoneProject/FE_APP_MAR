@@ -3,6 +3,7 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../types/navigation';
 import { LoginScreen } from '../screens/auth/LoginScreen';
 import { ForgotPasswordScreen } from '../screens/auth/ForgotPasswordScreen';
+import { FirstLoginPasswordChangeScreen } from '../screens/auth/FirstLoginPasswordChangeScreen';
 import { MainNavigator } from './MainNavigator';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -15,6 +16,11 @@ export function RootNavigator() {
     >
       <Stack.Screen name="Login" component={LoginScreen} />
       <Stack.Screen name="ForgotPassword" component={ForgotPasswordScreen} />
+      <Stack.Screen
+        name="FirstLoginPasswordChange"
+        component={FirstLoginPasswordChangeScreen}
+        options={{ gestureEnabled: false }}
+      />
       <Stack.Screen name="MainTabs" component={MainNavigator} />
     </Stack.Navigator>
   );

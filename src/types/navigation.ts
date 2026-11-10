@@ -10,5 +10,6 @@ export type MainTabParamList = {
 export type RootStackParamList = {
   Login: undefined;
   ForgotPassword: { initialEmail?: string } | undefined;
+  FirstLoginPasswordChange: { username: string; currentPassword?: string };
   MainTabs: NavigatorScreenParams<MainTabParamList>;
 };

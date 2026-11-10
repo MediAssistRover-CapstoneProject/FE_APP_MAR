@@ -3,12 +3,13 @@ import { Platform, NativeModules } from 'react-native';
 
 /**
  * API Configuration
- * Backend production được truy cập qua DuckDNS, không phụ thuộc vào BE local.
- * Swagger UI: https://mediassistrover.duckdns.org/swagger-ui/index.html
+ * Mặc định kết nối MediAssistRover DuckDNS (https://mediassistrover.duckdns.org/api/v1)
+ * và hỗ trợ chuyển nhanh sang BE Local (D:\AI_VOic22222\backend cổng 8080) trên màn hình Đăng nhập.
  */
 
 export const REMOTE_BACKEND_URL = 'https://mediassistrover.duckdns.org/api/v1';
 export const REMOTE_BACKEND_HOST = 'mediassistrover.duckdns.org';
+export const LOCAL_BACKEND_PORT = 8080;
 
 // Hàm kiểm tra IP hợp lệ trong mạng LAN (loại trừ các domain tunnel của Expo/Ngrok)
 const isValidLocalIp = (host?: string): boolean => {
@@ -78,22 +79,32 @@ export const getBackendHost = (): string => {
     }
   } catch {}
 
-  // Không gắn cứng IP LAN. Có thể cấu hình EXPO_PUBLIC_ROBOT_CAMERA_HOST khi chạy tunnel.
-  return REMOTE_BACKEND_HOST;
+  return '10.3.75.181';
+};
+
+export const getLocalBackendUrl = (): string => {
+  const envUrl = process.env.EXPO_PUBLIC_API_BASE_URL?.trim();
+  if (envUrl) return envUrl.replace(/\/+$/, '');
+  const host = getBackendHost();
+  if (host === REMOTE_BACKEND_HOST) {
+    return `http://localhost:${LOCAL_BACKEND_PORT}/api/v1`;
+  }
+  return `http://${host}:${LOCAL_BACKEND_PORT}/api/v1`;
 };
 
 export const ROBOT_CAMERA_PORT = 8090;
 export const AI_VISION_PORT = 8001;
 
 export const API_CONFIG = {
-  // Backend production cố định; không gọi Spring Boot local qua localhost/LAN.
   get BASE_URL(): string {
+    const envUrl = process.env.EXPO_PUBLIC_API_BASE_URL?.trim();
+    if (envUrl) return envUrl.replace(/\/+$/, '');
     return REMOTE_BACKEND_URL;
   },
   get HOST(): string {
-    return REMOTE_BACKEND_HOST;
+    return getBackendHost();
   },
-  PORT: 443,
+  PORT: LOCAL_BACKEND_PORT,
   SWAGGER_URL: 'https://mediassistrover.duckdns.org/swagger-ui/index.html',
   get ROBOT_CAMERA_STREAM_URL(): string {
     return `http://${getBackendHost()}:${ROBOT_CAMERA_PORT}/video`;
@@ -104,8 +115,7 @@ export const API_CONFIG = {
   get AI_VISION_STREAM_URL(): string {
     return `http://${getBackendHost()}:${AI_VISION_PORT}/video`;
   },
-  
+
   // Thời gian chờ tối đa (miligiây)
   TIMEOUT_MS: 15000,
-
 };

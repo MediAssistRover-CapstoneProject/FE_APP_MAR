@@ -90,7 +90,8 @@ class ApiClient {
       const responseData = await response.json().catch(() => null);
 
       if (__DEV__) {
-        console.log(`[API RESPONSE] ${response.status} ${url}`, responseData);
+        // Responses may contain access tokens, QR proofs or authorization grants.
+        console.log(`[API RESPONSE] ${response.status} ${url}`);
       }
 
       if (

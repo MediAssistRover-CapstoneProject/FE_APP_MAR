@@ -7,6 +7,7 @@ import {
   EscortResponse,
   ServiceRequestResponse,
   JobResponse,
+  JobDetailResponse,
   JobQueryParams,
   CancelJobRequest,
   PageResponse,
@@ -21,6 +22,9 @@ function generateIdempotencyKey(): string {
 }
 
 export const dispatchApi = {
+  async getServiceRequest(serviceRequestId: string): Promise<ServiceRequestResponse> {
+    return apiClient.get<ServiceRequestResponse>(`/service-requests/${serviceRequestId}`);
+  },
   /**
    * 1. Tạo yêu cầu điều robot di chuyển đến điểm đích (Navigation Request)
    * Endpoint: POST /api/v1/navigation-requests
@@ -106,7 +110,12 @@ export const dispatchApi = {
    * Endpoint: GET /api/v1/jobs/{id}
    */
   async getJobDetail(jobId: string): Promise<JobResponse> {
-    return apiClient.get<JobResponse>(ENDPOINTS.JOBS.DETAIL(jobId));
+    const raw = await apiClient.get<JobDetailResponse | JobResponse>(ENDPOINTS.JOBS.DETAIL(jobId));
+    const job = 'job' in raw ? { ...raw.job, tasks: raw.tasks, steps: raw.steps } : raw;
+    return {
+      ...job,
+      steps: job.steps?.length ? job.steps : job.tasks?.flatMap(task => task.steps || []) || [],
+    };
   },
 
   /**

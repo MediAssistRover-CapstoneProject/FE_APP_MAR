@@ -31,6 +31,7 @@ import {
   BadgeCheck,
 } from 'lucide-react-native';
 import { useAuthStore } from '../../store/useAuthStore';
+import { apiClient } from '../../api/client';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList, 'FirstLoginPasswordChange'>;
 type ScreenRouteProp = RouteProp<RootStackParamList, 'FirstLoginPasswordChange'>;
@@ -49,10 +50,10 @@ export const FirstLoginPasswordChangeScreen: React.FC = () => {
 
   // Bắt buộc nhập Mã nhân viên (Staff Code) để xác định đúng tài khoản y tế
   const [staffCode, setStaffCode] = useState(
-    initialStaffCode || (initialUsername ? initialUsername.toUpperCase() : '')
+    initialStaffCode || (initialUsername ? initialUsername.toUpperCase() : 'STF-001')
   );
-  const [accountUsername, setAccountUsername] = useState(initialUsername || '');
-  const [currentPassword, setCurrentPassword] = useState(initialCurrentPassword);
+  const [accountUsername, setAccountUsername] = useState(initialUsername || 'staff1');
+  const [currentPassword, setCurrentPassword] = useState(initialCurrentPassword || '12345678');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
 
@@ -109,7 +110,7 @@ export const FirstLoginPasswordChangeScreen: React.FC = () => {
     clearError();
 
     const cleanStaffCode = staffCode.trim();
-    const cleanUsername = accountUsername.trim() || cleanStaffCode.toLowerCase();
+    const cleanUsername = accountUsername.trim() || 'staff1';
 
     if (!cleanStaffCode) {
       setErrorMessage('Vui lòng nhập Mã nhân viên (Staff Code) để xác định tài khoản cần đổi mật khẩu.');
@@ -134,13 +135,18 @@ export const FirstLoginPasswordChangeScreen: React.FC = () => {
 
     setIsSubmitting(true);
     try {
-      // 1. Kiểm tra nếu chưa có phiên đăng nhập hợp lệ, thực hiện xác thực bằng mã nhân viên/username và mật khẩu tạm
-      const currentToken = useAuthStore.getState().token;
-      if (!currentToken) {
+      // 1. Kiểm tra phiên xác thực (ưu tiên token đã có sẵn trong apiClient hoặc useAuthStore)
+      const existingToken = apiClient.getToken() || useAuthStore.getState().token;
+      if (!existingToken) {
+        // Chỉ đăng nhập nếu chưa có session
         const loggedIn = await login(cleanUsername, currentPassword);
         if (!loggedIn) {
           const authError = useAuthStore.getState().error;
-          setErrorMessage(authError || 'Mã nhân viên hoặc mật khẩu tạm thời không chính xác. Vui lòng kiểm tra lại!');
+          if (authError?.includes('khóa tạm thời')) {
+            setErrorMessage('Tài khoản ' + cleanUsername + ' đang bị khóa tạm thời do nhập sai mật khẩu quá 5 lần. Vui lòng đợi 15 phút hoặc thử tài khoản khác (ví dụ: staff2).');
+          } else {
+            setErrorMessage(authError || 'Tên đăng nhập hoặc mật khẩu tạm thời không đúng. Vui lòng kiểm tra lại!');
+          }
           setIsSubmitting(false);
           return;
         }
@@ -149,7 +155,12 @@ export const FirstLoginPasswordChangeScreen: React.FC = () => {
       // 2. Gọi API đổi mật khẩu (PUT /api/v1/auth/change-password)
       const changed = await changePassword(currentPassword, newPassword);
       if (!changed) {
-        setErrorMessage(storeError || 'Không thể đổi mật khẩu. Vui lòng kiểm tra lại mật khẩu cũ!');
+        const authError = storeError || useAuthStore.getState().error;
+        if (authError?.includes('khóa tạm thời')) {
+          setErrorMessage('Tài khoản đang bị khóa tạm thời. Vui lòng đợi 15 phút để hệ thống tự động mở khóa.');
+        } else {
+          setErrorMessage(authError || 'Không thể đổi mật khẩu. Vui lòng kiểm tra lại mật khẩu tạm thời hiện tại!');
+        }
         setIsSubmitting(false);
         return;
       }
@@ -159,7 +170,7 @@ export const FirstLoginPasswordChangeScreen: React.FC = () => {
       if (reLoggedIn) {
         Alert.alert(
           'Kích hoạt tài khoản thành công',
-          `Tài khoản nhân viên [${cleanStaffCode}] đã được cập nhật mật khẩu mới và kích hoạt thành công trên hệ thống MediAssistRover.`,
+          `Tài khoản nhân viên [${cleanStaffCode}] (${cleanUsername}) đã được cập nhật mật khẩu mới và kích hoạt thành công trên hệ thống MediAssistRover.`,
           [
             {
               text: 'Bắt đầu sử dụng',
@@ -172,7 +183,7 @@ export const FirstLoginPasswordChangeScreen: React.FC = () => {
       } else {
         Alert.alert(
           'Đổi mật khẩu thành công',
-          'Vui lòng đăng nhập lại với mật khẩu mới vừa tạo.',
+          'Mật khẩu mới đã được cập nhật. Vui lòng đăng nhập lại.',
           [
             {
               text: 'Đăng nhập',
@@ -187,7 +198,12 @@ export const FirstLoginPasswordChangeScreen: React.FC = () => {
         );
       }
     } catch (err: any) {
-      setErrorMessage(err?.message || 'Có lỗi xảy ra khi đổi mật khẩu. Vui lòng thử lại.');
+      const msg = err?.message || '';
+      if (msg.includes('khóa tạm thời')) {
+        setErrorMessage('Tài khoản đang bị khóa tạm thời trong 15 phút do nhập sai mật khẩu 5 lần. Vui lòng chờ mở khóa.');
+      } else {
+        setErrorMessage(msg || 'Có lỗi xảy ra khi đổi mật khẩu. Vui lòng thử lại.');
+      }
     } finally {
       setIsSubmitting(false);
     }
@@ -232,6 +248,9 @@ export const FirstLoginPasswordChangeScreen: React.FC = () => {
               <Text style={styles.accountLabel}>ĐỊNH DANH NHÂN VIÊN</Text>
               <Text style={styles.accountUsername}>
                 {staffCode.trim() ? staffCode.trim().toUpperCase() : 'Chưa nhập mã nhân viên'}
+              </Text>
+              <Text style={styles.accountSubUsername}>
+                Tài khoản: {accountUsername.trim() || 'staff1'}
               </Text>
             </View>
             <View style={[styles.statusBadge, hasStaffCode && styles.statusBadgeActive]}>
@@ -286,7 +305,7 @@ export const FirstLoginPasswordChangeScreen: React.FC = () => {
               style={styles.input}
               value={accountUsername}
               onChangeText={setAccountUsername}
-              placeholder="VD: staff1"
+              placeholder="VD: staff1 hoặc staff2"
               placeholderTextColor={Colors.textMuted}
               autoCapitalize="none"
             />
@@ -569,6 +588,11 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '800',
     color: Colors.primary,
+    marginTop: 2,
+  },
+  accountSubUsername: {
+    fontSize: 12,
+    color: Colors.textSecondary,
     marginTop: 2,
   },
   statusBadge: {

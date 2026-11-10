@@ -5,6 +5,7 @@ import {
   ShiftResponse,
   ShiftQueryParams,
   PageResponse,
+  OnDutyStaffResponse,
 } from '../types';
 
 export const staffApi = {
@@ -45,5 +46,24 @@ export const staffApi = {
    */
   async getShiftDetail(shiftId: string): Promise<ShiftResponse> {
     return apiClient.get<ShiftResponse>(ENDPOINTS.STAFF.SHIFT_DETAIL(shiftId));
+  },
+
+  /**
+   * 4. Lấy danh sách nhân viên đang trực (on-duty)
+   * Endpoint: GET /api/v1/staff/on-duty
+   */
+  async getOnDutyStaff(params?: {
+    mapId?: string;
+    roomId?: string;
+    page?: number;
+    size?: number;
+  }): Promise<PageResponse<OnDutyStaffResponse>> {
+    const queryParts: string[] = [];
+    if (params?.mapId) queryParts.push(`mapId=${encodeURIComponent(params.mapId)}`);
+    if (params?.roomId) queryParts.push(`roomId=${encodeURIComponent(params.roomId)}`);
+    queryParts.push(`page=${params?.page ?? 0}`);
+    queryParts.push(`size=${params?.size ?? 100}`);
+    const query = queryParts.join('&');
+    return apiClient.get<PageResponse<OnDutyStaffResponse>>(`${ENDPOINTS.STAFF.ON_DUTY}?${query}`);
   },
 };

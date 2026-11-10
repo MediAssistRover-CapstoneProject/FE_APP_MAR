@@ -18,6 +18,7 @@ export const ENDPOINTS = {
     ME: '/staff/me',
     SHIFTS: '/staff/shifts',
     SHIFT_DETAIL: (shiftId: string) => `/staff/shifts/${shiftId}`,
+    ON_DUTY: '/staff/on-duty',
   },
 
   // 3. Robot, Định vị & Điều khiển (Staff Operations)

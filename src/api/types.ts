@@ -279,11 +279,12 @@ export interface DeliveryItemResponse {
 }
 
 export interface ServiceRequestInfo {
-  requestId: string;
+  requestId?: string;
+  serviceRequestId?: string;
   requestCode?: string;
   title?: string;
   status?: string;
-  priority?: string;
+  priority?: string | number;
   createdAt?: string;
 }
 
@@ -492,6 +493,23 @@ export interface ShiftQueryParams {
   size?: number;
 }
 
+// ----- 11b. On-Duty Staff (GET /api/v1/staff/on-duty) -----
+export interface OnDutyStaffResponse {
+  staffProfileId: string;
+  accountId: string;
+  fullName: string;
+  avatarUrl?: string | null;
+  shiftId: string;
+  startsAt: string;
+  endsAt: string;
+  checkedInAt?: string | null;
+  roomId?: string | null;
+  roomCode?: string | null;
+  roomName?: string | null;
+  endpointId?: string | null;
+  deliverable: boolean;
+  reason?: string | null;
+}
 // ----- 12. Service Request Types -----
 export type ServiceRequestStatus = 'DRAFT' | 'QUEUED' | 'RUNNING' | 'COMPLETED' | 'CANCELLED' | 'FAILED';
 
@@ -593,6 +611,28 @@ export type JobStatus =
   | 'CANCELLED'
   | 'RECOVERY_REQUIRED';
 
+export interface JobStepResponse {
+  jobStepId: string;
+  stepCodeSnapshot?: string;
+  stepTypeSnapshot?: string;
+  status: string;
+  resolvedInputsJson?: Record<string, unknown>;
+  resultJson?: Record<string, unknown>;
+  executionSequenceNo?: number;
+  interruptionRequestedAt?: string | null;
+}
+
+export interface JobTaskResponse {
+  jobTaskId: string;
+  steps?: JobStepResponse[];
+}
+
+export interface JobDetailResponse {
+  job: JobResponse;
+  tasks?: JobTaskResponse[];
+  steps?: JobStepResponse[];
+}
+
 export interface JobResponse {
   jobId: string;
   workflowId?: string | null;
@@ -626,6 +666,8 @@ export interface JobResponse {
   rowVersion?: number;
   beOrchestrated?: boolean;
   selectedJobStepId?: string | null;
+  tasks?: JobTaskResponse[];
+  steps?: JobStepResponse[];
 }
 
 export interface CancelJobRequest {

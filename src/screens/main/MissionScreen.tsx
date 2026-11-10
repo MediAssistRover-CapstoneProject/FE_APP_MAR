@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -14,23 +14,65 @@ import {
 } from 'react-native';
 import { Colors, Spacing, BorderRadius, Typography, Shadows } from '../../constants/theme';
 import { StaffHeader } from '../../components/common/StaffHeader';
-import { deliveryApi } from '../../api/modules/delivery.api';
+import { deliveryApi, type DeliveryResponse } from '../../api/modules/delivery.api';
+import { dispatchApi } from '../../api/modules/dispatch.api';
 import { facilityApi } from '../../api/modules/facility.api';
-import { EndpointResponse, MapResponse, RoomDto } from '../../api/types';
+import { EndpointResponse, JobResponse, MapResponse, OnDutyStaffResponse, RoomDto } from '../../api/types';
+import { useAuthStore } from '../../store/useAuthStore';
+import { apiClient } from '../../api/client';
+import { StaffOnDutyPicker } from '../../components/staff/StaffOnDutyPicker';
+
 import {
   ScanLine,
-  Camera,
   ChevronDown,
   ArrowRight,
   Check,
-  ShieldAlert,
-  AlertCircle,
   MapPin,
   CheckCircle2,
   X,
+  RefreshCw,
+  PackageCheck,
 } from 'lucide-react-native';
-import { QRScannerModal, QRItemInfo } from '../../components/scanning/QRScannerModal';
-import { FaceScanModal } from '../../components/scanning/FaceScanModal';
+import { QRScannerModal } from '../../components/scanning/QRScannerModal';
+import {
+  continueDeliverySubmission,
+  deliveryPhase,
+  expectedDeliveryAccount,
+  handoffResponse,
+  handoffResponseKey,
+  scanContext,
+  selectedRunningStep,
+  UUID_PATTERN,
+  verificationMatches,
+  type DeliveryAttempt,
+  type DeliveryScanContext,
+} from './deliveryHandoff';
+import { robotDeliveryProof } from './robotDeliveryProof';
+import { loadDeliveryAttempt, saveDeliveryAttempt } from './deliveryAttemptStorage';
+
+interface JobSnapshot {
+  job: JobResponse;
+  delivery?: DeliveryResponse;
+}
+
+async function loadJobSnapshot(jobId: string): Promise<JobSnapshot> {
+  const job = await dispatchApi.getJobDetail(jobId);
+  const delivery = job.serviceRequestId
+    ? await deliveryApi.getDeliveryById(job.serviceRequestId)
+    : undefined;
+  if (!delivery || delivery.request.requestType !== 'DELIVERY') throw new Error('Nhiệm vụ này không phải giao hàng trong phạm vi tài khoản.');
+  return { job, delivery };
+}
+
+const submissionApi = {
+  create: deliveryApi.createDeliveryRequest,
+  submit: dispatchApi.submitServiceRequest,
+  getRequest: dispatchApi.getServiceRequest,
+  findJob: async (requestId: string) => {
+    const page = await dispatchApi.getJobs({ requestId, size: 1 });
+    return page.content?.[0];
+  },
+};
 
 // ===== Kiểu dữ liệu =====
 type TaskType =
@@ -42,7 +84,6 @@ type TaskType =
   | 'van_chuyen_vat_tu'
   | 'dieu_robot_sos';
 
-type SecurityLevel = 'none' | 'qr' | 'face';
 type PriorityLevel = 'high' | 'normal' | 'low';
 
 const TASK_TYPES: { id: TaskType; label: string }[] = [
@@ -55,34 +96,96 @@ const TASK_TYPES: { id: TaskType; label: string }[] = [
   { id: 'dieu_robot_sos',      label: 'Điều robot đến SOS' },
 ];
 
+const STEP_LABELS: Record<string, string> = {
+  MOVE_SENDER: '1. Robot di chuyển đến Điểm lấy hàng (A)',
+  AUTH_SENDER: '2. Người gửi quét QR trên màn hình robot',
+  UNLOCK_SENDER: '3. Robot đang mở khóa Servo ngăn tủ (A)',
+  PAYLOAD_SENDER: '4. Đặt hàng vào ngăn tủ & Xác nhận',
+  CLOSE_SENDER: '5. Đóng nắp ngăn tủ tại Điểm A',
+  LOCK_SENDER: '6. Robot đang khóa Servo ngăn tủ (A)',
+  VERIFY_SENDER: '7. Kiểm tra nắp tủ đã khóa chắc (A)',
+  MOVE_RECEIVER: '8. Robot vận chuyển đến Điểm nhận hàng (B)',
+  AUTH_RECEIVER: '9. Người nhận quét QR trên màn hình robot',
+  UNLOCK_RECEIVER: '10. Robot đang mở khóa Servo để lấy hàng (B)',
+  PAYLOAD_RECEIVER: '11. Lấy hàng khỏi ngăn tủ & Xác nhận',
+  CLOSE_RECEIVER: '12. Đóng nắp ngăn tủ tại Điểm B',
+  LOCK_RECEIVER: '13. Robot đang khóa lại Servo (B)',
+  VERIFY_RECEIVER: '14. Kiểm tra khóa tủ & Hoàn tất giao nhận',
+};
+
 export const MissionScreen: React.FC = () => {
-  // ===== State =====
+  const { user } = useAuthStore();
+  const apiBaseUrl = apiClient.getBaseUrl();
+  const scope = `${apiBaseUrl}:${user?.accountId || ''}`;
+  const scopeRef = useRef(scope);
+  scopeRef.current = scope;
+  useEffect(() => {
+    scopeRef.current = scope;
+    return () => { if (scopeRef.current === scope) scopeRef.current = ''; };
+  }, [scope]);
+
+  // ===== State tạo nhiệm vụ =====
   const [selectedTasks, setSelectedTasks] = useState<TaskType[]>(['van_chuyen_tai_lieu']);
-  const [itemName, setItemName] = useState('');
+  const [itemName, setItemName] = useState('Thuốc kháng sinh / Mẫu bệnh phẩm');
   const [quantity, setQuantity] = useState('1');
   const [activeMap, setActiveMap] = useState<MapResponse | null>(null);
+  const [availableMaps, setAvailableMaps] = useState<MapResponse[]>([]);
+  const [allEndpoints, setAllEndpoints] = useState<EndpointResponse[]>([]);
   const [availableEndpoints, setAvailableEndpoints] = useState<EndpointResponse[]>([]);
   const [rooms, setRooms] = useState<RoomDto[]>([]);
   const [pickupEndpoint, setPickupEndpoint] = useState<EndpointResponse | null>(null);
   const [deliveryEndpoint, setDeliveryEndpoint] = useState<EndpointResponse | null>(null);
+  const [endpointPickerMode, setEndpointPickerMode] = useState<'pickup' | 'delivery'>('delivery');
   const [isLoadingFacility, setIsLoadingFacility] = useState(false);
-  const [sender, setSender] = useState('');
+
+  const [senderAccountId, setSenderAccountId] = useState(user?.accountId || '');
   const [receiver, setReceiver] = useState('');
-  const [securityLevel, setSecurityLevel] = useState<SecurityLevel>('qr');
+  const [receiverAccountId, setReceiverAccountId] = useState('');
+  const [selectedReceiverStaff, setSelectedReceiverStaff] = useState<OnDutyStaffResponse | null>(null);
+  const [useManualReceiver, setUseManualReceiver] = useState(false);
   const [priority, setPriority] = useState<PriorityLevel>('high');
   const [deadline, setDeadline] = useState('');
   const [notes, setNotes] = useState('');
 
-  // Modal states
+  const [recentJobs, setRecentJobs] = useState<JobResponse[]>([]);
+  const [snapshot, setSnapshot] = useState<JobSnapshot | null>(null);
+  const [manualJobIdInput, setManualJobIdInput] = useState('');
+  const [isLoadingJobs, setIsLoadingJobs] = useState(false);
+  const [jobError, setJobError] = useState('');
+  const [isSendingStepResponse, setIsSendingStepResponse] = useState(false);
+  const [respondedStepId, setRespondedStepId] = useState('');
   const [showRoomModal, setShowRoomModal] = useState(false);
-  const [showQRScanner, setShowQRScanner] = useState(false);
-  const [showFaceScan, setShowFaceScan] = useState(false);
-  const [scannedItem, setScannedItem] = useState<QRItemInfo | null>(null);
-  const [faceVerified, setFaceVerified] = useState(false);
+  const [scan, setScan] = useState<DeliveryScanContext | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [pendingDeliveryLabel, setPendingDeliveryLabel] = useState('');
+  const [attemptReady, setAttemptReady] = useState(false);
+  const selectedJobId = useRef<string | null>(null);
+  const jobReadRevision = useRef(0);
+  const stepInFlight = useRef(false);
+  const submitInFlight = useRef(false);
+  const attemptRef = useRef<DeliveryAttempt | null>(null);
 
-  const fromRoom = pickupEndpoint?.endpointName || 'Chưa có điểm lấy hàng';
-  const toRoom = deliveryEndpoint?.endpointName || 'Chọn điểm giao từ Backend';
+  const activeJob = snapshot?.job || null;
 
+  const fromRoom = pickupEndpoint?.endpointName || 'Chọn điểm lấy hàng (A)';
+  const toRoom = deliveryEndpoint?.endpointName || 'Chọn điểm giao hàng (B)';
+
+  // Handle staff selection from picker
+  const handleStaffSelect = useCallback((staff: OnDutyStaffResponse) => {
+    setSelectedReceiverStaff(staff);
+    setReceiver(staff.fullName);
+    setReceiverAccountId(staff.accountId);
+    setUseManualReceiver(false);
+  }, []);
+
+  const handleClearStaff = useCallback(() => {
+    setSelectedReceiverStaff(null);
+    setReceiver('');
+    setReceiverAccountId('');
+    setUseManualReceiver(true);
+  }, []);
+
+  // Load danh mục Map & Endpoints từ Backend
   useEffect(() => {
     let mounted = true;
     const loadFacility = async () => {
@@ -94,23 +197,10 @@ export const MissionScreen: React.FC = () => {
           facilityApi.getAllRooms(),
         ]);
         if (!mounted) return;
-        const map =
-          maps.find(
-            (item) =>
-              item.status === 'ACTIVE' &&
-              (item.mapId === 'e571fe71-d3ea-4aa5-a673-ffd857ac9f09' ||
-                (item.mapName || '').toLowerCase().includes('truong') ||
-                (item.mapName || '').toLowerCase().includes('final'))
-          ) ||
-          maps.find((item) => item.mapId === 'e571fe71-d3ea-4aa5-a673-ffd857ac9f09') ||
-          maps.find(
-            (item) =>
-              (item.mapName || '').toLowerCase().includes('truong') ||
-              (item.mapName || '').toLowerCase().includes('final')
-          ) ||
-          maps.find((item) => item.status === 'ACTIVE') ||
-          maps[0] ||
-          null;
+        const activeMaps = maps.filter(item => item.status === 'ACTIVE');
+        const map = activeMaps[0] || null;
+        setAvailableMaps(activeMaps);
+        setAllEndpoints(endpoints);
         const mapEndpoints = map
           ? endpoints.filter((endpoint) => endpoint.mapId === map.mapId && endpoint.active !== false)
           : [];
@@ -131,855 +221,438 @@ export const MissionScreen: React.FC = () => {
     return () => {
       mounted = false;
     };
+  }, [scope]);
+
+  const refreshSelectedJob = useCallback(async (jobId: string): Promise<JobSnapshot> => {
+    const revision = ++jobReadRevision.current;
+    const requestScope = scopeRef.current;
+    const detail = await loadJobSnapshot(jobId);
+    if (scopeRef.current === requestScope && selectedJobId.current === jobId && jobReadRevision.current === revision) {
+      setSnapshot(detail);
+      setJobError('');
+    }
+    return detail;
   }, []);
 
-  // Danh mục y tế đặc biệt bắt buộc có bảo mật (Thuốc, Máu, Vật tư y tế)
-  const isHighSecurityItem = selectedTasks.some((t) =>
-    ['van_chuyen_thuoc', 'van_chuyen_mau', 'van_chuyen_vat_tu'].includes(t)
-  );
+  const followJob = useCallback(async (jobId: string) => {
+    const target = jobId.trim().toLowerCase();
+    if (!UUID_PATTERN.test(target)) {
+      setJobError('Nhập Job ID hợp lệ (UUID).');
+      return;
+    }
+    if (selectedJobId.current !== target) {
+      selectedJobId.current = target;
+      setScan(null);
+      setSnapshot(null);
+      setRespondedStepId('');
+    }
+    setManualJobIdInput(target);
+    setJobError('');
+    const requestScope = scopeRef.current;
+    try {
+      await refreshSelectedJob(target);
+    } catch (error) {
+      if (scopeRef.current === requestScope && selectedJobId.current === target) {
+        setJobError((error as { message?: string })?.message || 'Không tải được nhiệm vụ đã chọn.');
+      }
+    }
+  }, [refreshSelectedJob]);
 
-  // ===== Handlers =====
-  const toggleTask = useCallback(
-    (id: TaskType) => {
-      setSelectedTasks((prev) => {
-        const next = prev.includes(id) ? prev.filter((t) => t !== id) : [...prev, id];
-        const hasStrict = next.some((t) =>
-          ['van_chuyen_thuoc', 'van_chuyen_mau', 'van_chuyen_vat_tu'].includes(t)
-        );
-        if (hasStrict && securityLevel === 'none') {
-          setSecurityLevel('qr');
+  const loadRecentJobsAndDetail = useCallback(async (preferredJobId?: string) => {
+    const requestScope = scopeRef.current;
+    setIsLoadingJobs(true);
+    try {
+      if (preferredJobId) await followJob(preferredJobId);
+      if (scopeRef.current !== requestScope) return;
+      const page = await dispatchApi.getJobs({ page: 0, size: 8 });
+      if (scopeRef.current !== requestScope) return;
+      setRecentJobs(page?.content || []);
+    } catch (error) {
+      if (scopeRef.current === requestScope) {
+        setJobError((error as { message?: string })?.message || 'Không tải được danh sách nhiệm vụ.');
+      }
+    } finally {
+      if (scopeRef.current === requestScope) setIsLoadingJobs(false);
+    }
+  }, [followJob]);
+
+  useEffect(() => {
+    selectedJobId.current = null;
+    attemptRef.current = null;
+    setAttemptReady(false);
+    submitInFlight.current = false;
+    stepInFlight.current = false;
+    setSnapshot(null);
+    setScan(null);
+    setRecentJobs([]);
+    setManualJobIdInput('');
+    setJobError('');
+    setPendingDeliveryLabel('');
+    setIsSubmitting(false);
+    setIsSendingStepResponse(false);
+    setRespondedStepId('');
+    setSenderAccountId(user?.accountId || '');
+    setReceiverAccountId('');
+    setReceiver('');
+    setSelectedReceiverStaff(null);
+    setUseManualReceiver(false);
+    void loadDeliveryAttempt(scope).then(attempt => {
+      if (scopeRef.current !== scope) return;
+      attemptRef.current = attempt;
+      setPendingDeliveryLabel(attempt ? attempt.submitted ? 'Tìm lại Job' : attempt.requestId ? 'Gửi lại yêu cầu đã tạo' : 'Thử lại yêu cầu' : '');
+      setAttemptReady(true);
+    }).catch(error => {
+      if (scopeRef.current === scope) setJobError(error?.message || 'Không đọc được yêu cầu đang chờ.');
+    });
+    void loadRecentJobsAndDetail();
+  }, [scope, user?.accountId, loadRecentJobsAndDetail]);
+
+  useEffect(() => {
+    const jobId = activeJob?.jobId;
+    if (!jobId || !['QUEUED', 'ACCEPTED', 'RUNNING'].includes(activeJob.status)) return;
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const schedule = () => {
+      timer = setTimeout(async () => {
+        if (stopped || selectedJobId.current !== jobId || scopeRef.current !== scope) return;
+        try {
+          await refreshSelectedJob(jobId);
+        } catch {
+          if (!stopped) setJobError('Đang kết nối lại trạng thái nhiệm vụ.');
         }
-        return next;
-      });
-    },
-    [securityLevel]
-  );
+        if (!stopped) schedule();
+      }, 3000);
+    };
+    schedule();
+    return () => { stopped = true; clearTimeout(timer); };
+  }, [activeJob?.jobId, activeJob?.status, refreshSelectedJob, scope]);
 
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  const currentStep = activeJob?.steps?.find(step => step.jobStepId === activeJob.selectedJobStepId);
+  const runningStep = selectedRunningStep(activeJob);
+  const phase = deliveryPhase(runningStep);
+  const assignedAccount = expectedDeliveryAccount(activeJob, phase, snapshot?.delivery);
+  const myTurn = !!assignedAccount && assignedAccount === user?.accountId.toLowerCase();
+  const qrContext = scanContext(activeJob, user?.accountId, snapshot?.delivery);
+  const response = myTurn && activeJob?.schemaVersion === 3 && activeJob.beOrchestrated
+    ? handoffResponse(runningStep)
+    : undefined;
 
-  const handleSubmit = useCallback(async () => {
+  const verifyDeliveryQr = async (context: DeliveryScanContext, raw: string) => {
+    const proof = robotDeliveryProof(raw, context);
+    const current = () => scopeRef.current === scope && selectedJobId.current === context.jobId;
+    if (!current()) throw new Error('Nhiệm vụ hoặc tài khoản đã thay đổi.');
+    const latest = await refreshSelectedJob(context.jobId);
+    const active = scanContext(latest.job, context.accountId, latest.delivery);
+    if (!current() || active?.stepId !== context.stepId || active.purpose !== context.purpose) {
+      throw new Error('Robot không còn chờ bạn xác thực ở chặng này.');
+    }
+    try {
+      const verified = await deliveryApi.verifyQr(context.jobId, proof);
+      if (!verificationMatches(verified, context)) {
+        throw new Error('Máy chủ trả về xác thực cho nhiệm vụ hoặc chặng khác.');
+      }
+    } finally {
+      if (current()) void refreshSelectedJob(context.jobId).catch(() => {});
+    }
+  };
+
+  const handleRespondStep = async () => {
+    if (!activeJob || !runningStep || !response || !user?.accountId || stepInFlight.current) return;
+    const jobId = activeJob.jobId;
+    const stepId = runningStep.jobStepId;
+    const accountId = user.accountId;
+    const current = () => scopeRef.current === scope && selectedJobId.current === jobId;
+    if (!current()) return;
+    stepInFlight.current = true;
+    setIsSendingStepResponse(true);
+    try {
+      const latest = await refreshSelectedJob(jobId);
+      if (!current()) return;
+      const step = selectedRunningStep(latest.job);
+      const latestResponse = handoffResponse(step);
+      const latestAccount = expectedDeliveryAccount(latest.job, deliveryPhase(step), latest.delivery);
+      if (step?.jobStepId !== stepId || latestAccount !== accountId.toLowerCase() ||
+          latestResponse?.responseType !== response.responseType) {
+        throw new Error('Bước hoặc tài khoản được phân công đã thay đổi. Hãy xem trạng thái nhiệm vụ.');
+      }
+      await deliveryApi.respondJobStep(stepId, latestResponse, handoffResponseKey(stepId, accountId, latestResponse.responseType));
+      if (current()) setRespondedStepId(stepId);
+    } catch (error) {
+      if (current()) {
+        Alert.alert('Chưa xác nhận được thao tác', (error as { message?: string })?.message || 'Hãy làm mới trạng thái và thử lại.');
+      }
+    } finally {
+      if (scopeRef.current === scope) {
+        stepInFlight.current = false;
+        setIsSendingStepResponse(false);
+        if (current()) void refreshSelectedJob(jobId).catch(() => {});
+      }
+    }
+  };
+
+  const isHighSecurityItem = selectedTasks.some(t => ['van_chuyen_thuoc', 'van_chuyen_mau', 'van_chuyen_vat_tu'].includes(t));
+
+  const toggleTask = useCallback((id: TaskType) => {
+    setSelectedTasks(previous => previous.includes(id) ? previous.filter(task => task !== id) : [...previous, id]);
+  }, []);
+
+  const sendDelivery = async (attempt: DeliveryAttempt) => {
+    if (submitInFlight.current || scopeRef.current !== scope) return;
+    submitInFlight.current = true;
+    attemptRef.current = attempt;
+    setIsSubmitting(true);
+    const current = () => scopeRef.current === scope && attemptRef.current === attempt;
+    try {
+      await saveDeliveryAttempt(scope, attempt);
+      const job = await continueDeliverySubmission(attempt, submissionApi, current, () => saveDeliveryAttempt(scope, attempt));
+      if (!current()) return;
+      if (!job?.jobId) {
+        Alert.alert('Đã gửi yêu cầu', 'Máy chủ đang tạo Job. Bấm Tìm lại Job để tiếp tục.');
+        return;
+      }
+      await saveDeliveryAttempt(scope, null);
+      attemptRef.current = null;
+      setPendingDeliveryLabel('');
+      void followJob(job.jobId);
+      Alert.alert('Đã gửi nhiệm vụ tới robot', 'Job ID: ' + job.jobId + '\nChia sẻ Job ID với người được phân công. Khi robot đến, hãy quét mã trên màn hình robot.');
+    } catch (error) {
+      if (!current()) return;
+      const problem = error as { status?: number; message?: string };
+      if (!attempt.requestId && [400, 403, 404, 422].includes(problem.status || 0)) {
+        try {
+          await saveDeliveryAttempt(scope, null);
+          attemptRef.current = null;
+          setPendingDeliveryLabel('');
+        } catch { /* Keep the attempt until local persistence can be reconciled. */ }
+      }
+      Alert.alert(attempt.requestId ? 'Chưa gửi được nhiệm vụ' : 'Chưa tạo được yêu cầu', problem.message || 'Hãy thử lại.');
+    } finally {
+      if (scopeRef.current === scope) {
+        if (attemptRef.current === attempt) {
+          setPendingDeliveryLabel(attempt.submitted ? 'Tìm lại Job' : attempt.requestId ? 'Gửi lại yêu cầu đã tạo' : 'Thử lại yêu cầu');
+        }
+        submitInFlight.current = false;
+        setIsSubmitting(false);
+      }
+    }
+  };
+
+  const handleSubmit = () => {
+    if (submitInFlight.current || !attemptReady) return;
+    if (attemptRef.current) {
+      void sendDelivery(attemptRef.current);
+      return;
+    }
     if (!activeMap || !pickupEndpoint || !deliveryEndpoint) {
-      Alert.alert('Thiếu dữ liệu Backend', 'Map hoặc điểm lấy/giao hàng chưa tồn tại trên máy chủ.');
+      Alert.alert('Thiếu điểm lấy hoặc giao hàng', 'Chọn hai điểm trên bản đồ trước khi tạo yêu cầu.');
       return;
     }
-    if (!itemName.trim() || !receiver.trim()) {
-      Alert.alert('Thiếu thông tin', 'Vui lòng nhập tên vật phẩm và người nhận.');
+    if (pickupEndpoint.endpointId === deliveryEndpoint.endpointId) {
+      Alert.alert('Trùng điểm A và B', 'Chọn hai điểm khác nhau.');
       return;
     }
-    // ⚠️ Validate bảo mật y tế: Thuốc, Máu, Vật tư bắt buộc phải có QR hoặc Face ID
-    if (isHighSecurityItem && securityLevel === 'none') {
-      Alert.alert(
-        'Yêu cầu mức bảo mật y tế ⚠️',
-        'Vận chuyển Thuốc, Máu xét nghiệm và Vật tư y tế là danh mục y tế đặc biệt nguy cấp.\n\nQuy chế bệnh viện yêu cầu bắt buộc phải chọn "Quét QR" hoặc "Xác nhận khuôn mặt" để robot xác thực người nhận trước khi mở ngăn tủ!'
-      );
+    const senderId = senderAccountId.trim().toLowerCase();
+    const receiverId = receiverAccountId.trim().toLowerCase();
+    if (!user?.accountId || !UUID_PATTERN.test(senderId) || !UUID_PATTERN.test(receiverId)) {
+      Alert.alert('Thiếu tài khoản được phân công', 'Nhập Account ID (UUID) của người gửi và người nhận.');
       return;
     }
+    const itemQuantity = Number(quantity.trim());
+    if (!itemName.trim() || !receiver.trim() || !Number.isInteger(itemQuantity) || itemQuantity < 1 || itemQuantity > 2147483647) {
+      Alert.alert('Thiếu thông tin giao hàng', 'Nhập tên hàng, tên hiển thị người nhận và số lượng nguyên dương.');
+      return;
+    }
+    const itemCategory = selectedTasks.includes('van_chuyen_thuoc') ? 'MEDICATION'
+      : selectedTasks.includes('van_chuyen_mau') ? 'LAB_SAMPLE'
+      : selectedTasks.includes('van_chuyen_vat_tu') ? 'SUPPLIES'
+      : 'DOCUMENT';
+    const unit = { MEDICATION: 'Hộp', LAB_SAMPLE: 'Ống nghiệm', SUPPLIES: 'Gói', DOCUMENT: 'Bộ' }[itemCategory];
+    const payload = {
+      mapId: activeMap.mapId,
+      targetMode: 'ENDPOINT' as const,
+      pickupEndpointId: pickupEndpoint.endpointId,
+      deliveryEndpointId: deliveryEndpoint.endpointId,
+      expectedSenderAccountId: senderId,
+      expectedReceiverAccountId: receiverId,
+      recipientName: receiver.trim(),
+      requiresConfirmation: true,
+      priority: { high: 80, normal: 50, low: 20 }[priority],
+      deliveryNote: notes.trim() || undefined,
+      items: [{ itemCode: 'ITEM-01', itemName: itemName.trim(), itemCategory, unit, quantity: itemQuantity, sensitive: isHighSecurityItem }],
+    };
+    Alert.alert('Xác nhận tạo nhiệm vụ giao hàng', fromRoom + ' → ' + toRoom + '\n' + itemName.trim() + ' × ' + itemQuantity + '\nNgười gửi: ' + senderId + '\nNgười nhận: ' + receiver.trim() + '\n' + receiverId, [
+      { text: 'Hủy', style: 'cancel' },
+      { text: 'Tạo & gửi', onPress: () => {
+        if (attemptRef.current || submitInFlight.current || scopeRef.current !== scope) return;
+        const key = globalThis.crypto?.randomUUID?.() || 'delivery-' + Date.now() + '-' + Math.random().toString(36).slice(2);
+        void sendDelivery({ key, payload });
+      } },
+    ]);
+  };
 
-    Alert.alert(
-      'Xác nhận tạo nhiệm vụ giao hàng',
-      `Robot sẽ được giao nhiệm vụ:\n${selectedTasks.map(
-        (t) => TASK_TYPES.find((x) => x.id === t)?.label
-      ).join(', ')}\nVận chuyển: ${itemName} (SL: ${quantity})\nPhòng đến: ${toRoom}\nNgười nhận: ${receiver}`,
-      [
-        { text: 'Hủy', style: 'cancel' },
-        {
-          text: 'Tạo ngay',
-          style: 'default',
-          onPress: async () => {
-            setIsSubmitting(true);
-            try {
-              // Phân loại vật phẩm dựa trên loại nhiệm vụ được chọn
-              let itemCategory = 'DOCUMENT';
-              let unit = 'Bộ';
-              let itemCodePrefix = 'DOC';
-
-              if (selectedTasks.includes('van_chuyen_thuoc')) {
-                itemCategory = 'MEDICATION';
-                unit = 'Hộp';
-                itemCodePrefix = 'MED';
-              } else if (selectedTasks.includes('van_chuyen_mau')) {
-                itemCategory = 'LAB_SAMPLE';
-                unit = 'Ống nghiệm';
-                itemCodePrefix = 'LAB';
-              } else if (selectedTasks.includes('van_chuyen_vat_tu')) {
-                itemCategory = 'SUPPLIES';
-                unit = 'Gói';
-                itemCodePrefix = 'SUP';
-              }
-              const itemCode = `${itemCodePrefix}-${Date.now()}`;
-
-              // Gọi API Staff Delivery thật lên server với đầy đủ các trường bắt buộc
-              const res = await deliveryApi.createDeliveryRequest({
-                mapId: activeMap.mapId,
-                targetMode: 'ENDPOINT',
-                pickupEndpointId: pickupEndpoint.endpointId,
-                deliveryEndpointId: deliveryEndpoint.endpointId,
-                recipientName: receiver.trim(),
-                deliveryNote: `${selectedTasks.map((t) => TASK_TYPES.find((x) => x.id === t)?.label || t).join(', ')}: ${itemName} (SL: ${quantity}) - Giao đến: ${toRoom} (Lấy hàng tại Quầy tiếp nhận). Ghi chú: ${notes || 'Không'}`,
-                requiresConfirmation: true,
-                items: [
-                  {
-                    itemCode,
-                    itemName: itemName.trim(),
-                    itemCategory,
-                    unit,
-                    quantity: parseInt(quantity, 10) || 1,
-                    itemNote: notes || 'Vận chuyển y tế an toàn',
-                  },
-                ],
-              });
-
-              Alert.alert(
-                'Thành công 🎉',
-                `Đã tạo yêu cầu giao hàng đến ${toRoom} thành công!\nMã yêu cầu: ${res?.request?.requestCode || 'REQ-DELIVERY'}\nTrạng thái: DRAFT / QUEUED (Lấy hàng tại Tiếp nhận)`
-              );
-            } catch (err: any) {
-              console.log('Phản hồi từ server:', err);
-              Alert.alert(
-                'Lỗi tạo nhiệm vụ',
-                err?.message || 'Không thể gửi yêu cầu giao hàng đến máy chủ. Vui lòng thử lại!'
-              );
-            } finally {
-              setIsSubmitting(false);
-            }
-          },
-        },
-      ]
-    );
-  }, [activeMap, pickupEndpoint, deliveryEndpoint, selectedTasks, itemName, quantity, fromRoom, toRoom, receiver, notes, securityLevel]);
-
+  const responseLabel = response?.responseType === 'PAYLOAD_CONFIRMED'
+    ? phase === 'sender' ? 'Đã đặt đủ hàng vào thùng' : 'Đã lấy đủ hàng khỏi thùng'
+    : response?.responseType === 'DOOR_CLOSED' ? 'Đã đóng nắp, tay đã rời cơ cấu khóa'
+    : 'Đã kiểm tra thùng khóa chắc';
+  const canRespond = !!response && !!runningStep && !jobError && respondedStepId !== runningStep.jobStepId;
   return (
-    <KeyboardAvoidingView
-      style={styles.outerContainer}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-    >
-      {/* ===== REUSABLE STAFF HEADER ===== */}
+    <KeyboardAvoidingView style={styles.root} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <StaffHeader />
+      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+        <Text style={styles.eyebrow}>GIAO NHẬN HÀNG</Text>
+        <Text style={styles.title}>Nhiệm vụ của bạn</Text>
+        <Text style={styles.muted}>Theo dõi robot, quét mã tại điểm gửi và điểm nhận, xác nhận từng bước bàn giao.</Text>
 
-      <ScrollView
-        contentContainerStyle={styles.scrollContent}
-        showsVerticalScrollIndicator={false}
-      >
-        {/* ===== PAGE TITLE ===== */}
-        <View style={styles.pageHeader}>
-          <Text style={styles.pageHeaderSub}>TẠO NHIỆM VỤ MỚI</Text>
-          <Text style={styles.pageHeaderTitle}>Giao nhiệm vụ cho Robot</Text>
-        </View>
-
-        {/* ===== LOẠI NHIỆM VỤ ===== */}
-        <View style={styles.section}>
-          <Text style={styles.sectionLabel}>LOẠI NHIỆM VỤ</Text>
-          <View style={styles.pillGrid}>
-            {TASK_TYPES.map((task) => {
-              const isActive = selectedTasks.includes(task.id);
-              return (
-                <TouchableOpacity
-                  key={task.id}
-                  style={[styles.taskPill, isActive && styles.taskPillActive]}
-                  onPress={() => toggleTask(task.id)}
-                  activeOpacity={0.75}
-                >
-                  <Text style={[styles.taskPillText, isActive && styles.taskPillTextActive]}>
-                    {task.label}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
+        <View style={styles.card}>
+          <View style={styles.row}>
+            <Text style={styles.heading}>Theo dõi giao nhận</Text>
+            <TouchableOpacity style={styles.smallButton} disabled={isLoadingJobs} onPress={() => { void loadRecentJobsAndDetail(selectedJobId.current || undefined); }}>
+              {isLoadingJobs ? <ActivityIndicator color={Colors.primary} /> : <RefreshCw size={18} color={Colors.primary} />}
+              <Text style={styles.link}>Làm mới</Text>
+            </TouchableOpacity>
           </View>
-        </View>
-
-        {/* ===== QUÉT QR VẬT PHẨM ===== */}
-        <View style={styles.section}>
-          <View style={styles.rowBetween}>
-            <View>
-              <Text style={styles.sectionLabel}>QUÉT QR VẬT PHẨM</Text>
-              <Text style={styles.sectionCaption}>Quét mã để đăng ký vào đơn vận chuyển robot</Text>
+          <Text style={styles.muted}>Tài khoản {user?.username} · {user?.accountId}</Text>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips}>
+            {recentJobs.map(job => <TouchableOpacity key={job.jobId} onPress={() => { void followJob(job.jobId); }} style={[styles.chip, activeJob?.jobId === job.jobId && styles.chipActive]}>
+              <Text style={styles.link}>{job.jobCode || job.jobId.slice(0, 8)}</Text><Text style={styles.small}>{job.status}</Text>
+            </TouchableOpacity>)}
+          </ScrollView>
+          <Text style={styles.label}>Job ID được chia sẻ từ người giao nhiệm vụ</Text>
+          <View style={styles.row}>
+            <TextInput style={[styles.input, styles.flex]} value={manualJobIdInput} onChangeText={setManualJobIdInput} placeholder="UUID nhiệm vụ" autoCapitalize="none" />
+            <TouchableOpacity style={styles.button} onPress={() => { void followJob(manualJobIdInput); }}><Text style={styles.buttonText}>Theo dõi</Text></TouchableOpacity>
+          </View>
+          {!!jobError && <Text accessibilityRole="alert" style={styles.error}>{jobError}</Text>}
+          {activeJob ? <>
+            <View style={styles.statusBox}>
+              <Text style={styles.heading}>{activeJob.jobCode || 'Nhiệm vụ giao hàng'}</Text>
+              <Text selectable style={styles.small}>{activeJob.jobId}</Text>
+              <Text style={styles.status}>{activeJob.status}</Text>
+              <Text style={styles.heading}>{activeJob.status === 'SUCCEEDED' ? 'Nhiệm vụ đã hoàn tất'
+                : activeJob.status === 'RECOVERY_REQUIRED' ? 'Cần kiểm tra robot và thùng hàng'
+                : activeJob.cancelRequestedAt ? 'Đang xử lý yêu cầu hủy'
+                : currentStep ? STEP_LABELS[currentStep.stepCodeSnapshot || ''] || currentStep.stepTypeSnapshot
+                : 'Đang chờ điều phối hoặc cập nhật bước tiếp theo'}</Text>
+              {!!activeJob.failureReason && <Text style={styles.error}>{activeJob.failureReason}</Text>}
+              {!!assignedAccount && <Text style={styles.small}>{phase === 'sender' ? 'Người gửi' : 'Người nhận'} được phân công · {assignedAccount}</Text>}
+              {runningStep && !myTurn && <Text style={styles.muted}>Đang chờ nhân viên được phân công thực hiện bước này.</Text>}
             </View>
-            <TouchableOpacity
-              style={[styles.outlineBtn, scannedItem && styles.outlineBtnSuccess]}
-              onPress={() => setShowQRScanner(true)}
-              activeOpacity={0.8}
-            >
-              {scannedItem ? (
-                <>
-                  <Check size={14} color="#10B981" />
-                  <Text style={[styles.outlineBtnText, { color: '#10B981' }]}>Đã quét</Text>
-                </>
-              ) : (
-                <>
-                  <ScanLine size={14} color={Colors.teal} />
-                  <Text style={styles.outlineBtnText}>Quét</Text>
-                </>
-              )}
+            <TouchableOpacity style={[styles.button, (!qrContext || !!jobError) && styles.disabled]} disabled={!qrContext || !!jobError}
+              onPress={() => { if (qrContext) setScan(qrContext); }}>
+              <ScanLine size={19} color="#fff" /><Text style={styles.buttonText}>Quét QR trên màn hình robot</Text>
             </TouchableOpacity>
-          </View>
-
-          {/* Hiển thị thông tin vật phẩm đã quét */}
-          {scannedItem && (
-            <View style={styles.scannedItemBox}>
-              <View style={styles.scannedItemRow}>
-                <Text style={styles.scannedItemLabel}>Vật phẩm:</Text>
-                <Text style={styles.scannedItemValue}>{scannedItem.code}</Text>
-              </View>
-              <View style={styles.scannedItemRow}>
-                <Text style={styles.scannedItemLabel}>Serial:</Text>
-                <Text style={styles.scannedItemValue}>{scannedItem.serialNumber}</Text>
-              </View>
-              <View style={styles.scannedItemRow}>
-                <Text style={styles.scannedItemLabel}>Số lượng:</Text>
-                <Text style={styles.scannedItemValue}>{scannedItem.quantity}</Text>
-              </View>
-            </View>
-          )}
-
-          <View style={styles.twoCol}>
-            <View style={[styles.fieldGroup, { flex: 2 }]}>
-              <Text style={styles.inputLabel}>TÊN / MÃ VẬT PHẨM</Text>
-              <TextInput
-                style={styles.textInput}
-                value={itemName}
-                onChangeText={setItemName}
-                placeholder="Tên hoặc mã vật phẩm"
-                placeholderTextColor={Colors.textMuted}
-              />
-            </View>
-            <View style={[styles.fieldGroup, { flex: 1 }]}>
-              <Text style={styles.inputLabel}>SỐ LƯỢNG</Text>
-              <TextInput
-                style={styles.textInput}
-                value={quantity}
-                onChangeText={setQuantity}
-                keyboardType="numeric"
-                placeholder="1"
-                placeholderTextColor={Colors.textMuted}
-              />
-            </View>
-          </View>
-        </View>
-        {/* ===== ĐIỂM GIAO ĐẾN (PHÒNG NHẬN VẬT TƯ) ===== */}
-        <View style={styles.section}>
-          <Text style={styles.sectionLabel}>PHÒNG ĐÍCH ĐẾN (ĐIỂM GIAO VẬT TƯ)</Text>
-          <View style={styles.fieldGroup}>
-            <Text style={styles.inputLabel}>CHỌN PHÒNG ĐẾN</Text>
-            <TouchableOpacity
-              style={styles.selectInput}
-              onPress={() => setShowRoomModal(true)}
-              activeOpacity={0.8}
-            >
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 }}>
-                <MapPin size={18} color={Colors.primary} />
-                <Text style={[styles.selectInputText, { fontSize: 15, fontWeight: '700', color: Colors.textPrimary }]}>
-                  {toRoom}
-                </Text>
-              </View>
-              <ChevronDown size={18} color={Colors.textSecondary} />
-            </TouchableOpacity>
-          </View>
-
-          {/* Badge thông báo điểm đi tự động ngầm */}
-          <View style={styles.autoOriginBadge}>
-            <CheckCircle2 size={13} color="#059669" />
-            <Text style={styles.autoOriginText}>
-              Điểm lấy hàng: Tự động xuất phát từ Quầy tiếp nhận / Kho trực
-            </Text>
-          </View>
-        </View>
-
-        {/* ===== NGƯỜI GỬI / NGƯỜI NHẬN ===== */}
-        <View style={styles.section}>
-          <View style={styles.fieldGroup}>
-            <Text style={styles.inputLabel}>NGƯỜI GỬI</Text>
-            <TextInput
-              style={styles.textInput}
-              value={sender}
-              onChangeText={setSender}
-              placeholder="Tên người gửi"
-              placeholderTextColor={Colors.textMuted}
-            />
-          </View>
-          <View style={styles.fieldGroup}>
-            <Text style={styles.inputLabel}>NGƯỜI NHẬN</Text>
-            <TextInput
-              style={styles.textInput}
-              value={receiver}
-              onChangeText={setReceiver}
-              placeholder="Tên người nhận"
-              placeholderTextColor={Colors.textMuted}
-            />
-          </View>
-        </View>
-
-        {/* ===== MỨC BẢO MẬT ===== */}
-        <View style={styles.section}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: Spacing.xs }}>
-            <Text style={styles.sectionLabel}>MỨC BẢO MẬT XÁC THỰC MỞ TỦ</Text>
-            {isHighSecurityItem && (
-              <View style={styles.strictBadge}>
-                <ShieldAlert size={11} color="#D97706" />
-                <Text style={styles.strictBadgeText}>BẮT BUỘC BẢO MẬT</Text>
-              </View>
-            )}
-          </View>
-
-          {isHighSecurityItem && (
-            <View style={styles.securityRequirementNotice}>
-              <AlertCircle size={15} color="#D97706" />
-              <Text style={styles.securityRequirementText}>
-                Danh mục Thuốc, Máu, Vật tư y tế: Bắt buộc chọn Quét QR hoặc Khuôn mặt để bảo đảm an toàn khi robot mở ngăn tủ.
-              </Text>
-            </View>
-          )}
-
-          <View style={styles.segmentRow}>
-            <TouchableOpacity
-              style={[
-                styles.segmentItem,
-                securityLevel === 'none' && styles.segmentItemActive,
-                isHighSecurityItem && styles.segmentItemDisabled,
-              ]}
-              onPress={() => {
-                if (isHighSecurityItem) {
-                  Alert.alert(
-                    'Quy định bảo mật y tế ⚠️',
-                    'Vận chuyển Thuốc, Máu xét nghiệm và Vật tư y tế bắt buộc phải có mức bảo mật (Quét QR hoặc Khuôn mặt) để robot xác thực người nhận, tránh nhầm lẫn hoặc thất thoát.'
-                  );
-                } else {
-                  setSecurityLevel('none');
-                }
-              }}
-              activeOpacity={0.8}
-            >
-              <Text
-                style={[
-                  styles.segmentText,
-                  securityLevel === 'none' && styles.segmentTextActive,
-                  isHighSecurityItem && { color: '#94A3B8' },
-                ]}
-              >
-                Không quét
-              </Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.segmentItem, securityLevel === 'qr' && styles.segmentItemActive]}
-              onPress={() => setSecurityLevel('qr')}
-              activeOpacity={0.8}
-            >
-              <Text style={[styles.segmentText, securityLevel === 'qr' && styles.segmentTextActive]}>
-                Quét QR
-              </Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[
-                styles.segmentItem,
-                securityLevel === 'face' && styles.segmentItemFace,
-              ]}
-              onPress={() => setSecurityLevel('face')}
-              activeOpacity={0.8}
-            >
-              <Text style={[
-                styles.segmentText,
-                securityLevel === 'face' && styles.segmentTextFace,
-              ]}>
-                Xác nhận khuôn mặt
-              </Text>
-            </TouchableOpacity>
-          </View>
-
-          {/* Face Recognition Extra UI */}
-          {securityLevel === 'face' && (
-            <View style={styles.faceRegisterBox}>
-              <Text style={styles.faceRegisterTitle}>
-                Đăng ký khuôn mặt người nhận:{' '}
-                <Text style={{ color: Colors.primary }}>{receiver}</Text>
-              </Text>
-              {faceVerified ? (
-                <View style={styles.faceVerifiedRow}>
-                  <View style={styles.faceVerifiedBadge}>
-                    <Check size={14} color="#10B981" strokeWidth={3} />
-                    <Text style={styles.faceVerifiedText}>Đã xác minh khuôn mặt</Text>
-                  </View>
-                  <TouchableOpacity
-                    onPress={() => {
-                      setFaceVerified(false);
-                      setShowFaceScan(true);
-                    }}
-                    activeOpacity={0.7}
-                  >
-                    <Text style={styles.retakeFaceText}>Chụp lại</Text>
-                  </TouchableOpacity>
-                </View>
-              ) : (
-                <TouchableOpacity
-                  style={styles.photoBtn}
-                  onPress={() => setShowFaceScan(true)}
-                  activeOpacity={0.85}
-                >
-                  <Camera size={20} color={Colors.textInverse} />
-                  <Text style={styles.photoBtnText}>Chụp ảnh đăng ký khuôn mặt</Text>
-                </TouchableOpacity>
-              )}
-            </View>
-          )}
-        </View>
-
-        {/* ===== MỨC ƯU TIÊN ===== */}
-        <View style={styles.section}>
-          <Text style={styles.sectionLabel}>MỨC ƯU TIÊN</Text>
-          <View style={styles.segmentRow}>
-            <TouchableOpacity
-              style={[styles.priorityItem, priority === 'high' && styles.priorityHigh]}
-              onPress={() => setPriority('high')}
-              activeOpacity={0.8}
-            >
-              <Text style={[styles.priorityText, priority === 'high' && styles.priorityHighText]}>
-                Ưu tiên cao
-              </Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.priorityItem, priority === 'normal' && styles.priorityNormal]}
-              onPress={() => setPriority('normal')}
-              activeOpacity={0.8}
-            >
-              <Text style={[styles.priorityText, priority === 'normal' && styles.priorityNormalText]}>
-                Bình thường
-              </Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.priorityItem, priority === 'low' && styles.priorityLow]}
-              onPress={() => setPriority('low')}
-              activeOpacity={0.8}
-            >
-              <Text style={[styles.priorityText, priority === 'low' && styles.priorityLowText]}>
-                Ưu tiên thấp
-              </Text>
-            </TouchableOpacity>
-          </View>
-
-          {priority === 'high' && (
-            <View style={styles.priorityWarning}>
-              <Text style={styles.priorityWarningText}>
-                ⚠ Nhiệm vụ ưu tiên cao được thực hiện trước các nhiệm vụ chờ khởi đầu.
-              </Text>
-            </View>
-          )}
-        </View>
-
-        {/* ===== THỜI HẠN ===== */}
-        <View style={styles.section}>
-          <View style={styles.fieldGroup}>
-            <Text style={styles.inputLabel}>THỜI HẠN (GIỜ:PHÚT)</Text>
-            <TextInput
-              style={styles.textInput}
-              value={deadline}
-              onChangeText={setDeadline}
-              placeholder="(giờ:phút)"
-              placeholderTextColor={Colors.textMuted}
-              keyboardType="numbers-and-punctuation"
-            />
-          </View>
-        </View>
-
-        {/* ===== GHI CHÚ ===== */}
-        <View style={styles.section}>
-          <View style={styles.fieldGroup}>
-            <Text style={styles.inputLabel}>GHI CHÚ</Text>
-            <TextInput
-              style={[styles.textInput, styles.textArea]}
-              value={notes}
-              onChangeText={setNotes}
-              placeholder="Ghi chú thêm..."
-              placeholderTextColor={Colors.textMuted}
-              multiline
-              numberOfLines={3}
-              textAlignVertical="top"
-            />
-          </View>
-        </View>
-
-        {/* ===== NÚT TẠO NHIỆM VỤ ===== */}
-        <TouchableOpacity
-          style={[styles.submitBtn, isSubmitting && { opacity: 0.7 }]}
-          onPress={handleSubmit}
-          disabled={isSubmitting}
-          activeOpacity={0.85}
-        >
-          {isSubmitting ? (
-            <ActivityIndicator size="small" color="#FFF" />
-          ) : (
-            <>
-              <Text style={styles.submitBtnText}>Tạo nhiệm vụ giao hàng</Text>
-              <ArrowRight size={18} color="#FFF" strokeWidth={2.5} />
-            </>
-          )}
-        </TouchableOpacity>
-      </ScrollView>
-
-      {/* ===== QR SCANNER MODAL ===== */}
-      <QRScannerModal
-        visible={showQRScanner}
-        onClose={() => setShowQRScanner(false)}
-        onConfirm={(item) => {
-          setScannedItem(item);
-          setItemName(item.code);
-          setShowQRScanner(false);
-        }}
-      />
-
-      {/* ===== FACE SCAN MODAL ===== */}
-      <FaceScanModal
-        visible={showFaceScan}
-        receiverName={receiver}
-        onClose={() => setShowFaceScan(false)}
-        onConfirm={() => {
-          setFaceVerified(true);
-          setShowFaceScan(false);
-        }}
-      />
-      {/* ===== ROOM PICKER MODAL ===== */}
-      <Modal visible={showRoomModal} transparent animationType="fade">
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <View style={styles.modalHeader}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                <MapPin size={20} color={Colors.primary} />
-                <Text style={styles.modalTitle}>Chọn phòng đích đến</Text>
-              </View>
-              <TouchableOpacity
-                onPress={() => setShowRoomModal(false)}
-                style={styles.modalCloseBtn}
-              >
-                <X size={18} color={Colors.textSecondary} />
+            {response && <View style={styles.actions}>
+              {response.responseType === 'PAYLOAD_CONFIRMED' && Array.isArray(response.data?.items) &&
+                response.data.items.map((item: any, index: number) => <Text key={index} style={styles.small}>{item.item_name || item.item_code || 'Hàng được giao'} · {item.quantity} {item.unit || ''}</Text>)}
+              <TouchableOpacity style={[styles.button, (!canRespond || isSendingStepResponse) && styles.disabled]} disabled={!canRespond || isSendingStepResponse} onPress={() => { void handleRespondStep(); }}>
+                {isSendingStepResponse ? <ActivityIndicator color="#fff" /> : <PackageCheck size={18} color="#fff" />}
+                <Text style={styles.buttonText}>{respondedStepId === runningStep?.jobStepId ? 'Đã gửi, chờ cập nhật' : responseLabel}</Text>
               </TouchableOpacity>
-            </View>
-
-            <ScrollView style={{ maxHeight: 360 }}>
-              {isLoadingFacility ? (
-                <ActivityIndicator size="small" color={Colors.primary} style={{ marginVertical: 20 }} />
-              ) : availableEndpoints.length === 0 ? (
-                <Text style={styles.emptyFacilityText}>Backend chưa có endpoint cho map đang hoạt động.</Text>
-              ) : availableEndpoints.map((endpoint) => {
-                const isSelected = deliveryEndpoint?.endpointId === endpoint.endpointId;
-                const room = rooms.find((item) => item.roomId === endpoint.roomId);
-                return (
-                  <TouchableOpacity
-                    key={endpoint.endpointId}
-                    style={[styles.roomSelectItem, isSelected && styles.roomSelectItemActive]}
-                    onPress={() => {
-                      setDeliveryEndpoint(endpoint);
-                      setShowRoomModal(false);
-                    }}
-                    activeOpacity={0.7}
-                  >
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 }}>
-                      <View style={[styles.roomSelectRadio, isSelected && styles.roomSelectRadioActive]}>
-                        {isSelected && <View style={styles.roomSelectRadioInner} />}
-                      </View>
-                      <View style={{ flex: 1 }}>
-                        <Text style={[styles.roomSelectText, isSelected && styles.roomSelectTextActive]}>
-                          {endpoint.endpointName}
-                        </Text>
-                        <Text style={styles.roomSelectSubText}>
-                          {endpoint.endpointCode} · {room?.roomName || endpoint.endpointType}
-                        </Text>
-                      </View>
-                    </View>
-                    {isSelected && <Check size={18} color={Colors.primary} />}
-                  </TouchableOpacity>
-                );
-              })}
-            </ScrollView>
-          </View>
+            </View>}
+            <Text style={styles.small}>Xác thực QR và phản hồi cơ cấu mở khóa là hai bước riêng. Hãy thực hiện theo hướng dẫn đang hiển thị.</Text>
+          </> : <Text style={styles.muted}>Chọn nhiệm vụ hoặc nhập Job ID để xem bước giao nhận.</Text>}
         </View>
+
+        <View style={styles.card}>
+          <Text style={styles.heading}>Tạo giao nhận mới</Text>
+          {!!pendingDeliveryLabel && <View style={styles.statusBox}><Text style={styles.muted}>Một yêu cầu đang chờ kết quả. Các lần thử lại giữ nguyên nội dung ban đầu.</Text>
+            <Text selectable style={styles.small}>{attemptRef.current?.requestId || 'Đang xác định kết quả tạo yêu cầu'}</Text></View>}
+          <Text style={styles.label}>Loại hàng</Text>
+          <View style={styles.chips}>{TASK_TYPES.filter(task => task.id.startsWith('van_chuyen_')).map(task =>
+            <TouchableOpacity key={task.id} style={[styles.chip, selectedTasks.includes(task.id) && styles.chipActive]} onPress={() => setSelectedTasks([task.id])}>
+              <Text style={styles.link}>{task.label}</Text>
+            </TouchableOpacity>)}</View>
+          <Text style={styles.label}>Tên hàng</Text><TextInput style={styles.input} value={itemName} onChangeText={setItemName} placeholder="Tên hàng cần vận chuyển" />
+          <Text style={styles.label}>Số lượng</Text><TextInput style={styles.input} value={quantity} onChangeText={setQuantity} keyboardType="number-pad" />
+          <Text style={styles.label}>Bản đồ đang sử dụng</Text>
+          <View style={styles.chips}>{availableMaps.map(map => <TouchableOpacity key={map.mapId} style={[styles.chip, map.mapId === activeMap?.mapId && styles.chipActive]} onPress={() => {
+            const endpoints = allEndpoints.filter(endpoint => endpoint.mapId === map.mapId && endpoint.active !== false);
+            setActiveMap(map); setAvailableEndpoints(endpoints); setPickupEndpoint(endpoints[0] || null); setDeliveryEndpoint(endpoints[1] || null);
+          }}><Text style={styles.link}>{map.mapName}</Text></TouchableOpacity>)}</View>
+          {!activeMap && <Text style={styles.muted}>Chưa có bản đồ hoạt động.</Text>}
+          <Text style={styles.label}>Điểm lấy hàng</Text>
+          <TouchableOpacity style={styles.select} onPress={() => { setEndpointPickerMode('pickup'); setShowRoomModal(true); }}><MapPin size={18} color={Colors.primary} /><Text style={styles.flex}>{fromRoom}</Text><ChevronDown size={18} /></TouchableOpacity>
+          <Text style={styles.label}>Điểm giao hàng</Text>
+          <TouchableOpacity style={styles.select} onPress={() => { setEndpointPickerMode('delivery'); setShowRoomModal(true); }}><MapPin size={18} color={Colors.primary} /><Text style={styles.flex}>{toRoom}</Text><ChevronDown size={18} /></TouchableOpacity>
+          <Text style={styles.label}>Account ID người gửi</Text>
+          <TextInput style={styles.input} value={senderAccountId} onChangeText={setSenderAccountId} autoCapitalize="none" placeholder="UUID tài khoản được giao gửi hàng" />
+          <TouchableOpacity onPress={() => setSenderAccountId(user?.accountId || '')}><Text style={styles.link}>Dùng tài khoản của tôi</Text></TouchableOpacity>
+
+          {/* ===== Người nhận: Staff Picker hoặc nhập thủ công ===== */}
+          <Text style={styles.label}>Người nhận hàng</Text>
+          {useManualReceiver ? (
+            <>
+              <TextInput style={styles.input} value={receiver} onChangeText={setReceiver} placeholder="Tên người nhận hiển thị" />
+              <Text style={styles.label}>Account ID người nhận</Text>
+              <TextInput style={styles.input} value={receiverAccountId} onChangeText={setReceiverAccountId} autoCapitalize="none" placeholder="UUID tài khoản được giao nhận hàng" />
+              <TouchableOpacity onPress={() => setUseManualReceiver(false)}>
+                <Text style={styles.link}>← Chọn từ danh sách nhân viên trực</Text>
+              </TouchableOpacity>
+            </>
+          ) : (
+            <StaffOnDutyPicker
+              mapId={activeMap?.mapId}
+              selectedStaff={selectedReceiverStaff}
+              onSelect={handleStaffSelect}
+              onClear={handleClearStaff}
+            />
+          )}
+          <Text style={styles.small}>Chọn nhân viên từ danh sách trực, hoặc nhập thủ công Account ID (UUID) nếu cần.</Text>
+
+          <Text style={styles.label}>Ưu tiên</Text><View style={styles.chips}>{(['normal','high','low'] as const).map(value =>
+            <TouchableOpacity key={value} style={[styles.chip, priority === value && styles.chipActive]} onPress={() => setPriority(value)}><Text style={styles.link}>{{normal:'Bình thường',high:'Cao',low:'Thấp'}[value]}</Text></TouchableOpacity>)}</View>
+          <Text style={styles.label}>Ghi chú</Text><TextInput multiline style={[styles.input, {minHeight:90, textAlignVertical:'top'}]} value={notes} onChangeText={setNotes} />
+          <Text style={styles.small}>Người gửi và người nhận quét QR trên robot khi đến đúng bước xác thực.</Text>
+          <TouchableOpacity disabled={isSubmitting || isLoadingFacility || !attemptReady} style={[styles.button,(isSubmitting || isLoadingFacility) && styles.disabled]} onPress={handleSubmit}>
+            {isSubmitting ? <ActivityIndicator color="#fff" /> : <ArrowRight size={18} color="#fff" />}
+            <Text style={styles.buttonText}>{pendingDeliveryLabel || 'Tạo và gửi nhiệm vụ'}</Text>
+          </TouchableOpacity>
+        </View>
+      </ScrollView>
+      {scan && <QRScannerModal key={scan.jobId + scan.stepId + scan.accountId} jobCode={activeJob?.jobCode || scan.jobId} purpose={scan.purpose}
+        onClose={() => setScan(null)} onVerify={raw => verifyDeliveryQr(scan, raw)} />}
+      <Modal visible={showRoomModal} transparent animationType="fade" onRequestClose={() => setShowRoomModal(false)}>
+        <View style={styles.overlay}><View style={styles.modal}>
+          <View style={styles.row}><Text style={[styles.heading,styles.flex]}>{endpointPickerMode === 'pickup' ? 'Điểm lấy hàng' : 'Điểm giao hàng'}</Text><TouchableOpacity onPress={() => setShowRoomModal(false)} accessibilityLabel="Đóng"><X /></TouchableOpacity></View>
+          <ScrollView style={{maxHeight:400}}>
+            {availableEndpoints.map(endpoint => <TouchableOpacity key={endpoint.endpointId} style={styles.select} onPress={() => {
+              if (endpointPickerMode === 'pickup') setPickupEndpoint(endpoint); else setDeliveryEndpoint(endpoint);
+              setShowRoomModal(false);
+            }}><MapPin size={18} color={Colors.primary} /><View style={styles.flex}><Text>{endpoint.endpointName}</Text><Text style={styles.small}>{endpoint.endpointCode} · {rooms.find(room => room.roomId === endpoint.roomId)?.roomName || endpoint.endpointType}</Text></View></TouchableOpacity>)}
+            {!availableEndpoints.length && <Text style={styles.muted}>Chưa có điểm giao nhận trên bản đồ này.</Text>}
+          </ScrollView>
+        </View></View>
       </Modal>
     </KeyboardAvoidingView>
   );
 };
 
 const styles = StyleSheet.create({
-  autoOriginBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    backgroundColor: '#ECFDF5',
-    paddingHorizontal: Spacing.sm,
-    paddingVertical: 6,
-    borderRadius: BorderRadius.sm,
-    borderWidth: 1,
-    borderColor: '#A7F3D0',
-    marginTop: Spacing.xs,
-  },
-  autoOriginText: {
-    fontSize: 12,
-    color: '#065F46',
-    fontWeight: '600',
-    flex: 1,
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: Spacing.lg,
-  },
-  modalContent: {
-    width: '100%',
-    backgroundColor: Colors.surface,
-    borderRadius: BorderRadius.lg,
-    padding: Spacing.md,
-    ...Shadows.floating,
-  },
-  modalHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: Spacing.md,
-    paddingBottom: Spacing.sm,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.border,
-  },
-  modalTitle: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: Colors.textPrimary,
-  },
-  modalCloseBtn: {
-    padding: 4,
-  },
-  roomSelectItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 12,
-    paddingHorizontal: Spacing.sm,
-    borderRadius: BorderRadius.md,
-    marginBottom: 4,
-  },
-  roomSelectItemActive: {
-    backgroundColor: '#F0F9FF',
-  },
-  roomSelectRadio: {
-    width: 18,
-    height: 18,
-    borderRadius: 9,
-    borderWidth: 1.5,
-    borderColor: Colors.border,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  roomSelectRadioActive: {
-    borderColor: Colors.primary,
-  },
-  roomSelectRadioInner: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    backgroundColor: Colors.primary,
-  },
-  roomSelectText: {
-    fontSize: 14,
-    color: Colors.textPrimary,
-    fontWeight: '500',
-  },
-  roomSelectSubText: {
-    marginTop: 2,
-    fontSize: 10,
-    color: Colors.textMuted,
-  },
-  emptyFacilityText: {
-    paddingVertical: 24,
-    textAlign: 'center',
-    color: Colors.textMuted,
-    fontSize: 12,
-  },
-  roomSelectTextActive: {
-    color: Colors.primary,
-    fontWeight: '700',
-  },
-  outerContainer: { flex: 1, backgroundColor: Colors.background },
-  scrollContent: { paddingBottom: 32 },
-  // Page Header
-  pageHeader: {
-    paddingHorizontal: Spacing.md, paddingTop: Spacing.md, paddingBottom: Spacing.sm,
-    backgroundColor: Colors.surface, borderBottomWidth: 1, borderBottomColor: Colors.border,
-    marginBottom: Spacing.sm,
-  },
-  pageHeaderSub: {
-    fontSize: 10, fontWeight: '700', letterSpacing: 1, color: Colors.textSecondary,
-    textTransform: 'uppercase', marginBottom: 2,
-  },
-  pageHeaderTitle: { ...Typography.h2, fontSize: 20 },
-  // Sections
-  section: {
-    backgroundColor: Colors.surface, marginHorizontal: Spacing.md,
-    borderRadius: BorderRadius.lg, padding: Spacing.md,
-    marginBottom: Spacing.sm, borderWidth: 1, borderColor: Colors.border,
-    ...Shadows.card,
-  },
-  sectionLabel: {
-    fontSize: 10, fontWeight: '700', letterSpacing: 0.8, textTransform: 'uppercase',
-    color: Colors.textSecondary, marginBottom: 4,
-  },
-  sectionCaption: { fontSize: 12, color: Colors.textMuted, marginBottom: Spacing.md },
-  rowBetween: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: Spacing.md },
-  twoCol: { flexDirection: 'row', gap: Spacing.sm },
-  fieldGroup: { marginBottom: Spacing.sm },
-  inputLabel: {
-    fontSize: 10, fontWeight: '700', letterSpacing: 0.6, textTransform: 'uppercase',
-    color: Colors.textSecondary, marginBottom: 5,
-  },
-  textInput: {
-    backgroundColor: Colors.inputBackground, borderRadius: BorderRadius.md,
-    paddingHorizontal: Spacing.md, height: 44,
-    borderWidth: 1, borderColor: Colors.inputBorder,
-    fontSize: 14, color: Colors.textPrimary,
-  },
-  textArea: {
-    height: 80, paddingTop: 10,
-  },
-  selectInput: {
-    backgroundColor: Colors.inputBackground, borderRadius: BorderRadius.md,
-    paddingHorizontal: Spacing.md, height: 44,
-    borderWidth: 1, borderColor: Colors.inputBorder,
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-  },
-  selectInputText: { fontSize: 14, color: Colors.textPrimary },
-  // Task Pills
-  pillGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: Spacing.sm },
-  taskPill: {
-    paddingHorizontal: 12, paddingVertical: 7,
-    borderRadius: BorderRadius.md, borderWidth: 1, borderColor: Colors.border,
-    backgroundColor: Colors.surfaceSubtle,
-  },
-  taskPillActive: { backgroundColor: Colors.teal, borderColor: Colors.teal },
-  taskPillText: { fontSize: 13, fontWeight: '500', color: Colors.textSecondary },
-  taskPillTextActive: { color: '#FFF', fontWeight: '600' },
-  // Outline Button
-  outlineBtn: {
-    flexDirection: 'row', alignItems: 'center', gap: 5,
-    borderWidth: 1.5, borderColor: Colors.teal, borderRadius: BorderRadius.sm,
-    paddingHorizontal: 12, paddingVertical: 7,
-  },
-  outlineBtnText: { fontSize: 13, fontWeight: '600', color: Colors.teal },
-  // Segment Control - Security
-  segmentRow: {
-    flexDirection: 'row', gap: 8, marginTop: Spacing.sm, flexWrap: 'wrap',
-  },
-  segmentItem: {
-    paddingHorizontal: 14, paddingVertical: 8,
-    borderRadius: BorderRadius.md, borderWidth: 1.5, borderColor: Colors.border,
-    backgroundColor: Colors.surfaceSubtle,
-  },
-  segmentItemActive: {
-    backgroundColor: Colors.teal, borderColor: Colors.teal,
-  },
-  segmentItemFace: {
-    backgroundColor: '#F59E0B', borderColor: '#F59E0B',
-  },
-  segmentText: { fontSize: 13, fontWeight: '500', color: Colors.textSecondary },
-  segmentTextActive: { color: '#FFF', fontWeight: '700' },
-  segmentTextFace: { color: '#FFF', fontWeight: '700' },
-  // Face Register Box
-  faceRegisterBox: {
-    marginTop: Spacing.md, borderWidth: 1.5, borderColor: '#F59E0B',
-    borderRadius: BorderRadius.md, backgroundColor: '#FFFBEB', padding: Spacing.md,
-  },
-  faceRegisterTitle: {
-    fontSize: 13, fontWeight: '600', color: '#92400E', marginBottom: Spacing.sm,
-  },
-  photoBtn: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
-    backgroundColor: '#F59E0B', borderRadius: BorderRadius.md, height: 46,
-  },
-  photoBtnText: { fontSize: 14, fontWeight: '700', color: '#FFF' },
-  // Face verified
-  faceVerifiedRow: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 4,
-  },
-  faceVerifiedBadge: {
-    flexDirection: 'row', alignItems: 'center', gap: 6,
-    backgroundColor: '#D1FAE5', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6,
-  },
-  faceVerifiedText: { fontSize: 13, fontWeight: '700', color: '#10B981' },
-  retakeFaceText: { fontSize: 12, fontWeight: '600', color: Colors.primary },
-  // QR scanned item box
-  scannedItemBox: {
-    backgroundColor: '#F0FDF4', borderRadius: BorderRadius.md, padding: 12,
-    marginTop: 10, borderWidth: 1, borderColor: '#BBF7D0',
-  },
-  scannedItemRow: {
-    flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 3,
-  },
-  scannedItemLabel: { fontSize: 12, color: Colors.textSecondary },
-  scannedItemValue: { fontSize: 12, fontWeight: '700', color: Colors.textPrimary },
-  // QR outline button success state
-  outlineBtnSuccess: {
-    borderColor: '#10B981', backgroundColor: '#F0FDF4',
-  },
-  // Priority
-  priorityItem: {
-    flex: 1, paddingVertical: 9, borderRadius: BorderRadius.md,
-    borderWidth: 1.5, borderColor: Colors.border,
-    backgroundColor: Colors.surfaceSubtle, alignItems: 'center',
-  },
-  priorityHigh: { backgroundColor: '#EF4444', borderColor: '#EF4444' },
-  priorityNormal: { backgroundColor: Colors.teal, borderColor: Colors.teal },
-  priorityLow: { backgroundColor: Colors.primary, borderColor: Colors.primary },
-  priorityText: { fontSize: 13, fontWeight: '500', color: Colors.textSecondary },
-  priorityHighText: { color: '#FFF', fontWeight: '700' },
-  priorityNormalText: { color: '#FFF', fontWeight: '700' },
-  priorityLowText: { color: '#FFF', fontWeight: '700' },
-  priorityWarning: {
-    backgroundColor: '#FEF2F2', borderRadius: BorderRadius.sm,
-    padding: 10, marginTop: Spacing.sm,
-  },
-  priorityWarningText: { fontSize: 12, color: '#B91C1C', lineHeight: 18 },
-  // Submit
-  submitBtn: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-    backgroundColor: Colors.teal, borderRadius: BorderRadius.lg,
-    marginHorizontal: Spacing.md, marginTop: Spacing.md, height: 52, gap: 8,
-    ...Shadows.button,
-  },
-  submitBtnText: { fontSize: 16, fontWeight: '700', color: '#FFF' },
-
-  // Strict Security Requirement Styles
-  strictBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    backgroundColor: '#FEF3C7',
-    paddingHorizontal: 7,
-    paddingVertical: 2,
-    borderRadius: 6,
-    borderWidth: 1,
-    borderColor: '#FDE68A',
-  },
-  strictBadgeText: {
-    fontSize: 9,
-    fontWeight: '800',
-    color: '#D97706',
-    letterSpacing: 0.4,
-  },
-  securityRequirementNotice: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    backgroundColor: '#FFFBEB',
-    padding: 10,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#FCD34D',
-    marginBottom: 10,
-  },
-  securityRequirementText: {
-    flex: 1,
-    fontSize: 11,
-    fontWeight: '600',
-    color: '#92400E',
-    lineHeight: 16,
-  },
-  segmentItemDisabled: {
-    opacity: 0.5,
-    backgroundColor: '#F1F5F9',
-  },
+  root: {flex:1,backgroundColor:Colors.background},
+  content: {padding:20,gap:14,paddingBottom:42,maxWidth:840,width:'100%',alignSelf:'center'},
+  eyebrow: {fontSize:11,fontWeight:'700',letterSpacing:1.4,color:Colors.primary},
+  title: {fontSize:28,fontWeight:'800',color:Colors.textPrimary},
+  heading: {fontSize:17,fontWeight:'700',color:Colors.textPrimary},
+  label: {fontSize:12,fontWeight:'700',color:Colors.textSecondary,marginTop:12},
+  muted: {fontSize:14,lineHeight:21,color:Colors.textSecondary},
+  small: {fontSize:12,lineHeight:19,color:Colors.textSecondary},
+  status: {fontSize:12,fontWeight:'700',color:Colors.primary},
+  card: {backgroundColor:'#fff',borderRadius:16,borderWidth:1,borderColor:'#e2e8f0',padding:18,gap:12},
+  statusBox: {backgroundColor:'#f1f8f7',padding:14,borderRadius:12,gap:8},
+  row: {flexDirection:'row',alignItems:'center',gap:10},
+  flex: {flex:1},
+  chips: {flexDirection:'row',gap:8,flexWrap:'wrap',paddingVertical:4},
+  chip: {paddingHorizontal:12,paddingVertical:10,borderRadius:10,borderWidth:1,borderColor:'#dbe5e8',gap:3},
+  chipActive: {backgroundColor:'#e6f4f0',borderColor:Colors.primary},
+  link: {fontSize:13,fontWeight:'600',color:Colors.primary},
+  input: {borderWidth:1,borderColor:'#dbe5e8',borderRadius:10,paddingHorizontal:12,paddingVertical:12,fontSize:14,color:Colors.textPrimary,backgroundColor:'#fff'},
+  select: {flexDirection:'row',alignItems:'center',gap:10,padding:13,borderWidth:1,borderColor:'#dbe5e8',borderRadius:10,marginVertical:3},
+  button: {flexDirection:'row',alignItems:'center',justifyContent:'center',gap:8,backgroundColor:Colors.primary,padding:14,borderRadius:10},
+  buttonText: {color:'#fff',fontWeight:'700',fontSize:14},
+  smallButton: {flexDirection:'row',gap:6,padding:8,alignItems:'center'},
+  disabled: {opacity:0.45},
+  error: {color:'#b42318',fontSize:13,lineHeight:20},
+  actions: {gap:10},
+  overlay: {flex:1,backgroundColor:'rgba(0,0,0,0.4)',justifyContent:'center',alignItems:'center',padding:22},
+  modal: {width:'100%',maxWidth:540,padding:20,borderRadius:16,backgroundColor:'#fff',gap:15},
 });

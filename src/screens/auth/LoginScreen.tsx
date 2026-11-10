@@ -176,6 +176,7 @@ export const LoginScreen: React.FC = () => {
       if (useAuthStore.getState().mustChangePassword) {
         navigation.navigate('FirstLoginPasswordChange', {
           username: username.trim(),
+          staffCode: username.trim().toUpperCase(),
           currentPassword: password,
         });
       } else {
@@ -400,6 +401,7 @@ export const LoginScreen: React.FC = () => {
             onPress={() => {
               navigation.navigate('FirstLoginPasswordChange', {
                 username: username.trim() || 'staff1',
+                staffCode: username.trim() ? username.trim().toUpperCase() : 'STF-001',
                 currentPassword: password || '12345678',
               });
             }}

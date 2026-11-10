@@ -270,6 +270,7 @@ export const StaffHeader: React.FC<StaffHeaderProps> = ({
                 setShowProfileModal(false);
                 navigation.navigate('FirstLoginPasswordChange', {
                   username: user?.username || staffData?.account?.username || 'staff1',
+                  staffCode: staffData?.staffProfile?.staffCode || user?.accountCode || 'STF-001',
                 });
               }}
               activeOpacity={0.8}

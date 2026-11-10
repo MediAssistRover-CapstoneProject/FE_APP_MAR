@@ -27,6 +27,8 @@ import {
   ArrowRight,
   LogOut,
   User,
+  KeyRound,
+  BadgeCheck,
 } from 'lucide-react-native';
 import { useAuthStore } from '../../store/useAuthStore';
 
@@ -37,9 +39,19 @@ export const FirstLoginPasswordChangeScreen: React.FC = () => {
   const navigation = useNavigation<NavigationProp>();
   const route = useRoute<ScreenRouteProp>();
 
-  const { username = 'staff', currentPassword: initialCurrentPassword = '' } = route.params || {};
+  const {
+    username: initialUsername = '',
+    currentPassword: initialCurrentPassword = '',
+    staffCode: initialStaffCode = '',
+  } = route.params || {};
+
   const { changePassword, login, logout, isLoading, error: storeError, clearError } = useAuthStore();
 
+  // Bắt buộc nhập Mã nhân viên (Staff Code) để xác định đúng tài khoản y tế
+  const [staffCode, setStaffCode] = useState(
+    initialStaffCode || (initialUsername ? initialUsername.toUpperCase() : '')
+  );
+  const [accountUsername, setAccountUsername] = useState(initialUsername || '');
   const [currentPassword, setCurrentPassword] = useState(initialCurrentPassword);
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -51,7 +63,8 @@ export const FirstLoginPasswordChangeScreen: React.FC = () => {
   const [errorMessage, setErrorMessage] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Kiểm tra các tiêu chuẩn bảo mật mật khẩu
+  // Tiêu chuẩn kiểm tra
+  const hasStaffCode = staffCode.trim().length > 0;
   const hasMinLength = newPassword.length >= 8;
   const isDifferentFromCurrent = newPassword.length > 0 && newPassword !== currentPassword;
   const isMatchingConfirm = confirmPassword.length > 0 && newPassword === confirmPassword;
@@ -95,6 +108,13 @@ export const FirstLoginPasswordChangeScreen: React.FC = () => {
     setErrorMessage('');
     clearError();
 
+    const cleanStaffCode = staffCode.trim();
+    const cleanUsername = accountUsername.trim() || cleanStaffCode.toLowerCase();
+
+    if (!cleanStaffCode) {
+      setErrorMessage('Vui lòng nhập Mã nhân viên (Staff Code) để xác định tài khoản cần đổi mật khẩu.');
+      return;
+    }
     if (!currentPassword) {
       setErrorMessage('Vui lòng nhập mật khẩu tạm thời hiện tại.');
       return;
@@ -114,7 +134,19 @@ export const FirstLoginPasswordChangeScreen: React.FC = () => {
 
     setIsSubmitting(true);
     try {
-      // 1. Gọi API đổi mật khẩu (PUT /api/v1/auth/change-password)
+      // 1. Kiểm tra nếu chưa có phiên đăng nhập hợp lệ, thực hiện xác thực bằng mã nhân viên/username và mật khẩu tạm
+      const currentToken = useAuthStore.getState().token;
+      if (!currentToken) {
+        const loggedIn = await login(cleanUsername, currentPassword);
+        if (!loggedIn) {
+          const authError = useAuthStore.getState().error;
+          setErrorMessage(authError || 'Mã nhân viên hoặc mật khẩu tạm thời không chính xác. Vui lòng kiểm tra lại!');
+          setIsSubmitting(false);
+          return;
+        }
+      }
+
+      // 2. Gọi API đổi mật khẩu (PUT /api/v1/auth/change-password)
       const changed = await changePassword(currentPassword, newPassword);
       if (!changed) {
         setErrorMessage(storeError || 'Không thể đổi mật khẩu. Vui lòng kiểm tra lại mật khẩu cũ!');
@@ -122,12 +154,12 @@ export const FirstLoginPasswordChangeScreen: React.FC = () => {
         return;
       }
 
-      // 2. Đăng nhập lại với mật khẩu mới để lấy token hợp lệ không còn cờ mustChangePassword
-      const loggedIn = await login(username, newPassword);
-      if (loggedIn) {
+      // 3. Đăng nhập lại với mật khẩu mới để cấp token hoàn chỉnh không còn cờ mustChangePassword
+      const reLoggedIn = await login(cleanUsername, newPassword);
+      if (reLoggedIn) {
         Alert.alert(
           'Kích hoạt tài khoản thành công',
-          'Mật khẩu mới của bạn đã được cập nhật an toàn. Bạn có thể sử dụng đầy đủ các tính năng nhiệm vụ và bản đồ.',
+          `Tài khoản nhân viên [${cleanStaffCode}] đã được cập nhật mật khẩu mới và kích hoạt thành công trên hệ thống MediAssistRover.`,
           [
             {
               text: 'Bắt đầu sử dụng',
@@ -138,7 +170,6 @@ export const FirstLoginPasswordChangeScreen: React.FC = () => {
           ]
         );
       } else {
-        // Đã đổi mật khẩu thành công nhưng cần đăng nhập lại từ trang login
         Alert.alert(
           'Đổi mật khẩu thành công',
           'Vui lòng đăng nhập lại với mật khẩu mới vừa tạo.',
@@ -176,7 +207,7 @@ export const FirstLoginPasswordChangeScreen: React.FC = () => {
         <View style={styles.topNotice}>
           <ShieldAlert size={20} color="#B45309" />
           <Text style={styles.topNoticeText}>
-            BẮT BUỘC ĐỔI MẬT KHẨU CHO LẦN ĐĂNG NHẬP ĐẦU TIÊN
+            YÊU CẦU MÃ NHÂN VIÊN ĐỂ XÁC THỰC ĐỔI MẬT KHẨU LẦN ĐẦU
           </Text>
         </View>
 
@@ -185,24 +216,28 @@ export const FirstLoginPasswordChangeScreen: React.FC = () => {
           <View style={styles.iconCircle}>
             <ShieldCheck size={36} color="#FFFFFF" strokeWidth={2.2} />
           </View>
-          <Text style={styles.title}>Thiết lập mật khẩu mới</Text>
+          <Text style={styles.title}>Kích hoạt & Đổi mật khẩu</Text>
           <Text style={styles.subtitle}>
-            Tài khoản y tế của bạn đang sử dụng mật khẩu khởi tạo tạm thời. Vì lý do an toàn thông tin bệnh viện, bạn cần cập nhật mật khẩu mới trước khi truy cập.
+            Nhập chính xác Mã nhân viên y tế được cấp để hệ thống nhận diện đúng tài khoản và cập nhật mật khẩu mới.
           </Text>
         </View>
 
-        {/* Card thông tin tài khoản */}
+        {/* Thẻ hiển thị tài khoản nhận diện */}
         <View style={styles.accountCard}>
           <View style={styles.accountRow}>
             <View style={styles.accountAvatar}>
-              <User size={18} color={Colors.primary} />
+              <BadgeCheck size={20} color={Colors.primary} />
             </View>
             <View style={{ flex: 1 }}>
-              <Text style={styles.accountLabel}>Tài khoản nhân viên</Text>
-              <Text style={styles.accountUsername}>{username}</Text>
+              <Text style={styles.accountLabel}>ĐỊNH DANH NHÂN VIÊN</Text>
+              <Text style={styles.accountUsername}>
+                {staffCode.trim() ? staffCode.trim().toUpperCase() : 'Chưa nhập mã nhân viên'}
+              </Text>
             </View>
-            <View style={styles.statusBadge}>
-              <Text style={styles.statusBadgeText}>Chưa kích hoạt</Text>
+            <View style={[styles.statusBadge, hasStaffCode && styles.statusBadgeActive]}>
+              <Text style={[styles.statusBadgeText, hasStaffCode && styles.statusBadgeTextActive]}>
+                {hasStaffCode ? 'Đã nhận diện' : 'Cần nhập mã'}
+              </Text>
             </View>
           </View>
         </View>
@@ -215,18 +250,60 @@ export const FirstLoginPasswordChangeScreen: React.FC = () => {
           </View>
         ) : null}
 
-        {/* Form nhập mật khẩu */}
+        {/* Form nhập liệu */}
         <View style={styles.formCard}>
-          {/* Mật khẩu tạm thời */}
-          <Text style={styles.label}>Mật khẩu tạm thời hiện tại</Text>
+          {/* 1. MÃ NHÂN VIÊN (STAFF CODE) - BẮT BUỘC */}
+          <Text style={styles.label}>
+            Mã nhân viên (Staff Code) <Text style={styles.requiredMark}>*</Text>
+          </Text>
+          <View style={[styles.inputWrapper, !hasStaffCode && styles.inputWrapperHighlight]}>
+            <BadgeCheck size={18} color={hasStaffCode ? Colors.primary : Colors.textMuted} style={styles.inputIcon} />
+            <TextInput
+              style={styles.input}
+              value={staffCode}
+              onChangeText={(text) => {
+                setStaffCode(text);
+                if (!accountUsername) {
+                  setAccountUsername(text.toLowerCase());
+                }
+              }}
+              placeholder="VD: STF-001 hoặc staff1"
+              placeholderTextColor={Colors.textMuted}
+              autoCapitalize="characters"
+            />
+          </View>
+          <Text style={styles.inputHelperText}>
+            Mã nhân viên y tế do điều phối bệnh viện hoặc phòng CNTT cấp.
+          </Text>
+
+          {/* 2. TÊN TÀI KHOẢN (USERNAME) */}
+          <Text style={[styles.label, { marginTop: 14 }]}>
+            Tên đăng nhập (Username)
+          </Text>
           <View style={styles.inputWrapper}>
-            <Lock size={18} color={Colors.textMuted} style={styles.inputIcon} />
+            <User size={18} color={Colors.textMuted} style={styles.inputIcon} />
+            <TextInput
+              style={styles.input}
+              value={accountUsername}
+              onChangeText={setAccountUsername}
+              placeholder="VD: staff1"
+              placeholderTextColor={Colors.textMuted}
+              autoCapitalize="none"
+            />
+          </View>
+
+          {/* 3. MẬT KHẨU TẠM THỜI HIỆN TẠI */}
+          <Text style={[styles.label, { marginTop: 14 }]}>
+            Mật khẩu tạm thời hiện tại <Text style={styles.requiredMark}>*</Text>
+          </Text>
+          <View style={styles.inputWrapper}>
+            <KeyRound size={18} color={Colors.textMuted} style={styles.inputIcon} />
             <TextInput
               style={styles.input}
               value={currentPassword}
               onChangeText={setCurrentPassword}
               secureTextEntry={!showCurrentPassword}
-              placeholder="Nhập mật khẩu tạm thời"
+              placeholder="Nhập mật khẩu tạm thời ban đầu"
               placeholderTextColor={Colors.textMuted}
               autoCapitalize="none"
             />
@@ -242,8 +319,10 @@ export const FirstLoginPasswordChangeScreen: React.FC = () => {
             </TouchableOpacity>
           </View>
 
-          {/* Mật khẩu mới */}
-          <Text style={[styles.label, { marginTop: 14 }]}>Mật khẩu mới</Text>
+          {/* 4. MẬT KHẨU MỚI */}
+          <Text style={[styles.label, { marginTop: 14 }]}>
+            Mật khẩu mới <Text style={styles.requiredMark}>*</Text>
+          </Text>
           <View style={styles.inputWrapper}>
             <Lock size={18} color={Colors.textMuted} style={styles.inputIcon} />
             <TextInput
@@ -290,8 +369,10 @@ export const FirstLoginPasswordChangeScreen: React.FC = () => {
             </View>
           )}
 
-          {/* Nhập lại mật khẩu mới */}
-          <Text style={[styles.label, { marginTop: 14 }]}>Nhập lại mật khẩu mới</Text>
+          {/* 5. NHẬP LẠI MẬT KHẨU MỚI */}
+          <Text style={[styles.label, { marginTop: 14 }]}>
+            Nhập lại mật khẩu mới <Text style={styles.requiredMark}>*</Text>
+          </Text>
           <View style={styles.inputWrapper}>
             <Lock size={18} color={Colors.textMuted} style={styles.inputIcon} />
             <TextInput
@@ -318,17 +399,23 @@ export const FirstLoginPasswordChangeScreen: React.FC = () => {
           {/* Danh sách tiêu chuẩn mật khẩu */}
           <View style={styles.criteriaList}>
             <View style={styles.criteriaItem}>
+              {hasStaffCode ? (
+                <Check size={15} color="#059669" />
+              ) : (
+                <X size={15} color="#94A3B8" />
+              )}
+              <Text style={[styles.criteriaText, hasStaffCode && styles.criteriaTextValid]}>
+                Đã cung cấp Mã nhân viên hợp lệ
+              </Text>
+            </View>
+
+            <View style={styles.criteriaItem}>
               {hasMinLength ? (
                 <Check size={15} color="#059669" />
               ) : (
                 <X size={15} color="#94A3B8" />
               )}
-              <Text
-                style={[
-                  styles.criteriaText,
-                  hasMinLength && styles.criteriaTextValid,
-                ]}
-              >
+              <Text style={[styles.criteriaText, hasMinLength && styles.criteriaTextValid]}>
                 Mật khẩu có từ 8 ký tự trở lên
               </Text>
             </View>
@@ -339,12 +426,7 @@ export const FirstLoginPasswordChangeScreen: React.FC = () => {
               ) : (
                 <X size={15} color="#94A3B8" />
               )}
-              <Text
-                style={[
-                  styles.criteriaText,
-                  isDifferentFromCurrent && styles.criteriaTextValid,
-                ]}
-              >
+              <Text style={[styles.criteriaText, isDifferentFromCurrent && styles.criteriaTextValid]}>
                 Khác với mật khẩu tạm thời ban đầu
               </Text>
             </View>
@@ -355,12 +437,7 @@ export const FirstLoginPasswordChangeScreen: React.FC = () => {
               ) : (
                 <X size={15} color="#94A3B8" />
               )}
-              <Text
-                style={[
-                  styles.criteriaText,
-                  isMatchingConfirm && styles.criteriaTextValid,
-                ]}
-              >
+              <Text style={[styles.criteriaText, isMatchingConfirm && styles.criteriaTextValid]}>
                 Hai lần nhập mật khẩu mới phải khớp nhau
               </Text>
             </View>
@@ -372,17 +449,17 @@ export const FirstLoginPasswordChangeScreen: React.FC = () => {
           <TouchableOpacity
             style={[
               styles.submitBtn,
-              (!hasMinLength || !isDifferentFromCurrent || !isMatchingConfirm || isSubmitting || isLoading) &&
+              (!hasStaffCode || !hasMinLength || !isDifferentFromCurrent || !isMatchingConfirm || isSubmitting || isLoading) &&
                 styles.submitBtnDisabled,
             ]}
             onPress={handleSubmit}
-            disabled={!hasMinLength || !isDifferentFromCurrent || !isMatchingConfirm || isSubmitting || isLoading}
+            disabled={!hasStaffCode || !hasMinLength || !isDifferentFromCurrent || !isMatchingConfirm || isSubmitting || isLoading}
           >
             {isSubmitting || isLoading ? (
               <ActivityIndicator size="small" color="#FFFFFF" />
             ) : (
               <>
-                <Text style={styles.submitBtnText}>Cập nhật mật khẩu & Kích hoạt</Text>
+                <Text style={styles.submitBtnText}>Xác thực mã nhân viên & Kích hoạt</Text>
                 <ArrowRight size={18} color="#FFFFFF" />
               </>
             )}
@@ -483,15 +560,15 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   accountLabel: {
-    fontSize: 11,
-    fontWeight: '600',
+    fontSize: 10,
+    fontWeight: '700',
     color: Colors.textMuted,
-    textTransform: 'uppercase',
+    letterSpacing: 0.6,
   },
   accountUsername: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: Colors.textPrimary,
+    fontSize: 16,
+    fontWeight: '800',
+    color: Colors.primary,
     marginTop: 2,
   },
   statusBadge: {
@@ -500,10 +577,16 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
     borderRadius: 6,
   },
+  statusBadgeActive: {
+    backgroundColor: '#DCFCE7',
+  },
   statusBadgeText: {
     fontSize: 11,
     fontWeight: '700',
     color: '#D97706',
+  },
+  statusBadgeTextActive: {
+    color: '#16A34A',
   },
   errorBox: {
     flexDirection: 'row',
@@ -538,6 +621,9 @@ const styles = StyleSheet.create({
     color: Colors.textPrimary,
     marginBottom: 6,
   },
+  requiredMark: {
+    color: '#EF4444',
+  },
   inputWrapper: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -547,6 +633,10 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
     paddingHorizontal: 12,
   },
+  inputWrapperHighlight: {
+    borderColor: Colors.primary,
+    backgroundColor: '#F0F9FF',
+  },
   inputIcon: {
     marginRight: 8,
   },
@@ -555,6 +645,11 @@ const styles = StyleSheet.create({
     height: 46,
     fontSize: 14,
     color: Colors.textPrimary,
+  },
+  inputHelperText: {
+    fontSize: 11,
+    color: Colors.textMuted,
+    marginTop: 4,
   },
   eyeBtn: {
     padding: 8,
@@ -618,7 +713,7 @@ const styles = StyleSheet.create({
   },
   submitBtnText: {
     color: '#FFFFFF',
-    fontSize: 15,
+    fontSize: 14,
     fontWeight: '700',
   },
   logoutBtn: {

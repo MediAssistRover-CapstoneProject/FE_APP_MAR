@@ -1,3 +1,4 @@
+import { staffApi } from '../api/modules/staff.api';
 import { create } from 'zustand';
 import { authApi } from '../api/modules/auth.api';
 import { apiClient } from '../api/client';
@@ -52,7 +53,16 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
       // Lấy thông tin tài khoản người dùng
       try {
-        const meRes = await authApi.getMe();
+        let meRes: UserProfileResponse | null = null;
+        try {
+          meRes = await authApi.getMe();
+        } catch {
+          const staffRes = await staffApi.getStaffMe();
+          meRes = staffRes?.account || null;
+        }
+        if (!meRes?.accountId) {
+          throw new Error('Không lấy được hồ sơ tài khoản từ máy chủ.');
+        }
         set({ user: meRes, isLoading: false });
       } catch (profileError: any) {
         apiClient.setSession(null, null);
@@ -79,7 +89,18 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   fetchMe: async () => {
     try {
       const me = await authApi.getMe();
-      set({ user: me });
+      if (me?.accountId) {
+        set({ user: me });
+        return;
+      }
+    } catch (err) {
+      // Fallback sang staffApi.getStaffMe nếu /auth/me lỗi
+    }
+    try {
+      const staffRes = await staffApi.getStaffMe();
+      if (staffRes?.account?.accountId) {
+        set({ user: staffRes.account });
+      }
     } catch (err) {
       console.warn('Could not fetch user profile:', err);
     }

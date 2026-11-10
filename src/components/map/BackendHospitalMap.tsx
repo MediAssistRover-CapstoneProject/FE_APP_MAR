@@ -119,6 +119,13 @@ export const BackendHospitalMap: React.FC<BackendHospitalMapProps> = ({
   const [filterMode, setFilterMode] = useState<MapFilterMode>('otto_cad');
 
   const imageUrl = `${API_CONFIG.BASE_URL}/maps/${map.mapId}/image.png`;
+  const mapImageSource = useMemo(
+    () => ({
+      uri: imageUrl,
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    }),
+    [imageUrl, token]
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -144,6 +151,7 @@ export const BackendHospitalMap: React.FC<BackendHospitalMapProps> = ({
         const aligned = analyzeSlamMapGeometry(decoded.width, decoded.height, decoded.gray);
         if (!cancelled) {
           setAutoAlign(aligned);
+          setIsLoadingImage(false);
         }
       } catch {
         // Fallback sang Image.getSizeWithHeaders nếu không đọc được binary
@@ -155,9 +163,16 @@ export const BackendHospitalMap: React.FC<BackendHospitalMapProps> = ({
               if (!cancelled && width > 0 && height > 0) {
                 setNaturalSize({ width, height });
               }
+              if (!cancelled) setIsLoadingImage(false);
             },
-            () => {}
+            () => {
+              if (!cancelled) setIsLoadingImage(false);
+            }
           );
+        }
+      } finally {
+        if (!cancelled) {
+          setIsLoadingImage(false);
         }
       }
     };
@@ -399,11 +414,7 @@ export const BackendHospitalMap: React.FC<BackendHospitalMapProps> = ({
 
         {!imageFailed && (
           <Image
-            source={{
-              uri: imageUrl,
-              headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-              cache: 'reload',
-            }}
+            source={mapImageSource}
             resizeMode="stretch"
             style={[
               styles.rotatedMapImage,
@@ -416,7 +427,6 @@ export const BackendHospitalMap: React.FC<BackendHospitalMapProps> = ({
                 transform: [{ rotate: `${geometry.rotationDeg}deg` }],
               },
             ]}
-            onLoadStart={() => setIsLoadingImage(true)}
             onLoad={(event) => {
               const src = event.nativeEvent?.source;
               if (src?.width && src?.height) {
@@ -771,7 +781,7 @@ export const BackendHospitalMap: React.FC<BackendHospitalMapProps> = ({
           </Text>
         </TouchableOpacity>
 
-        {isLoadingImage && !imageFailed && (
+        {isLoadingImage && !naturalSize && !autoAlign && !imageFailed && (
           <View style={styles.loadingOverlay} pointerEvents="none">
             <ActivityIndicator size="small" color="#2563EB" />
             <Text style={styles.loadingText}>Đang tải & căn chỉnh viền map...</Text>

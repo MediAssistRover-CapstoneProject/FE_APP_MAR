@@ -17,7 +17,8 @@ import { StaffHeader } from '../../components/common/StaffHeader';
 import { deliveryApi, type DeliveryResponse } from '../../api/modules/delivery.api';
 import { dispatchApi } from '../../api/modules/dispatch.api';
 import { facilityApi } from '../../api/modules/facility.api';
-import { EndpointResponse, JobResponse, MapResponse, OnDutyStaffResponse, RoomDto } from '../../api/types';
+import { staffApi } from '../../api/modules/staff.api';
+import { EndpointResponse, JobResponse, MapResponse, OnDutyStaffResponse, RoomDto, UserProfileResponse } from '../../api/types';
 import { useAuthStore } from '../../store/useAuthStore';
 import { apiClient } from '../../api/client';
 import { StaffOnDutyPicker } from '../../components/staff/StaffOnDutyPicker';
@@ -115,11 +116,50 @@ const STEP_LABELS: Record<string, string> = {
 };
 
 export const MissionScreen: React.FC = () => {
-  const { user } = useAuthStore();
+  const { user, fetchMe } = useAuthStore();
+  const [activeAccount, setActiveAccount] = useState<UserProfileResponse | null>(user);
+  const currentSenderAccount = activeAccount || user;
+
   const apiBaseUrl = apiClient.getBaseUrl();
-  const scope = `${apiBaseUrl}:${user?.accountId || ''}`;
+  const scope = `${apiBaseUrl}:${currentSenderAccount?.accountId || ''}`;
   const scopeRef = useRef(scope);
   scopeRef.current = scope;
+
+  // Auto-fetch and sync user profile from staffApi / authApi
+  useEffect(() => {
+    if (user?.accountId) {
+      setActiveAccount(user);
+    }
+  }, [user]);
+
+  useEffect(() => {
+    let mounted = true;
+    const resolveSender = async () => {
+      if (user?.accountId) {
+        setActiveAccount(user);
+        return;
+      }
+      try {
+        const staffRes = await staffApi.getStaffMe();
+        if (mounted && staffRes?.account?.accountId) {
+          setActiveAccount(staffRes.account);
+          useAuthStore.setState({ user: staffRes.account });
+          return;
+        }
+      } catch {}
+
+      try {
+        await fetchMe();
+        const me = useAuthStore.getState().user;
+        if (mounted && me?.accountId) {
+          setActiveAccount(me);
+        }
+      } catch {}
+    };
+    void resolveSender();
+    return () => { mounted = false; };
+  }, [user?.accountId, fetchMe]);
+
   useEffect(() => {
     scopeRef.current = scope;
     return () => { if (scopeRef.current === scope) scopeRef.current = ''; };
@@ -450,7 +490,7 @@ export const MissionScreen: React.FC = () => {
       Alert.alert('Trùng điểm A và B', 'Chọn hai điểm khác nhau.');
       return;
     }
-    const senderId = (user?.accountId || '').trim().toLowerCase();
+    const senderId = (currentSenderAccount?.accountId || user?.accountId || '').trim().toLowerCase();
     const receiverId = receiverAccountId.trim().toLowerCase();
     if (!user?.accountId || !UUID_PATTERN.test(senderId) || !UUID_PATTERN.test(receiverId)) {
       Alert.alert('Thiếu tài khoản được phân công', 'Nhập Account ID (UUID) của người gửi và người nhận.');
@@ -577,10 +617,14 @@ export const MissionScreen: React.FC = () => {
           <View style={styles.senderBox}>
             <User size={18} color={Colors.primary} />
             <View style={styles.flex}>
-              <Text style={styles.senderName}>{user?.username || 'Tài khoản hiện tại'}</Text>
-              <Text selectable style={styles.senderIdText}>{user?.accountId || 'Chưa đăng nhập'}</Text>
+              <Text style={styles.senderName}>
+                {currentSenderAccount?.fullName || currentSenderAccount?.username || 'Nhân viên trực'}
+              </Text>
+              <Text selectable style={styles.senderIdText}>
+                {currentSenderAccount?.accountId || 'Đang tải thông tin tài khoản...'}
+              </Text>
             </View>
-            <CheckCircle2 size={16} color="#059669" />
+            <CheckCircle2 size={16} color={currentSenderAccount?.accountId ? '#059669' : '#94A3B8'} />
           </View>
 
           {/* ===== Người nhận: Staff Picker hoặc nhập thủ công ===== */}

@@ -45,6 +45,9 @@ export const StaffHeader: React.FC<StaffHeaderProps> = ({
       const res = await staffApi.getStaffMe();
       if (res) {
         setStaffData(res);
+        if (res.account) {
+          useAuthStore.setState({ user: res.account });
+        }
       }
       const shiftResult = await staffApi.getAllStaffShifts();
       setShifts(shiftResult);

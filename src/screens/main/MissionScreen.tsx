@@ -32,6 +32,7 @@ import {
   X,
   RefreshCw,
   PackageCheck,
+  User,
 } from 'lucide-react-native';
 import { QRScannerModal } from '../../components/scanning/QRScannerModal';
 import {
@@ -138,7 +139,6 @@ export const MissionScreen: React.FC = () => {
   const [endpointPickerMode, setEndpointPickerMode] = useState<'pickup' | 'delivery'>('delivery');
   const [isLoadingFacility, setIsLoadingFacility] = useState(false);
 
-  const [senderAccountId, setSenderAccountId] = useState(user?.accountId || '');
   const [receiver, setReceiver] = useState('');
   const [receiverAccountId, setReceiverAccountId] = useState('');
   const [selectedReceiverStaff, setSelectedReceiverStaff] = useState<OnDutyStaffResponse | null>(null);
@@ -291,7 +291,6 @@ export const MissionScreen: React.FC = () => {
     setIsSubmitting(false);
     setIsSendingStepResponse(false);
     setRespondedStepId('');
-    setSenderAccountId(user?.accountId || '');
     setReceiverAccountId('');
     setReceiver('');
     setSelectedReceiverStaff(null);
@@ -451,7 +450,7 @@ export const MissionScreen: React.FC = () => {
       Alert.alert('Trùng điểm A và B', 'Chọn hai điểm khác nhau.');
       return;
     }
-    const senderId = senderAccountId.trim().toLowerCase();
+    const senderId = (user?.accountId || '').trim().toLowerCase();
     const receiverId = receiverAccountId.trim().toLowerCase();
     if (!user?.accountId || !UUID_PATTERN.test(senderId) || !UUID_PATTERN.test(receiverId)) {
       Alert.alert('Thiếu tài khoản được phân công', 'Nhập Account ID (UUID) của người gửi và người nhận.');
@@ -574,9 +573,15 @@ export const MissionScreen: React.FC = () => {
           <TouchableOpacity style={styles.select} onPress={() => { setEndpointPickerMode('pickup'); setShowRoomModal(true); }}><MapPin size={18} color={Colors.primary} /><Text style={styles.flex}>{fromRoom}</Text><ChevronDown size={18} /></TouchableOpacity>
           <Text style={styles.label}>Điểm giao hàng</Text>
           <TouchableOpacity style={styles.select} onPress={() => { setEndpointPickerMode('delivery'); setShowRoomModal(true); }}><MapPin size={18} color={Colors.primary} /><Text style={styles.flex}>{toRoom}</Text><ChevronDown size={18} /></TouchableOpacity>
-          <Text style={styles.label}>Account ID người gửi</Text>
-          <TextInput style={styles.input} value={senderAccountId} onChangeText={setSenderAccountId} autoCapitalize="none" placeholder="UUID tài khoản được giao gửi hàng" />
-          <TouchableOpacity onPress={() => setSenderAccountId(user?.accountId || '')}><Text style={styles.link}>Dùng tài khoản của tôi</Text></TouchableOpacity>
+          <Text style={styles.label}>Người gửi (tài khoản của bạn)</Text>
+          <View style={styles.senderBox}>
+            <User size={18} color={Colors.primary} />
+            <View style={styles.flex}>
+              <Text style={styles.senderName}>{user?.username || 'Tài khoản hiện tại'}</Text>
+              <Text selectable style={styles.senderIdText}>{user?.accountId || 'Chưa đăng nhập'}</Text>
+            </View>
+            <CheckCircle2 size={16} color="#059669" />
+          </View>
 
           {/* ===== Người nhận: Staff Picker hoặc nhập thủ công ===== */}
           <Text style={styles.label}>Người nhận hàng</Text>
@@ -651,6 +656,9 @@ const styles = StyleSheet.create({
   buttonText: {color:'#fff',fontWeight:'700',fontSize:14},
   smallButton: {flexDirection:'row',gap:6,padding:8,alignItems:'center'},
   disabled: {opacity:0.45},
+  senderBox: {flexDirection:'row',alignItems:'center',gap:10,padding:13,borderRadius:10,backgroundColor:'#e6f4f0',borderWidth:1,borderColor:'#059669'},
+  senderName: {fontSize:14,fontWeight:'700',color:Colors.textPrimary},
+  senderIdText: {fontSize:11,color:Colors.textMuted,marginTop:2},
   error: {color:'#b42318',fontSize:13,lineHeight:20},
   actions: {gap:10},
   overlay: {flex:1,backgroundColor:'rgba(0,0,0,0.4)',justifyContent:'center',alignItems:'center',padding:22},

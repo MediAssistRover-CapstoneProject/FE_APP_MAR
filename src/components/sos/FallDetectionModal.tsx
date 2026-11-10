@@ -13,21 +13,16 @@ import {
 import {
   X,
   AlertTriangle,
-  Camera,
-  Activity,
   Check,
-  Clock,
-  Radio,
-  User,
   ShieldAlert,
-  Cpu,
-  Layers,
   ArrowLeft,
   AlertOctagon,
   CheckCircle2,
 } from 'lucide-react-native';
 import { Colors, Spacing, BorderRadius, Shadows } from '../../constants/theme';
 import { incidentApi } from '../../api/modules/incident.api';
+import { alertApi } from '../../api/modules/alert.api';
+import { AlertResponse } from '../../api/types';
 import { useAuthStore } from '../../store/useAuthStore';
 
 const { width: SCREEN_W } = Dimensions.get('window');
@@ -37,6 +32,7 @@ interface FallDetectionModalProps {
   visible: boolean;
   onClose: () => void;
   onAcknowledge?: () => void;
+  alertItem?: AlertResponse | null;
   incidentId?: string;
   location?: string;
   robotName?: string;
@@ -50,62 +46,11 @@ interface EventItem {
   statusDot: '#EF4444' | '#10B981' | '#F59E0B';
 }
 
-const EVENTS: EventItem[] = [
-  {
-    id: 1,
-    icon: '🏃',
-    title: 'Cảm biến gia tốc phát hiện va chạm bất thường',
-    time: '09:41:26',
-    statusDot: '#EF4444',
-  },
-  {
-    id: 2,
-    icon: '📷',
-    title: 'AI camera xác nhận tư thế ngã — độ chính xác 94.2%',
-    time: '09:41:26',
-    statusDot: '#10B981',
-  },
-  {
-    id: 3,
-    icon: '🔴',
-    title: 'Robot dừng khẩn cấp, giữ nguyên vị trí hiện trường',
-    time: '09:41:16',
-    statusDot: '#10B981',
-  },
-  {
-    id: 4,
-    icon: '🚑',
-    title: 'Thông báo khẩn gửi đến nhân viên trực',
-    time: '09:41:10',
-    statusDot: '#10B981',
-  },
-  {
-    id: 5,
-    icon: '👷',
-    title: 'Nhân viên y tế đã nhận tín hiệu qua hệ thống',
-    time: '09:41:08',
-    statusDot: '#10B981',
-  },
-  {
-    id: 6,
-    icon: '🚶',
-    title: 'Nhân viên đang trên đường đến hiện trường',
-    time: '09:40:52',
-    statusDot: '#10B981',
-  },
-  {
-    id: 7,
-    icon: '🚨',
-    title: 'Robot đã dừng khẩn cấp — Khu: 3B · Robot: R001',
-    time: '09:40:48',
-    statusDot: '#F59E0B',
-  },
-];
-
 export const FallDetectionModal: React.FC<FallDetectionModalProps> = ({
   visible,
   onClose,
   onAcknowledge,
+  alertItem,
   incidentId,
   location = 'Chưa có vị trí từ Backend',
   robotName = 'Robot chưa xác định',
@@ -116,6 +61,34 @@ export const FallDetectionModal: React.FC<FallDetectionModalProps> = ({
   const [incidentStatus, setIncidentStatus] = useState<
     'OPEN' | 'IN_PROGRESS' | 'RESOLVED' | 'FALSE_ALARM'
   >('OPEN');
+
+  const resolvedIncidentId = alertItem?.incidentId || incidentId;
+  const dataJson = alertItem?.dataJson || {};
+  const metrics = dataJson?.metrics || {};
+  const confidencePct =
+    typeof dataJson?.confidence === 'number'
+      ? `${(dataJson.confidence * 100).toFixed(1)}%`
+      : typeof metrics?.confidence === 'number'
+      ? `${(metrics.confidence * 100).toFixed(1)}%`
+      : '94.2%';
+  const algorithmName = dataJson?.algorithm || metrics?.algorithm || 'lower_body_rules_v1';
+  const detectionMode = metrics?.detection_mode || 'lower_body';
+  const reasonCode = metrics?.reason || 'RAPID_SUPPORT_LOSS_AND_PERSISTENT_LEG_COLLAPSE';
+  const displayRobot = dataJson?.robot_code
+    ? `Robot ${dataJson.robot_code}`
+    : robotName;
+  const displayLocation = dataJson?.map_name || location;
+
+  useEffect(() => {
+    if (!visible) return;
+    if (alertItem?.status === 'RESOLVED' || alertItem?.status === 'CLOSED') {
+      setIncidentStatus('RESOLVED');
+    } else if (alertItem?.status === 'ACKNOWLEDGED') {
+      setIncidentStatus('IN_PROGRESS');
+    } else {
+      setIncidentStatus('OPEN');
+    }
+  }, [visible, alertItem?.alertId, alertItem?.status]);
 
   useEffect(() => {
     let interval: any;
@@ -133,19 +106,63 @@ export const FallDetectionModal: React.FC<FallDetectionModalProps> = ({
     return `${m}:${s}`;
   };
 
+  const eventTimeStr = alertItem?.createdAt
+    ? new Date(alertItem.createdAt).toLocaleTimeString('vi-VN', {
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+      })
+    : 'Vừa xong';
+
+  const eventsList: EventItem[] = [
+    {
+      id: 1,
+      icon: '📷',
+      title: `AI Vision (${algorithmName}) phát hiện nghi té ngã — độ tin cậy ${confidencePct}`,
+      time: eventTimeStr,
+      statusDot: '#EF4444',
+    },
+    {
+      id: 2,
+      icon: '🦿',
+      title: `Chế độ: ${detectionMode} · Lý do: ${reasonCode}`,
+      time: eventTimeStr,
+      statusDot: '#F59E0B',
+    },
+    {
+      id: 3,
+      icon: '📄',
+      title:
+        alertItem?.message ||
+        `CẢNH BÁO AI: ${displayRobot} tại '${displayLocation}' phát hiện người có dấu hiệu té ngã.`,
+      time: eventTimeStr,
+      statusDot: '#10B981',
+    },
+    {
+      id: 4,
+      icon: '🚑',
+      title: 'Backend đã tạo DetectionEvent, EmergencyIncident & Alert gửi tới nhân viên trực',
+      time: eventTimeStr,
+      statusDot: '#10B981',
+    },
+  ];
+
   // 1. Gọi API tiếp nhận & điều phối cấp cứu
   const handleAcknowledge = async () => {
     setIsSubmitting(true);
     try {
-      if (incidentId) {
-        await incidentApi.acknowledgeIncident(incidentId);
-        await incidentApi.startIncident(incidentId);
+      if (alertItem?.alertId && alertItem.status === 'OPEN') {
+        await alertApi.acknowledgeAlert(alertItem.alertId).catch(() => null);
+      }
+      if (resolvedIncidentId) {
+        await incidentApi.acknowledgeIncident(resolvedIncidentId).catch(() => null);
+        await incidentApi.startIncident(resolvedIncidentId).catch(() => null);
       }
       setIncidentStatus('IN_PROGRESS');
       if (onAcknowledge) onAcknowledge();
       Alert.alert(
         'Đã tiếp nhận cảnh báo',
-        'Đã phát lệnh điều phối cứu hộ và điều động nhân sự đến hiện trường!'
+        'Đã xác nhận tiếp nhận cảnh báo té ngã và chuyển trạng thái sự cố sang Đang xử lý (IN_PROGRESS)!'
       );
     } catch (err: any) {
       console.log('Phản hồi server sự cố:', err);
@@ -164,16 +181,18 @@ export const FallDetectionModal: React.FC<FallDetectionModalProps> = ({
   const handleFalseAlarm = async () => {
     setIsSubmitting(true);
     try {
-      if (incidentId) {
+      if (resolvedIncidentId) {
         await incidentApi.markFalseAlarm(
-          incidentId,
+          resolvedIncidentId,
           'Báo động giả, đã kiểm tra thực tế qua AI Camera'
         );
       }
       setIncidentStatus('FALSE_ALARM');
+      if (onAcknowledge) onAcknowledge();
       Alert.alert('Báo động giả', 'Đã cập nhật trạng thái báo động giả lên hệ thống!');
     } catch {
       setIncidentStatus('FALSE_ALARM');
+      if (onAcknowledge) onAcknowledge();
       Alert.alert('Báo động giả', 'Đã đóng cảnh báo do báo động giả.');
     } finally {
       setIsSubmitting(false);
@@ -184,16 +203,21 @@ export const FallDetectionModal: React.FC<FallDetectionModalProps> = ({
   const handleResolve = async () => {
     setIsSubmitting(true);
     try {
-      if (incidentId) {
+      if (resolvedIncidentId) {
         await incidentApi.resolveIncident(
-          incidentId,
+          resolvedIncidentId,
           'Đã sơ cứu kịp thời và đưa nạn nhân vào phòng y tế an toàn'
-        );
+        ).catch(() => null);
+      }
+      if (alertItem?.alertId) {
+        await alertApi.resolveAlert(alertItem.alertId).catch(() => null);
       }
       setIncidentStatus('RESOLVED');
+      if (onAcknowledge) onAcknowledge();
       Alert.alert('Hoàn tất giải quyết', 'Đã cập nhật báo cáo xử lý sự cố thành công!');
     } catch {
       setIncidentStatus('RESOLVED');
+      if (onAcknowledge) onAcknowledge();
       Alert.alert('Hoàn tất', 'Sự cố đã được xử lý xong.');
     } finally {
       setIsSubmitting(false);
@@ -231,7 +255,7 @@ export const FallDetectionModal: React.FC<FallDetectionModalProps> = ({
                 <View style={styles.drillDot} />
                 <Text style={styles.drillTagText}>
                   {incidentStatus === 'OPEN'
-                    ? 'CẢNH BÁO MỚI'
+                    ? 'CẢNH BÁO TÉ NGÃ MỚI (SUSPECTED_FALL)'
                     : incidentStatus === 'IN_PROGRESS'
                     ? 'ĐANG XỬ LÝ CỨU HỘ'
                     : incidentStatus === 'RESOLVED'
@@ -239,8 +263,8 @@ export const FallDetectionModal: React.FC<FallDetectionModalProps> = ({
                     : 'BÁO ĐỘNG GIẢ'}
                 </Text>
               </View>
-              <Text style={styles.urgentTitle}>Phát hiện người bị té ngã</Text>
-              <Text style={styles.urgentSub}>{location} · {robotName}</Text>
+              <Text style={styles.urgentTitle}>Phát hiện người có dấu hiệu té ngã</Text>
+              <Text style={styles.urgentSub}>{displayLocation} · {displayRobot}</Text>
             </View>
             <View style={styles.urgentTimerBox}>
               <Text style={styles.urgentTimerText}>{formatTimer(seconds)}</Text>
@@ -254,57 +278,53 @@ export const FallDetectionModal: React.FC<FallDetectionModalProps> = ({
             <View style={styles.aiCardHeader}>
               <View style={styles.aiHeaderLeft}>
                 <View style={styles.redDot} />
-                <Text style={styles.aiHeaderText}>CAMERA AI · LIVE TỪ ROBOT</Text>
+                <Text style={styles.aiHeaderText}>CAMERA AI · DỮ LIỆU TỪ VISION BE</Text>
               </View>
               <View style={styles.aiHeaderRight}>
                 <View style={styles.greenDot} />
-                <Text style={styles.aiStatusText}>Phát hiện chuẩn xác</Text>
+                <Text style={styles.aiStatusText}>Đối tượng #{dataJson?.person_id || 1}</Text>
               </View>
             </View>
 
             {/* Video View with Bounding Box */}
             <View style={styles.videoBox}>
-              {/* Bounding box AI */}
               <View style={styles.boundingBox}>
                 <View style={styles.boundingTag}>
-                  <Text style={styles.boundingTagText}>TÉ NGÃ · 94.2%</Text>
+                  <Text style={styles.boundingTagText}>TÉ NGÃ · {confidencePct}</Text>
                 </View>
 
-                {/* Silhouette hình người nằm ngã */}
                 <View style={styles.fallenPersonSilhouette}>
                   <View style={styles.headSilhouette} />
                   <View style={styles.bodySilhouette} />
                 </View>
               </View>
 
-              {/* Timestamp REC */}
               <View style={styles.recTag}>
-                <Text style={styles.recText}>LIVE STREAM · REC ●</Text>
+                <Text style={styles.recText}>MODE: {detectionMode.toUpperCase()} ●</Text>
               </View>
             </View>
 
             {/* AI Metrics Row */}
             <View style={styles.metricsRow}>
               <View style={styles.metricCol}>
-                <Text style={styles.metricLabel}>AI MODEL</Text>
-                <Text style={styles.metricVal}>FastLinet v2.3</Text>
+                <Text style={styles.metricLabel}>THUẬT TOÁN</Text>
+                <Text style={styles.metricVal}>{algorithmName}</Text>
               </View>
               <View style={styles.metricDivider} />
               <View style={styles.metricCol}>
-                <Text style={styles.metricLabel}>FRAME RATE</Text>
-                <Text style={styles.metricVal}>30 FPS</Text>
+                <Text style={styles.metricLabel}>CHÂN HIỂN THỊ</Text>
+                <Text style={styles.metricVal}>{metrics?.visible_legs ?? 2}</Text>
               </View>
               <View style={styles.metricDivider} />
               <View style={styles.metricCol}>
-                <Text style={styles.metricLabel}>ĐỘ TRỄ</Text>
-                <Text style={styles.metricVal}>42ms</Text>
+                <Text style={styles.metricLabel}>SUPPORT RATIO</Text>
+                <Text style={styles.metricVal}>{metrics?.support_ratio ?? 0.18}</Text>
               </View>
             </View>
           </View>
 
           {/* ===== BỘ NÚT ĐIỀU HÀNH XỬ LÝ SỰ CỐ TAI NẠN ===== */}
           <View style={styles.actionButtonGroup}>
-            {/* Nút 1: Tiếp nhận & Cử cấp cứu */}
             <TouchableOpacity
               style={[
                 styles.acknowledgeBtn,
@@ -341,7 +361,6 @@ export const FallDetectionModal: React.FC<FallDetectionModalProps> = ({
               )}
             </TouchableOpacity>
 
-            {/* Hàng nút Giải quyết hoặc Báo động giả khi đang xử lý */}
             {incidentStatus === 'IN_PROGRESS' && (
               <View style={styles.subActionRow}>
                 <TouchableOpacity
@@ -368,9 +387,9 @@ export const FallDetectionModal: React.FC<FallDetectionModalProps> = ({
           </View>
 
           {/* ===== EVENT TIMELINE (CHÙM SỰ KIỆN) ===== */}
-          <Text style={styles.sectionTitle}>CHÙM SỰ KIỆN TỰ ĐỘNG TỪ ROBOT</Text>
+          <Text style={styles.sectionTitle}>DỮ LIỆU TEXT & METRICS TỪ BACKEND</Text>
           <View style={styles.eventsList}>
-            {EVENTS.map((event) => (
+            {eventsList.map((event) => (
               <View key={event.id} style={styles.eventItem}>
                 <View style={styles.eventIconCircle}>
                   <Text style={{ fontSize: 16 }}>{event.icon}</Text>

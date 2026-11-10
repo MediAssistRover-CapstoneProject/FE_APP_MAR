@@ -9,18 +9,12 @@ import {
   Alert,
 } from 'react-native';
 import {
-  LogOut,
-  AlertTriangle,
   Phone,
-  ChevronRight,
   ShieldAlert,
-  Ban,
-  Construction,
   Check,
-  Bot,
   RefreshCw,
-  Siren,
   Eye,
+  AlertTriangle,
 } from 'lucide-react-native';
 import { Colors, Spacing, BorderRadius, Shadows } from '../../constants/theme';
 import { StaffHeader } from '../../components/common/StaffHeader';
@@ -32,11 +26,9 @@ import { SOSStreamModal } from '../../components/sos/SOSStreamModal';
 import { FallDetectionModal } from '../../components/sos/FallDetectionModal';
 
 export const AlertScreen: React.FC = () => {
-  // Modal states
   const [showSOSCall, setShowSOSCall] = useState(false);
   const [showSOSStream, setShowSOSStream] = useState(false);
   const [showFallDetail, setShowFallDetail] = useState(false);
-  const [resolvedSOS, setResolvedSOS] = useState(false);
   const [liveIncidents, setLiveIncidents] = useState<IncidentResponse[]>([]);
   const [isLoadingIncidents, setIsLoadingIncidents] = useState(false);
   const [liveAlerts, setLiveAlerts] = useState<AlertResponse[]>([]);
@@ -73,7 +65,7 @@ export const AlertScreen: React.FC = () => {
   React.useEffect(() => {
     fetchIncidents();
     fetchAlerts();
-    // Auto-polling mỗi 4 giây để bắt tín hiệu SOS từ robot ngay lập tức
+    // Auto-polling mỗi 4 giây để bắt tín hiệu SOS / SUSPECTED_FALL từ robot ngay lập tức
     const timer = setInterval(() => {
       fetchIncidents();
       fetchAlerts();
@@ -81,22 +73,42 @@ export const AlertScreen: React.FC = () => {
     return () => clearInterval(timer);
   }, [fetchIncidents, fetchAlerts]);
 
-  // Tự động mở màn hình nhận cuộc gọi SOS nếu có sự cố khẩn cấp mới phát sinh
+  // Tự động mở màn hình cảnh báo nếu có sự cố SOS hoặc Té ngã (SUSPECTED_FALL) mới phát sinh
   React.useEffect(() => {
-    const openCritical = liveAlerts.find((a) => a.status === 'OPEN' && a.severity === 'CRITICAL');
-    if (openCritical && openCritical.alertId !== lastAlertIdRef.current) {
-      lastAlertIdRef.current = openCritical.alertId;
-      setSelectedAlert(openCritical);
-      setShowSOSCall(true);
+    const openUrgent = liveAlerts.find(
+      (a) =>
+        a.status === 'OPEN' &&
+        (a.severity === 'CRITICAL' ||
+          a.notificationType === 'SUSPECTED_FALL' ||
+          a.notificationType === 'GESTURE_SOS')
+    );
+    if (openUrgent && openUrgent.alertId !== lastAlertIdRef.current) {
+      lastAlertIdRef.current = openUrgent.alertId;
+      setSelectedAlert(openUrgent);
+      if (openUrgent.notificationType === 'SUSPECTED_FALL') {
+        setShowFallDetail(true);
+      } else {
+        setShowSOSCall(true);
+      }
     }
   }, [liveAlerts]);
 
-  const handleResolveAlert = async (alertId: string) => {
+  const handleResolveAlert = async (alertItem: AlertResponse) => {
+    const alertId = alertItem.alertId;
     setResolvingAlertId(alertId);
     try {
+      if (alertItem.incidentId) {
+        await incidentApi
+          .resolveIncident(
+            alertItem.incidentId,
+            'Đã kiểm tra và xử lý hoàn tất sự cố tại hiện trường'
+          )
+          .catch(() => null);
+      }
       await alertApi.resolveAlert(alertId);
-      Alert.alert('Thành công', 'Đã đánh dấu giải quyết cảnh báo SOS.');
+      Alert.alert('Thành công', 'Đã đánh dấu giải quyết cảnh báo.');
       await fetchAlerts();
+      await fetchIncidents();
     } catch (err: any) {
       console.log('Error resolving alert:', err);
       Alert.alert('Lỗi', err?.message || 'Không thể cập nhật trạng thái cảnh báo');
@@ -109,19 +121,32 @@ export const AlertScreen: React.FC = () => {
     setSelectedAlert(alertItem);
     try {
       await alertApi.acknowledgeAlert(alertItem.alertId);
+      if (alertItem.incidentId) {
+        await incidentApi.acknowledgeIncident(alertItem.incidentId).catch(() => null);
+        await incidentApi.startIncident(alertItem.incidentId).catch(() => null);
+      }
       await fetchAlerts();
-      setShowSOSStream(true);
+      await fetchIncidents();
+      if (alertItem.notificationType === 'SUSPECTED_FALL') {
+        setShowFallDetail(true);
+      } else {
+        setShowSOSStream(true);
+      }
     } catch (err: any) {
       console.log('Error acknowledging alert:', err);
       Alert.alert('Lỗi', err?.message || 'Không thể tiếp nhận cảnh báo');
     }
   };
 
-  const handleCloseAlert = async (alertId: string) => {
+  const handleCloseAlert = async (alertItem: AlertResponse) => {
     try {
-      await alertApi.closeAlert(alertId);
+      if (alertItem.incidentId) {
+        await incidentApi.closeIncident(alertItem.incidentId).catch(() => null);
+      }
+      await alertApi.closeAlert(alertItem.alertId);
       Alert.alert('Thành công', 'Đã đóng hoàn tất cảnh báo.');
       await fetchAlerts();
+      await fetchIncidents();
     } catch (err: any) {
       console.log('Error closing alert:', err);
       Alert.alert('Lỗi', err?.message || 'Không thể đóng cảnh báo');
@@ -134,13 +159,50 @@ export const AlertScreen: React.FC = () => {
     return Math.max(unacknowledgedAlerts, unacknowledgedIncidents);
   }, [liveAlerts, liveIncidents]);
 
+  const getAlertTitle = (type?: string) => {
+    switch (type) {
+      case 'SUSPECTED_FALL':
+        return 'Cảnh báo AI: Nghi người bị té ngã';
+      case 'GESTURE_SOS':
+        return 'Cảnh báo AI: Cử chỉ tay cầu cứu (SOS)';
+      case 'SUSPECTED_SEIZURE':
+        return 'Cảnh báo AI: Nghi chuyển động co giật';
+      case 'SOS':
+      case 'EMERGENCY_SOS':
+        return 'Tín hiệu SOS từ Robot';
+      default:
+        return type || 'Cảnh báo khẩn cấp';
+    }
+  };
+
+  const getAlertLocation = (alertItem?: AlertResponse | null) => {
+    if (!alertItem) return 'Khu vực bệnh viện';
+    const data = alertItem.dataJson || {};
+    if (data.map_name) return data.map_name;
+    if (data.location) return data.location;
+    if (data.room) return data.room;
+    if (alertItem.zoneId) return `Zone ${alertItem.zoneId.substring(0, 8)}`;
+    return 'Vị trí Robot';
+  };
+
+  const getAlertRobot = (alertItem?: AlertResponse | null) => {
+    if (!alertItem) return 'Chưa xác định';
+    const data = alertItem.dataJson || {};
+    return (
+      data.robot_code ||
+      data.robot ||
+      data.robotId ||
+      (data.robot_id ? String(data.robot_id).slice(0, 8) : null) ||
+      liveIncidents?.[0]?.robotId?.slice(0, 8) ||
+      'ROBOT_MAR_01'
+    );
+  };
+
   return (
     <View style={styles.container}>
-      {/* ===== REUSABLE STAFF HEADER ===== */}
       <StaffHeader />
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
-        {/* ===== SUBHEADER ===== */}
         <View style={styles.pageHeader}>
           <Text style={styles.pageHeaderSub}>HỆ THỐNG · TRUNG TÂM CẢNH BÁO</Text>
           <View style={styles.titleRow}>
@@ -167,15 +229,17 @@ export const AlertScreen: React.FC = () => {
           </View>
         </View>
 
-        {/* ===== REAL ALERTS & INCIDENTS LIST ===== */}
         {liveAlerts.length > 0 ? (
           liveAlerts.map((alertItem) => {
             const isResolved = alertItem.status === 'RESOLVED';
             const isClosed = alertItem.status === 'CLOSED';
             const isAcknowledged = alertItem.status === 'ACKNOWLEDGED';
             const isOpen = alertItem.status === 'OPEN';
-            const isCritical = alertItem.severity === 'CRITICAL';
+            const isFall = alertItem.notificationType === 'SUSPECTED_FALL';
+            const isCritical = alertItem.severity === 'CRITICAL' || isFall;
             const isResolvingThis = resolvingAlertId === alertItem.alertId;
+            const data = alertItem.dataJson || {};
+            const metrics = data.metrics || {};
 
             return (
               <View
@@ -187,14 +251,19 @@ export const AlertScreen: React.FC = () => {
               >
                 <View style={styles.cardHeader}>
                   <View style={isCritical ? styles.cardIconBoxRed : styles.cardIconBoxOrange}>
-                    <Text style={{ fontSize: 16 }}>{isCritical ? '🆘' : '⚠️'}</Text>
+                    <Text style={{ fontSize: 16 }}>{isFall ? '🚨' : isCritical ? '🆘' : '⚠️'}</Text>
                   </View>
                   <View style={styles.cardTitleBox}>
-                    <Text style={styles.cardTitle}>
-                      {alertItem.notificationType === 'SOS'
-                        ? 'Tín hiệu SOS từ Robot'
-                        : alertItem.notificationType || 'Cảnh báo khẩn cấp'}
-                    </Text>
+                    <Text style={styles.cardTitle}>{getAlertTitle(alertItem.notificationType)}</Text>
+                    {isFall && data.algorithm ? (
+                      <Text style={styles.fallSubBadge}>
+                        AI: {data.algorithm}
+                        {typeof data.confidence === 'number'
+                          ? ` · ${(data.confidence * 100).toFixed(1)}%`
+                          : ''}
+                        {metrics.detection_mode ? ` · ${metrics.detection_mode}` : ''}
+                      </Text>
+                    ) : null}
                   </View>
                   <View
                     style={
@@ -221,14 +290,14 @@ export const AlertScreen: React.FC = () => {
 
                 <View style={styles.metaRow}>
                   <View style={styles.metaCol}>
-                    <Text style={styles.metaLabel}>ĐỊA ĐIỂM</Text>
+                    <Text style={styles.metaLabel}>BẢN ĐỒ / KHU VỰC</Text>
                     <Text style={styles.metaVal} numberOfLines={1}>
-                      {alertItem.dataJson?.endpoint_id ? 'Gazebo North 04' : alertItem.zoneId ? `Zone ${alertItem.zoneId.substring(0, 6)}` : 'Vị trí Robot'}
+                      {getAlertLocation(alertItem)}
                     </Text>
                   </View>
                   <View style={styles.metaCol}>
-                    <Text style={styles.metaLabel}>ROBOT TẠI</Text>
-                    <Text style={styles.metaVal}>{selectedAlert?.dataJson?.robotId || liveIncidents?.[0]?.robotId || 'Chưa xác định'}</Text>
+                    <Text style={styles.metaLabel}>ROBOT</Text>
+                    <Text style={styles.metaVal}>{getAlertRobot(alertItem)}</Text>
                   </View>
                   <View style={styles.metaCol}>
                     <Text style={styles.metaLabel}>GIỜ</Text>
@@ -244,10 +313,23 @@ export const AlertScreen: React.FC = () => {
                 </View>
 
                 <Text style={styles.cardDesc}>
-                  {alertItem.message || 'Bệnh nhân kích hoạt nút SOS trên robot. Cần hỗ trợ ngay.'}
+                  {alertItem.message || 'Cảnh báo từ hệ thống Robot. Cần nhân viên y tế xác minh.'}
                 </Text>
 
-                {/* NÚT THAO TÁC THEO TRẠNG THÁI */}
+                {isFall && metrics.reason ? (
+                  <View style={styles.sampleAlertBanner}>
+                    <Text style={styles.sampleAlertText}>
+                      Lý do AI: {metrics.reason}
+                      {metrics.visible_legs !== undefined
+                        ? ` · Chân thấy: ${metrics.visible_legs}`
+                        : ''}
+                      {metrics.support_ratio !== undefined
+                        ? ` · Support: ${metrics.support_ratio}`
+                        : ''}
+                    </Text>
+                  </View>
+                ) : null}
+
                 {isOpen && (
                   <View style={styles.btnRow}>
                     <TouchableOpacity
@@ -255,19 +337,34 @@ export const AlertScreen: React.FC = () => {
                       onPress={() => handleAcknowledgeAlert(alertItem)}
                       activeOpacity={0.8}
                     >
-                      <Text style={styles.blueBtnText}>Tiếp nhận SOS & Xem camera</Text>
+                      <Text style={styles.blueBtnText}>
+                        {isFall ? 'Tiếp nhận & Xác minh té ngã' : 'Tiếp nhận SOS & Xem camera'}
+                      </Text>
                     </TouchableOpacity>
 
                     <TouchableOpacity
                       style={styles.tealBtn}
                       onPress={() => {
                         setSelectedAlert(alertItem);
-                        setShowSOSCall(true);
+                        if (isFall) {
+                          setShowFallDetail(true);
+                        } else {
+                          setShowSOSCall(true);
+                        }
                       }}
                       activeOpacity={0.8}
                     >
-                      <Phone size={15} color={Colors.tealDark} />
-                      <Text style={styles.tealBtnText}>Mở cuộc gọi</Text>
+                      {isFall ? (
+                        <>
+                          <AlertTriangle size={15} color={Colors.tealDark} />
+                          <Text style={styles.tealBtnText}>Chi tiết AI</Text>
+                        </>
+                      ) : (
+                        <>
+                          <Phone size={15} color={Colors.tealDark} />
+                          <Text style={styles.tealBtnText}>Mở cuộc gọi</Text>
+                        </>
+                      )}
                     </TouchableOpacity>
                   </View>
                 )}
@@ -276,7 +373,7 @@ export const AlertScreen: React.FC = () => {
                   <View style={styles.btnRow}>
                     <TouchableOpacity
                       style={[styles.outlineResolveBtn, { flex: 1 }]}
-                      onPress={() => handleResolveAlert(alertItem.alertId)}
+                      onPress={() => handleResolveAlert(alertItem)}
                       activeOpacity={0.8}
                       disabled={isResolvingThis}
                     >
@@ -294,12 +391,18 @@ export const AlertScreen: React.FC = () => {
                       style={[styles.blueBtn, { flex: 0.8 }]}
                       onPress={() => {
                         setSelectedAlert(alertItem);
-                        setShowSOSStream(true);
+                        if (isFall) {
+                          setShowFallDetail(true);
+                        } else {
+                          setShowSOSStream(true);
+                        }
                       }}
                       activeOpacity={0.8}
                     >
                       <Eye size={15} color="#FFFFFF" />
-                      <Text style={styles.blueBtnText}>Camera Stream</Text>
+                      <Text style={styles.blueBtnText}>
+                        {isFall ? 'Hồ sơ té ngã' : 'Camera Stream'}
+                      </Text>
                     </TouchableOpacity>
                   </View>
                 )}
@@ -307,7 +410,7 @@ export const AlertScreen: React.FC = () => {
                 {isResolved && (
                   <TouchableOpacity
                     style={[styles.outlineResolveBtn, styles.outlineResolveBtnDone]}
-                    onPress={() => handleCloseAlert(alertItem.alertId)}
+                    onPress={() => handleCloseAlert(alertItem)}
                     activeOpacity={0.8}
                   >
                     <Check size={14} color="#059669" />
@@ -320,14 +423,13 @@ export const AlertScreen: React.FC = () => {
             );
           })
         ) : (
-          /* TRẠNG THÁI AN TOÀN - KHÔNG CÓ CẢNH BÁO */
           <View style={styles.emptyContainer}>
             <View style={styles.emptyIconCircle}>
               <ShieldAlert size={36} color="#10B981" />
             </View>
             <Text style={styles.emptyTitle}>Khu vực an toàn</Text>
             <Text style={styles.emptySubtitle}>
-              Hiện không có cảnh báo khẩn cấp hoặc sự cố SOS nào. Hệ thống sẵn sàng tiếp nhận khi có tín hiệu từ robot.
+              Hiện không có cảnh báo khẩn cấp hoặc sự cố té ngã nào. Hệ thống sẵn sàng tiếp nhận khi có tín hiệu từ robot.
             </Text>
             <TouchableOpacity
               style={styles.emptyRefreshBtn}
@@ -344,16 +446,11 @@ export const AlertScreen: React.FC = () => {
         )}
       </ScrollView>
 
-      {/* ===== SOS CALL OVERLAY MODAL ===== */}
       <SOSCallModal
         visible={showSOSCall}
         alertId={selectedAlert?.alertId || liveAlerts?.[0]?.alertId}
-        robotName={`Robot ${selectedAlert?.dataJson?.robotId || liveIncidents?.[0]?.robotId || 'chưa xác định'}`}
-        location={
-          selectedAlert?.zoneId
-            ? `Zone ${selectedAlert.zoneId.substring(0, 8)}`
-            : 'Hành lang chính'
-        }
+        robotName={`Robot ${getAlertRobot(selectedAlert || liveAlerts?.[0])}`}
+        location={getAlertLocation(selectedAlert || liveAlerts?.[0])}
         timestamp={
           selectedAlert?.createdAt
             ? new Date(selectedAlert.createdAt).toLocaleTimeString('vi-VN', {
@@ -370,23 +467,19 @@ export const AlertScreen: React.FC = () => {
         onDecline={() => setShowSOSCall(false)}
       />
 
-      {/* ===== SOS STREAM & DISPATCH MODAL ===== */}
       <SOSStreamModal
         visible={showSOSStream}
         alertId={selectedAlert?.alertId || liveAlerts?.[0]?.alertId}
         incidentId={selectedAlert?.incidentId || liveIncidents?.[0]?.incidentId}
-        robotName={`Robot ${selectedAlert?.dataJson?.robotId || liveIncidents?.[0]?.robotId || 'chưa xác định'}`}
-        location={
-          selectedAlert?.zoneId
-            ? `Zone ${selectedAlert.zoneId.substring(0, 8)}`
-            : 'Hành lang chính'
-        }
+        robotName={`Robot ${getAlertRobot(selectedAlert || liveAlerts?.[0])}`}
+        location={getAlertLocation(selectedAlert || liveAlerts?.[0])}
         onClose={() => {
           setShowSOSStream(false);
           fetchAlerts();
         }}
         onResolve={() => {
           fetchAlerts();
+          fetchIncidents();
         }}
         onDispatch={() => {
           setShowSOSStream(false);
@@ -394,14 +487,15 @@ export const AlertScreen: React.FC = () => {
         }}
       />
 
-      {/* ===== FALL DETECTION DETAIL MODAL ===== */}
       <FallDetectionModal
         visible={showFallDetail}
         onClose={() => setShowFallDetail(false)}
-        incidentId={liveIncidents?.[0]?.incidentId}
-        location={liveIncidents?.[0]?.description || 'Chưa có vị trí từ Backend'}
-        robotName={`Robot ${liveIncidents?.[0]?.robotId || 'chưa xác định'}`}
+        alertItem={selectedAlert}
+        incidentId={selectedAlert?.incidentId || liveIncidents?.[0]?.incidentId}
+        location={getAlertLocation(selectedAlert || liveAlerts?.[0])}
+        robotName={`Robot ${getAlertRobot(selectedAlert || liveAlerts?.[0])}`}
         onAcknowledge={() => {
+          fetchAlerts();
           fetchIncidents();
         }}
       />
@@ -414,47 +508,6 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#F0F7FF',
   },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.sm,
-    backgroundColor: Colors.surface,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.border,
-  },
-  headerLeft: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
-  avatarCircle: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: Colors.teal,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  headerTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  brandSmall: { fontSize: 10, fontWeight: '700', color: Colors.textSecondary, letterSpacing: 0.5 },
-  badgeOnDuty: {
-    backgroundColor: '#D1FAE5',
-    borderRadius: 4,
-    paddingHorizontal: 5,
-    paddingVertical: 1,
-  },
-  badgeOnDutyText: { fontSize: 9, fontWeight: '700', color: Colors.emerald },
-  staffName: { fontSize: 14, fontWeight: '700', color: Colors.textPrimary },
-  logoutBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    borderWidth: 1,
-    borderColor: Colors.primary,
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-  },
-  logoutText: { fontSize: 12, fontWeight: '600', color: Colors.primary },
-
   scrollContent: {
     padding: Spacing.md,
     paddingBottom: 40,
@@ -499,17 +552,6 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#EF4444',
   },
-
-  // Alert Cards
-  cardAlert: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: BorderRadius.lg,
-    padding: Spacing.md,
-    marginBottom: Spacing.md,
-    borderWidth: 1.5,
-    borderColor: '#FED7AA',
-    ...Shadows.card,
-  },
   cardNormal: {
     backgroundColor: '#FFFFFF',
     borderRadius: BorderRadius.lg,
@@ -541,14 +583,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  cardIconBoxGray: {
-    width: 36,
-    height: 36,
-    borderRadius: 10,
-    backgroundColor: '#F1F5F9',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
   cardTitleBox: {
     flex: 1,
   },
@@ -557,16 +591,11 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#0A2540',
   },
-  statusTagOrange: {
-    backgroundColor: '#EA580C',
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 6,
-  },
-  statusTagOrangeText: {
+  fallSubBadge: {
     fontSize: 10,
-    fontWeight: '700',
-    color: '#FFFFFF',
+    fontWeight: '600',
+    color: '#DC2626',
+    marginTop: 2,
   },
   statusTagGray: {
     backgroundColor: '#E2E8F0',
@@ -574,13 +603,6 @@ const styles = StyleSheet.create({
     paddingVertical: 3,
     borderRadius: 6,
   },
-  statusTagGrayText: {
-    fontSize: 10,
-    fontWeight: '600',
-    color: '#64748B',
-  },
-
-  // Meta row
   metaRow: {
     flexDirection: 'row',
     backgroundColor: '#F8FAFC',
@@ -607,21 +629,22 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#64748B',
     lineHeight: 18,
-    marginBottom: 12,
+    marginBottom: 10,
   },
-
-  // Buttons in card
   btnRow: {
     flexDirection: 'row',
     gap: 8,
   },
   blueBtn: {
-    flex: 1,
+    flex: 1.2,
     height: 40,
     backgroundColor: '#0284C7',
     borderRadius: 10,
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
+    gap: 5,
+    paddingHorizontal: 8,
   },
   blueBtnText: {
     fontSize: 12,
@@ -629,7 +652,7 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
   },
   tealBtn: {
-    flex: 1,
+    flex: 0.85,
     height: 40,
     backgroundColor: '#D1FAE5',
     borderWidth: 1,
@@ -694,8 +717,8 @@ const styles = StyleSheet.create({
     borderColor: '#FECACA',
     borderRadius: 8,
     paddingHorizontal: 8,
-    paddingVertical: 4,
-    marginBottom: 8,
+    paddingVertical: 5,
+    marginBottom: 10,
   },
   sampleAlertText: {
     fontSize: 10,

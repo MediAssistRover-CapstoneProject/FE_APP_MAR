@@ -25,15 +25,29 @@ import {
   AlertCircle,
   Settings,
   Server,
-  Wifi,
   RefreshCw,
   X,
 } from 'lucide-react-native';
 import { useAuthStore } from '../../store/useAuthStore';
-import { API_CONFIG, REMOTE_BACKEND_URL } from '../../api/config';
+import { API_CONFIG, REMOTE_BACKEND_URL, getLocalBackendUrl } from '../../api/config';
 import { apiClient } from '../../api/client';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList, 'Login'>;
+
+const QUICK_STAFF_ACCOUNTS = [
+  {
+    username: 'staff1',
+    password: '12345678',
+    label: 'staff1 · Giao hàng',
+    desc: 'Nhân viên gửi hàng (Điểm A)',
+  },
+  {
+    username: 'staff2',
+    password: '12345678',
+    label: 'staff2 · Nhận hàng',
+    desc: 'Nhân viên nhận hàng & quét QR mở Servo (Điểm B)',
+  },
+];
 
 export const LoginScreen: React.FC = () => {
   const navigation = useNavigation<NavigationProp>();
@@ -65,12 +79,32 @@ export const LoginScreen: React.FC = () => {
   const [confirmNewPassword, setConfirmNewPassword] = useState('');
   const [passwordChangeError, setPasswordChangeError] = useState('');
 
+  const localLanUrl = getLocalBackendUrl();
   const SERVER_PRESETS = [
     {
-      label: 'MediAssistRover (Production)',
+      label: 'MediAssistRover (API Server chính · Có mã QR & Robot)',
       url: REMOTE_BACKEND_URL,
-      desc: 'Backend DuckDNS dùng cho ứng dụng',
+      desc: 'Mặc định: https://mediassistrover.duckdns.org/api/v1 (Tạo nhiệm vụ, Hiện/Quét QR mở Servo)',
     },
+    {
+      label: 'BE Local (AI_VOic22222 · Qua HTTPS Tunnel xuyên Wi-Fi)',
+      url: 'https://b15d6554d671c9.lhr.life/api/v1',
+      desc: 'Kết nối vào BE Local cổng 8080 ngay cả khi Wi-Fi trường chặn LAN',
+    },
+    {
+      label: 'BE Local (AI_VOic22222 · Mạng LAN 8080)',
+      url: localLanUrl,
+      desc: 'Backend local trong folder AI_VOic22222 (Đã mở 0.0.0.0:8080)',
+    },
+    ...(localLanUrl !== 'http://localhost:8080/api/v1'
+      ? [
+          {
+            label: 'BE Local (Localhost 8080)',
+            url: 'http://localhost:8080/api/v1',
+            desc: 'Dùng khi chạy Web hoặc Simulator trên cùng máy tính',
+          },
+        ]
+      : []),
   ];
 
   const handleTestConnection = async (urlToTest: string) => {
@@ -95,7 +129,7 @@ export const LoginScreen: React.FC = () => {
         msg:
           err.name === 'AbortError'
             ? 'Hết thời gian chờ (Timeout) - Máy chủ không phản hồi!'
-            : 'Không thể kết nối! Vui lòng kiểm tra lại IP hoặc cùng mạng Wi-Fi.',
+            : 'Không thể kết nối! Kiểm tra địa chỉ máy chủ hoặc mạng.',
       });
     } finally {
       setIsTesting(false);
@@ -103,11 +137,12 @@ export const LoginScreen: React.FC = () => {
   };
 
   const handleApplyServer = () => {
-    apiClient.setBaseUrl(null);
-    setCurrentBaseUrl(REMOTE_BACKEND_URL);
-    setServerUrlInput(REMOTE_BACKEND_URL);
+    const cleanUrl = (serverUrlInput || API_CONFIG.BASE_URL).trim().replace(/\/+$/, '');
+    apiClient.setBaseUrl(cleanUrl);
+    setCurrentBaseUrl(cleanUrl);
+    setServerUrlInput(cleanUrl);
     setShowServerModal(false);
-    Alert.alert('Thành công', `Đang sử dụng máy chủ Production:\n${REMOTE_BACKEND_URL}`);
+    Alert.alert('Thành công', `Đã chuyển máy chủ API sang:\n${cleanUrl}`);
   };
 
   const validate = (): boolean => {
@@ -213,8 +248,36 @@ export const LoginScreen: React.FC = () => {
         <View style={styles.loginCard}>
           <Text style={styles.cardHeader}>Đăng nhập ca trực</Text>
           <Text style={styles.cardSubHeader}>
-            Sử dụng tài khoản nội bộ bệnh viện được cấp
+            Chọn nhanh tài khoản Staff 1 (Giao hàng) hoặc Staff 2 (Nhận hàng & quét QR)
           </Text>
+
+          {/* Chọn nhanh tài khoản Staff 1 / Staff 2 */}
+          <View style={styles.quickAccountsRow}>
+            {QUICK_STAFF_ACCOUNTS.map((acc) => {
+              const active = username === acc.username;
+              return (
+                <TouchableOpacity
+                  key={acc.username}
+                  style={[styles.quickAccountChip, active && styles.quickAccountChipActive]}
+                  onPress={() => {
+                    setUsername(acc.username);
+                    setPassword(acc.password);
+                    setUsernameError('');
+                    setPasswordError('');
+                    clearError();
+                  }}
+                  activeOpacity={0.75}
+                >
+                  <Text style={[styles.quickAccountLabel, active && styles.quickAccountLabelActive]}>
+                    {acc.label}
+                  </Text>
+                  <Text style={styles.quickAccountDesc} numberOfLines={1}>
+                    {acc.desc}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
 
           {/* Thông báo lỗi tổng nếu đăng nhập thất bại */}
           {error && (
@@ -235,7 +298,7 @@ export const LoginScreen: React.FC = () => {
             >
               <TextInput
                 style={styles.textInput}
-                placeholder="VD: dieuduong01 hoặc STF-01"
+                placeholder="VD: staff1 hoặc staff2"
                 placeholderTextColor={Colors.textMuted}
                 value={username}
                 onChangeText={(text) => {
@@ -375,7 +438,7 @@ export const LoginScreen: React.FC = () => {
             </View>
 
             <Text style={styles.serverModalSubtitle}>
-              Ứng dụng Staff sử dụng máy chủ MediAssistRover Production:
+              Chọn Production DuckDNS hoặc BE Local (AI_VOic22222):
             </Text>
 
             {/* Input URL */}
@@ -383,10 +446,14 @@ export const LoginScreen: React.FC = () => {
               <TextInput
                 style={styles.serverTextInput}
                 value={serverUrlInput}
-                editable={false}
+                onChangeText={(val) => {
+                  setServerUrlInput(val);
+                  setTestResult(null);
+                }}
+                editable={true}
                 autoCapitalize="none"
                 autoCorrect={false}
-                placeholder={REMOTE_BACKEND_URL}
+                placeholder="https://mediassistrover.duckdns.org/api/v1"
                 placeholderTextColor={Colors.textMuted}
               />
             </View>
@@ -412,7 +479,7 @@ export const LoginScreen: React.FC = () => {
             )}
 
             {/* Presets */}
-            <Text style={styles.presetsHeader}>GỢI Ý MÁY CHỦ SẴN CÓ:</Text>
+            <Text style={styles.presetsHeader}>MÁY CHỦ SẴN CÓ:</Text>
             {SERVER_PRESETS.map((preset, idx) => {
               const isSelected = serverUrlInput === preset.url;
               return (
@@ -679,7 +746,38 @@ const styles = StyleSheet.create({
   cardSubHeader: {
     fontSize: 12,
     color: Colors.textSecondary,
+    marginBottom: Spacing.sm,
+  },
+  quickAccountsRow: {
+    flexDirection: 'row',
+    gap: 8,
     marginBottom: Spacing.md,
+  },
+  quickAccountChip: {
+    flex: 1,
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    borderRadius: BorderRadius.sm,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  quickAccountChipActive: {
+    backgroundColor: '#EFF6FF',
+    borderColor: Colors.primary,
+  },
+  quickAccountLabel: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#0F172A',
+  },
+  quickAccountLabelActive: {
+    color: Colors.primary,
+  },
+  quickAccountDesc: {
+    fontSize: 10,
+    color: '#64748B',
+    marginTop: 2,
   },
   errorAlertBox: {
     flexDirection: 'row',

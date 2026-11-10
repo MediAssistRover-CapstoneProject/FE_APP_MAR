@@ -1,5 +1,7 @@
 # Dự Án React Native UI App (Optimized Architecture)
 
+> **Delivery cập nhật 10/11/2026:** tạo nhiệm vụ trên BE DuckDNS, người gửi/người nhận quét QR trên robot và xác nhận hàng/cửa/khóa theo bước thực tế. Xem [hướng dẫn chạy và checklist nghiệm thu](docs/DELIVERY_INTEGRATION.md).
+
 Dự án đã được khởi tạo hoàn tất với cấu trúc chuẩn, tối ưu hóa luồng dữ liệu và hiệu năng đạt 60–120 FPS.
 
 ## 🚀 Các công nghệ tối ưu được tích hợp:

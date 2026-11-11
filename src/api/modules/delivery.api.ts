@@ -76,6 +76,13 @@ export interface DeliveryResponse {
 // ========================================================
 export type AuthVerificationPurpose = 'DELIVERY_SENDER' | 'DELIVERY_RECEIVER';
 
+export interface StaffPhoneQrResponse {
+  authJobStepId: string;
+  purpose: AuthVerificationPurpose;
+  expiresAt: string;
+  rows: string[];
+}
+
 export interface AuthVerificationResponse {
   verificationId: string;
   jobId: string;
@@ -188,6 +195,17 @@ export const deliveryApi = {
   }): Promise<DeliveryResponse[]> => {
     const first = await deliveryApi.getDeliveryRequests({ ...params, page: 0, size: 100 });
     return first?.content || [];
+  },
+
+  /**
+   * Phát hành mã QR một lần trên điện thoại Staff (POST /api/v1/jobs/{jobId}/staff-phone-qr)
+   * để Camera của Robot quét xác thực mở Servo.
+   */
+  issueStaffPhoneQr: async (jobId: string): Promise<StaffPhoneQrResponse> => {
+    return apiClient.post<StaffPhoneQrResponse>(
+      `/jobs/${jobId}/staff-phone-qr`,
+      {},
+    );
   },
 
   /**

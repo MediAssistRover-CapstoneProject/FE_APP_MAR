@@ -5,6 +5,7 @@ export type MainTabParamList = {
   Explore: undefined;
   Favorites: undefined;
   Errors: undefined;
+  Shifts: undefined;
 };
 
 export type RootStackParamList = {

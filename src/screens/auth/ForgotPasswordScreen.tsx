@@ -112,22 +112,28 @@ export const ForgotPasswordScreen: React.FC = () => {
         {/* 4-Step Stepper */}
         <Stepper currentStep={step} />
 
-        {/* STEP 1: NHẬP EMAIL */}
+        {/* STEP 1: NHẬP EMAIL HOẶC MÃ NHÂN VIÊN */}
         {step === 1 && (
           <View style={styles.card}>
-            <Text style={styles.cardTitle}>Nhập địa chỉ email</Text>
+            <Text style={styles.cardTitle}>Khôi phục mật khẩu ca trực</Text>
             <Text style={styles.cardSubtitle}>
-              Chúng tôi sẽ gửi mã OTP đến email của bạn.
+              Nhập mã nhân viên hoặc email được phân công ca trực để nhận hướng dẫn khôi phục.
             </Text>
 
+            <View style={styles.noticeBox}>
+              <Text style={styles.noticeText}>
+                💡 <Text style={{ fontWeight: '700' }}>Quy trình nội bộ:</Text> Nếu cần vào ca gấp hoặc không nhận được mã, vui lòng liên hệ trực tiếp Trưởng ca trực tại Phòng điều hành để được cấp lại mật khẩu ngay lập tức.
+              </Text>
+            </View>
+
             <View style={styles.fieldGroup}>
-              <Text style={styles.inputLabel}>EMAIL</Text>
+              <Text style={styles.inputLabel}>EMAIL HOẶC MÃ NHÂN VIÊN</Text>
               <View style={styles.inputContainer}>
                 <TextInput
                   style={styles.textInput}
                   value={email}
                   onChangeText={setEmail}
-                  placeholder="Nhập email của bạn"
+                  placeholder="Nhập email hoặc mã nhân viên"
                   placeholderTextColor={Colors.textMuted}
                   keyboardType="email-address"
                   autoCapitalize="none"
@@ -136,14 +142,14 @@ export const ForgotPasswordScreen: React.FC = () => {
             </View>
 
             <TouchableOpacity
-              style={styles.emeraldButton}
+              style={styles.actionButton}
               onPress={() => {
                 setStep(2);
                 setTimer(41);
               }}
               activeOpacity={0.85}
             >
-              <Text style={styles.buttonText}>Gửi mã OTP</Text>
+              <Text style={styles.buttonText}>Tiếp tục</Text>
               <ArrowRight size={18} color="#FFFFFF" strokeWidth={2.5} />
             </TouchableOpacity>
           </View>
@@ -201,7 +207,7 @@ export const ForgotPasswordScreen: React.FC = () => {
 
             <TouchableOpacity
               style={[
-                styles.emeraldButton,
+                styles.actionButton,
                 otp.join('').length === 6 ? null : styles.buttonDisabled,
               ]}
               onPress={() => setStep(3)}
@@ -283,7 +289,7 @@ export const ForgotPasswordScreen: React.FC = () => {
             </View>
 
             <TouchableOpacity
-              style={styles.emeraldButton}
+              style={styles.actionButton}
               onPress={() => setStep(4)}
               activeOpacity={0.85}
             >
@@ -297,20 +303,20 @@ export const ForgotPasswordScreen: React.FC = () => {
         {step === 4 && (
           <View style={[styles.card, styles.successCard]}>
             <View style={styles.successIconWrapper}>
-              <Check size={40} color={Colors.emerald} strokeWidth={3} />
+              <Check size={36} color="#FFFFFF" strokeWidth={3} />
             </View>
 
             <Text style={styles.successTitle}>Đặt lại thành công!</Text>
             <Text style={styles.successSubtitle}>
-              Mật khẩu mới đã được cập nhật. Vui lòng đăng nhập lại.
+              Mật khẩu mới đã được cập nhật. Vui lòng đăng nhập lại để vào ca trực.
             </Text>
 
             <TouchableOpacity
-              style={styles.tealButton}
+              style={styles.actionButton}
               onPress={() => navigation.navigate('Login')}
               activeOpacity={0.85}
             >
-              <Text style={styles.buttonText}>Về đăng nhập</Text>
+              <Text style={styles.buttonText}>Về trang đăng nhập</Text>
               <ArrowRight size={18} color="#FFFFFF" strokeWidth={2.5} />
             </TouchableOpacity>
           </View>
@@ -327,54 +333,73 @@ const styles = StyleSheet.create({
   },
   scrollContent: {
     paddingHorizontal: Spacing.lg,
-    paddingTop: Spacing.xl,
+    paddingTop: Spacing.xl + 10,
     paddingBottom: Spacing.xxl,
   },
   topHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: Spacing.xs,
+    marginBottom: Spacing.md,
     gap: Spacing.md,
   },
   backButton: {
     width: 44,
     height: 44,
-    borderRadius: BorderRadius.md,
-    backgroundColor: Colors.primaryLight,
+    borderRadius: 22,
+    backgroundColor: Colors.surface,
     alignItems: 'center',
     justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: Colors.border,
+    ...Shadows.card,
   },
   headerTitles: {
     flex: 1,
   },
   headerMainTitle: {
-    ...Typography.h2,
-    fontSize: 20,
+    fontSize: 22,
+    fontWeight: '700',
+    color: Colors.textPrimary,
+    letterSpacing: -0.3,
   },
   headerSubtitle: {
-    ...Typography.caption,
+    fontSize: 13,
     color: Colors.textSecondary,
     marginTop: 2,
   },
   card: {
     backgroundColor: Colors.surface,
-    borderRadius: BorderRadius.xl,
-    padding: Spacing.xl,
+    borderRadius: 20,
+    padding: 22,
     borderWidth: 1,
     borderColor: Colors.border,
     marginTop: Spacing.sm,
     ...Shadows.card,
   },
+  noticeBox: {
+    backgroundColor: Colors.surfaceMuted,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: 14,
+    padding: 12,
+    marginBottom: Spacing.md,
+  },
+  noticeText: {
+    fontSize: 12,
+    lineHeight: 18,
+    color: Colors.textSecondary,
+  },
   cardTitle: {
-    ...Typography.h2,
     fontSize: 18,
+    fontWeight: '700',
+    color: Colors.textPrimary,
     marginBottom: 4,
   },
   cardSubtitle: {
-    ...Typography.body,
     fontSize: 13,
+    lineHeight: 19,
     color: Colors.textSecondary,
-    marginBottom: Spacing.lg,
+    marginBottom: Spacing.md,
   },
   boldEmail: {
     fontWeight: '700',
@@ -384,24 +409,27 @@ const styles = StyleSheet.create({
     marginBottom: Spacing.md,
   },
   inputLabel: {
-    ...Typography.label,
+    fontSize: 12,
+    fontWeight: '600',
+    color: Colors.textPrimary,
     marginBottom: 6,
+    letterSpacing: 0.3,
   },
   inputContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: Colors.inputBackground,
-    borderRadius: BorderRadius.md,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 14,
     paddingHorizontal: Spacing.md,
-    height: 48,
+    height: 50,
     borderWidth: 1,
-    borderColor: Colors.inputBorder,
+    borderColor: Colors.border,
   },
   textInput: {
-    ...Typography.body,
     fontSize: 14,
     color: Colors.textPrimary,
     paddingVertical: 0,
+    flex: 1,
   },
   eyeButton: {
     padding: Spacing.xs,
@@ -410,22 +438,23 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     marginBottom: Spacing.lg,
-    gap: 6,
+    gap: 8,
   },
   otpBox: {
     flex: 1,
     height: 52,
-    backgroundColor: Colors.inputBackground,
-    borderRadius: BorderRadius.md,
+    backgroundColor: Colors.surfaceMuted,
+    borderRadius: 14,
     borderWidth: 1,
-    borderColor: Colors.inputBorder,
-    fontSize: 20,
+    borderColor: Colors.border,
+    fontSize: 22,
     fontWeight: '700',
     color: Colors.textPrimary,
   },
   otpBoxFilled: {
-    borderColor: Colors.primary,
-    backgroundColor: Colors.surface,
+    borderColor: Colors.hero,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1.5,
   },
   timerRow: {
     flexDirection: 'row',
@@ -434,12 +463,12 @@ const styles = StyleSheet.create({
     marginBottom: Spacing.lg,
   },
   timerText: {
-    ...Typography.caption,
+    fontSize: 13,
     color: Colors.textSecondary,
   },
   resendLink: {
-    ...Typography.caption,
-    color: Colors.primary,
+    fontSize: 13,
+    color: Colors.textPrimary,
     fontWeight: '700',
   },
   resendLinkDisabled: {
@@ -454,38 +483,27 @@ const styles = StyleSheet.create({
     flex: 1,
     height: 4,
     borderRadius: 2,
-    backgroundColor: Colors.stepInactive,
+    backgroundColor: Colors.border,
   },
   strengthBarActive: {
-    backgroundColor: Colors.primary,
+    backgroundColor: Colors.progressAccent,
   },
-  emeraldButton: {
+  actionButton: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: Colors.emerald,
-    borderRadius: BorderRadius.md,
-    height: 48,
+    backgroundColor: Colors.hero,
+    borderRadius: 16,
+    height: 52,
     gap: Spacing.xs + 2,
     marginTop: Spacing.xs,
-  },
-  tealButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: Colors.teal,
-    borderRadius: BorderRadius.md,
-    height: 48,
-    width: '100%',
-    gap: Spacing.xs + 2,
-    marginTop: Spacing.lg,
+    ...Shadows.button,
   },
   buttonDisabled: {
-    backgroundColor: Colors.primaryLight,
+    opacity: 0.5,
   },
   buttonText: {
-    ...Typography.body,
-    color: Colors.textInverse,
+    color: '#FFFFFF',
     fontWeight: '700',
     fontSize: 15,
   },
@@ -494,24 +512,25 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.xxl,
   },
   successIconWrapper: {
-    width: 80,
-    height: 80,
-    borderRadius: BorderRadius.full,
-    backgroundColor: Colors.emeraldLight,
-    borderWidth: 2,
-    borderColor: Colors.emerald,
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: Colors.hero,
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: Spacing.lg,
+    ...Shadows.hero,
   },
   successTitle: {
-    ...Typography.h1,
     fontSize: 22,
+    fontWeight: '700',
+    color: Colors.textPrimary,
     marginBottom: Spacing.xs,
     textAlign: 'center',
   },
   successSubtitle: {
-    ...Typography.body,
+    fontSize: 14,
+    lineHeight: 20,
     color: Colors.textSecondary,
     textAlign: 'center',
     paddingHorizontal: Spacing.md,

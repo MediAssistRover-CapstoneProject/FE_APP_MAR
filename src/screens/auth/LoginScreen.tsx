@@ -236,12 +236,12 @@ export const LoginScreen: React.FC = () => {
         {/* Logo & Tiêu đề hệ thống */}
         <View style={styles.logoSection}>
           <View style={styles.iconWrapper}>
-            <ShieldCheck size={36} color="#FFFFFF" strokeWidth={2.2} />
+            <ShieldCheck size={32} color="#FFFFFF" strokeWidth={2.2} />
           </View>
-          <Text style={styles.brandTitle}>MediAssistRover</Text>
-          <Text style={styles.brandSubtitle}>HỆ THỐNG ROBOT HỖ TRỢ BỆNH VIỆN</Text>
+          <Text style={styles.brandTitle}>MediAssist</Text>
+          <Text style={styles.brandSubtitle}>HỆ THỐNG ROBOT HỖ TRỢ Y TẾ</Text>
           <View style={styles.roleTag}>
-            <Text style={styles.roleTagText}>CỔNG DÀNH CHO NHÂN VIÊN Y TẾ</Text>
+            <Text style={styles.roleTagText}>CỔNG DÀNH CHO NHÂN VIÊN TRỰC</Text>
           </View>
         </View>
 
@@ -249,7 +249,7 @@ export const LoginScreen: React.FC = () => {
         <View style={styles.loginCard}>
           <Text style={styles.cardHeader}>Đăng nhập ca trực</Text>
           <Text style={styles.cardSubHeader}>
-            Chọn nhanh tài khoản Staff 1 (Giao hàng) hoặc Staff 2 (Nhận hàng & quét QR)
+            Chọn nhanh ca trực giao hàng hoặc nhận hàng để bắt đầu làm việc
           </Text>
 
           {/* Chọn nhanh tài khoản Staff 1 / Staff 2 */}
@@ -283,7 +283,7 @@ export const LoginScreen: React.FC = () => {
           {/* Thông báo lỗi tổng nếu đăng nhập thất bại */}
           {error && (
             <View style={styles.errorAlertBox}>
-              <AlertCircle size={16} color="#DC2626" />
+              <AlertCircle size={16} color={Colors.danger} />
               <Text style={styles.errorAlertText}>{error}</Text>
             </View>
           )}
@@ -339,7 +339,7 @@ export const LoginScreen: React.FC = () => {
               <TouchableOpacity
                 style={styles.eyeButton}
                 onPress={() => setShowPassword(!showPassword)}
-                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
                 accessibilityLabel={showPassword ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'}
               >
                 {showPassword ? (
@@ -369,7 +369,7 @@ export const LoginScreen: React.FC = () => {
               >
                 {rememberMe && <Check size={12} color="#FFFFFF" strokeWidth={3} />}
               </View>
-              <Text style={styles.rememberText}>Ghi nhớ ca trực</Text>
+              <Text style={styles.rememberText}>Ghi nhớ đăng nhập</Text>
             </TouchableOpacity>
 
             <TouchableOpacity onPress={handleForgotPassword} activeOpacity={0.7}>
@@ -382,7 +382,7 @@ export const LoginScreen: React.FC = () => {
             style={[styles.loginButton, isLoading && styles.loginButtonDisabled]}
             onPress={handleLogin}
             disabled={isLoading}
-            activeOpacity={0.8}
+            activeOpacity={0.85}
             accessibilityLabel="Đăng nhập"
           >
             {isLoading ? (
@@ -407,7 +407,7 @@ export const LoginScreen: React.FC = () => {
             }}
             activeOpacity={0.75}
           >
-            <ShieldCheck size={16} color={Colors.primary} />
+            <ShieldCheck size={16} color={Colors.textSecondary} />
             <Text style={styles.firstLoginBtnText}>
               Lần đầu đăng nhập? Đổi mật khẩu để kích hoạt
             </Text>
@@ -428,12 +428,12 @@ export const LoginScreen: React.FC = () => {
           <Text style={styles.connectionText}>
             Máy chủ: <Text style={styles.connectionHost}>{currentBaseUrl}</Text>
           </Text>
-          <Settings size={12} color={Colors.primary} style={{ marginLeft: 4 }} />
+          <Settings size={13} color={Colors.textSecondary} style={{ marginLeft: 4 }} />
         </TouchableOpacity>
 
         {/* Footer */}
         <Text style={styles.footerText}>
-          MediAssistRover · Bệnh viện Đa khoa Trung ương · Hệ thống điều hành nội bộ
+          MediAssist · Bệnh viện Đa khoa Trung ương · Phiên bản trực ban
         </Text>
       </ScrollView>
 
@@ -632,74 +632,12 @@ export const LoginScreen: React.FC = () => {
 const styles = StyleSheet.create({
   keyboardView: {
     flex: 1,
-    backgroundColor: '#F8FAFC',
-  },
-  passwordChangeModal: {
-    width: '90%',
-    maxWidth: 420,
-    borderRadius: 20,
-    padding: 22,
-    backgroundColor: '#FFFFFF',
-  },
-  passwordChangeIcon: {
-    alignSelf: 'center',
-    width: 54,
-    height: 54,
-    borderRadius: 27,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 12,
-    backgroundColor: Colors.primary,
-  },
-  passwordChangeTitle: {
-    textAlign: 'center',
-    fontSize: 20,
-    fontWeight: '800',
-    color: Colors.textPrimary,
-  },
-  passwordChangeSubtitle: {
-    marginTop: 8,
-    marginBottom: 18,
-    textAlign: 'center',
-    fontSize: 13,
-    lineHeight: 19,
-    color: Colors.textSecondary,
-  },
-  passwordChangeActions: {
-    flexDirection: 'row',
-    gap: 10,
-    marginTop: 20,
-  },
-  passwordChangeCancelBtn: {
-    flex: 1,
-    minHeight: 46,
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#F1F5F9',
-  },
-  passwordChangeCancelText: {
-    color: Colors.textSecondary,
-    fontSize: 14,
-    fontWeight: '700',
-  },
-  passwordChangeSubmitBtn: {
-    flex: 1.5,
-    minHeight: 46,
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: Colors.primary,
-  },
-  passwordChangeSubmitText: {
-    color: '#FFFFFF',
-    fontSize: 14,
-    fontWeight: '800',
+    backgroundColor: Colors.background,
   },
   scrollContent: {
     paddingHorizontal: Spacing.lg,
-    paddingTop: Spacing.xl + 10,
-    paddingBottom: Spacing.xl,
+    paddingTop: Spacing.xl + 16,
+    paddingBottom: Spacing.xl + 20,
     alignItems: 'center',
   },
   logoSection: {
@@ -707,112 +645,113 @@ const styles = StyleSheet.create({
     marginBottom: Spacing.lg,
   },
   iconWrapper: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    backgroundColor: Colors.primary,
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: Colors.hero,
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: Spacing.sm,
-    shadowColor: Colors.primary,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 6,
+    ...Shadows.hero,
   },
   brandTitle: {
-    fontSize: 22,
+    fontSize: 24,
     fontWeight: '800',
-    color: '#0A2540',
-    letterSpacing: 0.5,
+    color: Colors.textPrimary,
+    letterSpacing: -0.3,
   },
   brandSubtitle: {
-    fontSize: 10,
+    fontSize: 11,
     fontWeight: '700',
     color: Colors.textSecondary,
     letterSpacing: 1.2,
-    marginTop: 2,
+    marginTop: 3,
   },
   roleTag: {
-    backgroundColor: '#EFF6FF',
+    backgroundColor: '#EBEBEA',
     borderRadius: BorderRadius.full,
     paddingHorizontal: 12,
-    paddingVertical: 4,
+    paddingVertical: 5,
     marginTop: Spacing.sm,
     borderWidth: 1,
-    borderColor: '#DBEAFE',
+    borderColor: Colors.border,
   },
   roleTagText: {
     fontSize: 10,
     fontWeight: '700',
-    color: Colors.primary,
-    letterSpacing: 0.5,
+    color: Colors.textSecondary,
+    letterSpacing: 0.6,
   },
   loginCard: {
     width: '100%',
-    backgroundColor: '#FFFFFF',
-    borderRadius: BorderRadius.lg,
-    padding: Spacing.lg,
+    backgroundColor: Colors.surface,
+    borderRadius: 20,
+    padding: 22,
     marginBottom: Spacing.lg,
+    borderWidth: 1,
+    borderColor: Colors.border,
     ...Shadows.card,
   },
   cardHeader: {
-    fontSize: 18,
-    fontWeight: '800',
-    color: '#0A2540',
+    fontSize: 20,
+    fontWeight: '700',
+    color: Colors.textPrimary,
     marginBottom: 4,
+    letterSpacing: -0.2,
   },
   cardSubHeader: {
-    fontSize: 12,
+    fontSize: 13,
     color: Colors.textSecondary,
-    marginBottom: Spacing.sm,
+    marginBottom: Spacing.md,
+    lineHeight: 18,
   },
   quickAccountsRow: {
     flexDirection: 'row',
-    gap: 8,
+    gap: 10,
     marginBottom: Spacing.md,
   },
   quickAccountChip: {
     flex: 1,
-    backgroundColor: '#F8FAFC',
+    backgroundColor: Colors.surfaceMuted,
     borderWidth: 1,
-    borderColor: '#E2E8F0',
-    borderRadius: BorderRadius.sm,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
+    borderColor: Colors.border,
+    borderRadius: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
   },
   quickAccountChipActive: {
-    backgroundColor: '#EFF6FF',
-    borderColor: Colors.primary,
+    backgroundColor: '#FFFFFF',
+    borderColor: Colors.hero,
+    borderWidth: 1.5,
   },
   quickAccountLabel: {
-    fontSize: 12,
-    fontWeight: '800',
-    color: '#0F172A',
+    fontSize: 13,
+    fontWeight: '700',
+    color: Colors.textPrimary,
   },
   quickAccountLabelActive: {
-    color: Colors.primary,
+    color: Colors.textPrimary,
   },
   quickAccountDesc: {
-    fontSize: 10,
-    color: '#64748B',
+    fontSize: 11,
+    color: Colors.textSecondary,
     marginTop: 2,
   },
   errorAlertBox: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    backgroundColor: '#FEF2F2',
+    backgroundColor: Colors.dangerSurface,
     borderWidth: 1,
-    borderColor: '#FECACA',
-    borderRadius: BorderRadius.sm,
+    borderColor: '#FCA5A5',
+    borderRadius: 12,
     paddingHorizontal: 12,
     paddingVertical: 10,
     marginBottom: Spacing.md,
   },
   errorAlertText: {
     fontSize: 12,
-    color: '#B91C1C',
+    color: Colors.danger,
     fontWeight: '500',
     flex: 1,
   },
@@ -820,29 +759,29 @@ const styles = StyleSheet.create({
     marginBottom: Spacing.md,
   },
   inputLabel: {
-    fontSize: 12,
+    fontSize: 13,
     fontWeight: '600',
-    color: '#334155',
+    color: Colors.textPrimary,
     marginBottom: 6,
   },
   inputWrapper: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#F8FAFC',
+    backgroundColor: '#FFFFFF',
     borderWidth: 1,
-    borderColor: '#CBD5E1',
-    borderRadius: BorderRadius.md,
+    borderColor: Colors.border,
+    borderRadius: 14,
     paddingHorizontal: Spacing.md,
-    height: 48,
+    height: 50,
   },
   inputWrapperError: {
-    borderColor: '#EF4444',
-    backgroundColor: '#FFF5F5',
+    borderColor: Colors.danger,
+    backgroundColor: Colors.dangerSurface,
   },
   textInput: {
     flex: 1,
     fontSize: 14,
-    color: '#0F172A',
+    color: Colors.textPrimary,
     height: '100%',
   },
   eyeButton: {
@@ -850,7 +789,7 @@ const styles = StyleSheet.create({
   },
   fieldErrorText: {
     fontSize: 11,
-    color: '#EF4444',
+    color: Colors.danger,
     marginTop: 4,
     marginLeft: 2,
   },
@@ -867,18 +806,18 @@ const styles = StyleSheet.create({
     gap: Spacing.xs + 2,
   },
   checkbox: {
-    width: 18,
-    height: 18,
-    borderRadius: 4,
+    width: 20,
+    height: 20,
+    borderRadius: 6,
     borderWidth: 1.5,
-    borderColor: '#94A3B8',
+    borderColor: Colors.border,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: '#FFFFFF',
   },
   checkboxActive: {
-    backgroundColor: Colors.primary,
-    borderColor: Colors.primary,
+    backgroundColor: Colors.hero,
+    borderColor: Colors.hero,
   },
   rememberText: {
     fontSize: 13,
@@ -886,21 +825,22 @@ const styles = StyleSheet.create({
   },
   forgotPasswordText: {
     fontSize: 13,
-    color: Colors.primary,
+    color: Colors.textPrimary,
     fontWeight: '600',
   },
   loginButton: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: Colors.primary,
-    borderRadius: BorderRadius.md,
-    height: 48,
+    backgroundColor: Colors.hero,
+    borderRadius: 16,
+    height: 52,
     gap: Spacing.xs + 2,
-    marginTop: Spacing.sm,
+    marginTop: Spacing.xs,
+    ...Shadows.button,
   },
   loginButtonDisabled: {
-    opacity: 0.7,
+    opacity: 0.6,
   },
   loginButtonText: {
     color: '#FFFFFF',
@@ -912,36 +852,33 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 8,
+    gap: 6,
     paddingVertical: 10,
-    paddingHorizontal: 12,
-    borderRadius: 10,
-    backgroundColor: '#E0F2FE',
-    borderWidth: 1,
-    borderColor: '#BAE6FD',
   },
   firstLoginBtnText: {
     fontSize: 13,
-    fontWeight: '700',
-    color: Colors.primaryDark,
+    fontWeight: '500',
+    color: Colors.textSecondary,
+    textDecorationLine: 'underline',
   },
   connectionBadge: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    backgroundColor: '#F1F5F9',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
+    backgroundColor: Colors.surface,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
     borderRadius: 20,
     marginBottom: Spacing.md,
     borderWidth: 1,
-    borderColor: '#E2E8F0',
+    borderColor: Colors.border,
+    ...Shadows.card,
   },
   connectionDot: {
     width: 7,
     height: 7,
     borderRadius: 4,
-    backgroundColor: '#10B981',
+    backgroundColor: '#24A148',
   },
   connectionText: {
     fontSize: 11,
@@ -961,7 +898,7 @@ const styles = StyleSheet.create({
   // Modal Cấu hình Server
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    backgroundColor: 'rgba(0, 0, 0, 0.45)',
     justifyContent: 'center',
     alignItems: 'center',
     padding: Spacing.lg,
@@ -969,10 +906,10 @@ const styles = StyleSheet.create({
   serverModalContent: {
     width: '100%',
     backgroundColor: '#FFFFFF',
-    borderRadius: 16,
-    padding: 18,
+    borderRadius: 24,
+    padding: 20,
     maxWidth: 440,
-    ...Shadows.card,
+    ...Shadows.hero,
   },
   serverModalHeader: {
     flexDirection: 'row',
@@ -981,9 +918,9 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   serverModalTitle: {
-    fontSize: 15,
-    fontWeight: '800',
-    color: '#0A2540',
+    fontSize: 16,
+    fontWeight: '700',
+    color: Colors.textPrimary,
   },
   serverModalSubtitle: {
     fontSize: 12,
@@ -992,12 +929,12 @@ const styles = StyleSheet.create({
     lineHeight: 17,
   },
   serverInputBox: {
-    backgroundColor: '#F8FAFC',
+    backgroundColor: Colors.surfaceMuted,
     borderWidth: 1,
-    borderColor: '#CBD5E1',
-    borderRadius: 8,
+    borderColor: Colors.border,
+    borderRadius: 12,
     paddingHorizontal: 12,
-    height: 44,
+    height: 46,
     justifyContent: 'center',
     marginBottom: 10,
   },
@@ -1007,77 +944,78 @@ const styles = StyleSheet.create({
     fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
   },
   testResultBox: {
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 10,
     marginBottom: 10,
   },
   testSuccessBox: {
-    backgroundColor: '#DCFCE7',
+    backgroundColor: Colors.successSurface,
     borderWidth: 1,
     borderColor: '#86EFAC',
   },
   testFailBox: {
-    backgroundColor: '#FEF2F2',
+    backgroundColor: Colors.dangerSurface,
     borderWidth: 1,
     borderColor: '#FECACA',
   },
   testResultText: {
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: '600',
   },
   testSuccessText: {
-    color: '#15803D',
+    color: Colors.successText,
   },
   testFailText: {
-    color: '#DC2626',
+    color: Colors.danger,
   },
   presetsHeader: {
-    fontSize: 10,
-    fontWeight: '800',
-    color: Colors.textMuted,
+    fontSize: 11,
+    fontWeight: '700',
+    color: Colors.textSecondary,
     letterSpacing: 0.5,
-    marginBottom: 6,
+    marginBottom: 8,
     marginTop: 4,
   },
   presetItem: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    padding: 10,
-    borderRadius: 8,
+    padding: 12,
+    borderRadius: 12,
     borderWidth: 1,
-    borderColor: '#E2E8F0',
-    backgroundColor: '#F8FAFC',
-    marginBottom: 6,
+    borderColor: Colors.border,
+    backgroundColor: Colors.surfaceMuted,
+    marginBottom: 8,
   },
   presetItemActive: {
-    borderColor: Colors.primary,
-    backgroundColor: '#EFF6FF',
+    borderColor: Colors.hero,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1.5,
   },
   presetLabel: {
-    fontSize: 12,
+    fontSize: 13,
     fontWeight: '700',
     color: Colors.textPrimary,
   },
   presetLabelActive: {
-    color: Colors.primary,
+    color: Colors.textPrimary,
   },
   presetUrl: {
     fontSize: 11,
-    color: '#64748B',
+    color: Colors.textSecondary,
     fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
-    marginTop: 1,
+    marginTop: 2,
   },
   presetDesc: {
-    fontSize: 10,
+    fontSize: 11,
     color: Colors.textMuted,
     marginTop: 2,
   },
   serverModalActions: {
     flexDirection: 'row',
-    gap: 8,
-    marginTop: 12,
+    gap: 10,
+    marginTop: 14,
   },
   testBtn: {
     flex: 1,
@@ -1085,28 +1023,96 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: 6,
-    height: 42,
-    borderRadius: 8,
+    height: 48,
+    borderRadius: 14,
     borderWidth: 1,
-    borderColor: Colors.primary,
-    backgroundColor: '#EFF6FF',
+    borderColor: Colors.border,
+    backgroundColor: Colors.surfaceMuted,
   },
   testBtnText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: Colors.primary,
+    fontSize: 13,
+    fontWeight: '600',
+    color: Colors.textPrimary,
   },
   applyBtn: {
     flex: 1.3,
     alignItems: 'center',
     justifyContent: 'center',
-    height: 42,
-    borderRadius: 8,
-    backgroundColor: Colors.primary,
+    height: 48,
+    borderRadius: 14,
+    backgroundColor: Colors.hero,
+    ...Shadows.button,
   },
   applyBtnText: {
-    fontSize: 12,
+    fontSize: 13,
     fontWeight: '700',
     color: '#FFFFFF',
+  },
+
+  // Modal Đổi Mật Khẩu Lần Đầu
+  passwordChangeModal: {
+    width: '92%',
+    maxWidth: 420,
+    borderRadius: 24,
+    padding: 24,
+    backgroundColor: '#FFFFFF',
+    ...Shadows.hero,
+  },
+  passwordChangeIcon: {
+    alignSelf: 'center',
+    width: 54,
+    height: 54,
+    borderRadius: 27,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 12,
+    backgroundColor: Colors.hero,
+  },
+  passwordChangeTitle: {
+    textAlign: 'center',
+    fontSize: 20,
+    fontWeight: '700',
+    color: Colors.textPrimary,
+  },
+  passwordChangeSubtitle: {
+    marginTop: 8,
+    marginBottom: 18,
+    textAlign: 'center',
+    fontSize: 13,
+    lineHeight: 19,
+    color: Colors.textSecondary,
+  },
+  passwordChangeActions: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 20,
+  },
+  passwordChangeCancelBtn: {
+    flex: 1,
+    minHeight: 48,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.surfaceMuted,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  passwordChangeCancelText: {
+    color: Colors.textSecondary,
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  passwordChangeSubmitBtn: {
+    flex: 1.5,
+    minHeight: 48,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.hero,
+  },
+  passwordChangeSubmitText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '700',
   },
 });

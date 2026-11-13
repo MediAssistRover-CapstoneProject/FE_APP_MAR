@@ -6,20 +6,22 @@ import {
   ActivityIndicator,
   ViewStyle,
   TextStyle,
+  StyleProp,
 } from 'react-native';
-import { Colors, Spacing, BorderRadius, Typography } from '../../constants/theme';
+import { Colors, Spacing, BorderRadius, Typography, Shadows } from '../../constants/theme';
 
 interface ButtonProps {
   title: string;
   onPress: () => void;
-  variant?: 'primary' | 'secondary' | 'outline' | 'ghost';
+  variant?: 'primary' | 'secondary' | 'outline' | 'ghost' | 'danger';
   size?: 'sm' | 'md' | 'lg';
   loading?: boolean;
   disabled?: boolean;
   leftIcon?: React.ReactNode;
   rightIcon?: React.ReactNode;
-  style?: ViewStyle;
-  textStyle?: TextStyle;
+  style?: StyleProp<ViewStyle>;
+  textStyle?: StyleProp<TextStyle>;
+  accessibilityLabel?: string;
 }
 
 export const Button: React.FC<ButtonProps> = memo(({
@@ -33,10 +35,12 @@ export const Button: React.FC<ButtonProps> = memo(({
   rightIcon,
   style,
   textStyle,
+  accessibilityLabel,
 }) => {
   const isOutline = variant === 'outline';
   const isGhost = variant === 'ghost';
   const isSecondary = variant === 'secondary';
+  const isDanger = variant === 'danger';
 
   const containerStyles = [
     styles.base,
@@ -44,6 +48,7 @@ export const Button: React.FC<ButtonProps> = memo(({
     isOutline && styles.outlineContainer,
     isGhost && styles.ghostContainer,
     isSecondary && styles.secondaryContainer,
+    isDanger && styles.dangerContainer,
     disabled && styles.disabledContainer,
     style,
   ];
@@ -54,9 +59,16 @@ export const Button: React.FC<ButtonProps> = memo(({
     isOutline && styles.outlineText,
     isGhost && styles.ghostText,
     isSecondary && styles.secondaryText,
+    isDanger && styles.dangerText,
     disabled && styles.disabledText,
     textStyle,
   ];
+
+  const spinnerColor = isOutline || isGhost
+    ? Colors.primaryAction
+    : isSecondary
+    ? Colors.textPrimary
+    : Colors.textInverse;
 
   return (
     <TouchableOpacity
@@ -64,12 +76,12 @@ export const Button: React.FC<ButtonProps> = memo(({
       onPress={onPress}
       disabled={disabled || loading}
       activeOpacity={0.8}
+      accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel || title}
+      accessibilityState={{ disabled: disabled || loading, busy: loading }}
     >
       {loading ? (
-        <ActivityIndicator
-          size="small"
-          color={isOutline || isGhost ? Colors.primary : Colors.textInverse}
-        />
+        <ActivityIndicator size="small" color={spinnerColor} />
       ) : (
         <>
           {leftIcon && <>{leftIcon}</>}
@@ -86,61 +98,89 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    borderRadius: BorderRadius.md,
-    backgroundColor: Colors.primary,
-    gap: Spacing.xs,
+    borderRadius: BorderRadius.lg,
+    backgroundColor: Colors.primaryAction,
+    gap: Spacing.sm,
+    minHeight: 52,
+    ...Shadows.button,
   },
   sm: {
+    minHeight: 40,
     paddingVertical: Spacing.xs + 2,
-    paddingHorizontal: Spacing.sm,
+    paddingHorizontal: Spacing.md,
+    borderRadius: BorderRadius.md,
   },
   md: {
+    minHeight: 52,
     paddingVertical: Spacing.sm + 4,
-    paddingHorizontal: Spacing.md,
+    paddingHorizontal: Spacing.lg,
+    borderRadius: BorderRadius.lg,
   },
   lg: {
+    minHeight: 56,
     paddingVertical: Spacing.md,
-    paddingHorizontal: Spacing.lg,
+    paddingHorizontal: Spacing.xl,
+    borderRadius: BorderRadius.card,
   },
   outlineContainer: {
     backgroundColor: 'transparent',
     borderWidth: 1.5,
-    borderColor: Colors.primary,
+    borderColor: Colors.primaryAction,
+    shadowOpacity: 0,
+    elevation: 0,
   },
   ghostContainer: {
     backgroundColor: 'transparent',
+    shadowOpacity: 0,
+    elevation: 0,
   },
   secondaryContainer: {
-    backgroundColor: Colors.primaryLight,
+    backgroundColor: Colors.surfaceMuted,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    shadowOpacity: 0,
+    elevation: 0,
+  },
+  dangerContainer: {
+    backgroundColor: Colors.danger,
+    borderColor: Colors.danger,
   },
   disabledContainer: {
-    backgroundColor: Colors.surfaceSubtle,
-    borderColor: Colors.border,
+    opacity: 0.45,
+    shadowOpacity: 0,
+    elevation: 0,
   },
   baseText: {
-    ...Typography.body,
-    fontWeight: '600',
+    ...Typography.field,
     color: Colors.textInverse,
+    fontWeight: '600',
+    textAlign: 'center',
   },
   smText: {
     fontSize: 13,
+    lineHeight: 18,
   },
   mdText: {
     fontSize: 15,
+    lineHeight: 22,
   },
   lgText: {
     fontSize: 16,
+    lineHeight: 24,
   },
   outlineText: {
-    color: Colors.primary,
+    color: Colors.primaryAction,
   },
   ghostText: {
-    color: Colors.primary,
+    color: Colors.primaryAction,
   },
   secondaryText: {
-    color: Colors.primaryDark,
+    color: Colors.textPrimary,
+  },
+  dangerText: {
+    color: Colors.textInverse,
   },
   disabledText: {
-    color: Colors.textMuted,
+    opacity: 0.8,
   },
 });

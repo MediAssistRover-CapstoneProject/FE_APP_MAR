@@ -107,14 +107,20 @@ export const StaffHeader: React.FC<StaffHeaderProps> = ({
             </TouchableOpacity>
           )}
           <View style={styles.avatarCircle} accessibilityLabel="Ảnh đại diện">
-            <User size={18} color="#FFFFFF" />
+            <User size={18} color="#FFFFFF" strokeWidth={2} />
           </View>
           <View style={{ flex: 1 }}>
             <View style={styles.headerTitleRow}>
               <Text style={styles.brandSmall}>{subtitle}</Text>
-              <View style={styles.badgeOnDuty} accessibilityLabel="Trạng thái trực">
-                <Text style={styles.badgeOnDutyText}>ĐANG TRỰC</Text>
-              </View>
+              {staffData?.activeShifts && staffData.activeShifts.length > 0 ? (
+                <View style={styles.badgeOnDuty} accessibilityLabel="Trạng thái trực: Đang trực">
+                  <Text style={styles.badgeOnDutyText}>ĐANG TRỰC</Text>
+                </View>
+              ) : (
+                <View style={styles.badgeOffDuty} accessibilityLabel="Trạng thái trực: Ngoài ca">
+                  <Text style={styles.badgeOffDutyText}>NGOÀI CA</Text>
+                </View>
+              )}
             </View>
             <Text style={styles.staffName} numberOfLines={1}>
               {displayName}
@@ -132,7 +138,7 @@ export const StaffHeader: React.FC<StaffHeaderProps> = ({
           accessibilityRole="button"
           activeOpacity={0.7}
         >
-          <LogOut size={13} color={Colors.primary} />
+          <LogOut size={13} color={Colors.textPrimary} />
           <Text style={styles.logoutText}>Đăng xuất</Text>
         </TouchableOpacity>
       </View>
@@ -318,7 +324,7 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: Colors.primary,
+    backgroundColor: Colors.hero,
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: Spacing.sm,
@@ -335,25 +341,36 @@ const styles = StyleSheet.create({
     letterSpacing: 0.6,
   },
   badgeOnDuty: {
-    backgroundColor: '#DCFCE7',
+    backgroundColor: Colors.successSurface,
     borderRadius: 4,
-    paddingHorizontal: 5,
-    paddingVertical: 1,
+    paddingHorizontal: 6,
+    paddingVertical: 1.5,
   },
   badgeOnDutyText: {
     fontSize: 9,
     fontWeight: '700',
-    color: '#16A34A',
+    color: Colors.successText,
+  },
+  badgeOffDuty: {
+    backgroundColor: Colors.surfaceMuted,
+    borderRadius: 4,
+    paddingHorizontal: 6,
+    paddingVertical: 1.5,
+  },
+  badgeOffDutyText: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: Colors.textMuted,
   },
   staffName: {
-    fontSize: 14,
+    fontSize: 15,
     fontWeight: '700',
     color: Colors.textPrimary,
     marginTop: 1,
   },
   staffSubtitle: {
     fontSize: 11,
-    color: Colors.textMuted,
+    color: Colors.textSecondary,
     marginTop: 1,
   },
   logoutBtn: {
@@ -361,16 +378,16 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 4,
     borderWidth: 1,
-    borderColor: '#CBD5E1',
+    borderColor: Colors.border,
     borderRadius: BorderRadius.md,
     paddingHorizontal: 10,
     paddingVertical: 6,
-    backgroundColor: '#F8FAFC',
+    backgroundColor: Colors.surface,
   },
   logoutText: {
     fontSize: 12,
     fontWeight: '600',
-    color: Colors.primary,
+    color: Colors.textPrimary,
   },
 
   // Modal Profile & Shifts
@@ -533,34 +550,33 @@ const styles = StyleSheet.create({
   },
 
   sheetChangePasswordBtn: {
-    height: 44,
-    borderRadius: 12,
+    height: 48,
+    borderRadius: 14,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
-    backgroundColor: '#E0F2FE',
-    borderWidth: 1.5,
-    borderColor: '#BAE6FD',
+    backgroundColor: Colors.surfaceMuted,
+    borderWidth: 1,
+    borderColor: Colors.border,
     marginBottom: 8,
   },
   sheetChangePasswordText: {
     fontSize: 14,
-    fontWeight: '700',
-    color: Colors.primaryDark,
+    fontWeight: '600',
+    color: Colors.textPrimary,
   },
   sheetCloseButton: {
-    height: 44,
-    borderRadius: 12,
-    borderWidth: 1.5,
-    borderColor: Colors.border,
+    height: 50,
+    borderRadius: 16,
+    backgroundColor: Colors.hero,
     alignItems: 'center',
     justifyContent: 'center',
-    marginTop: Spacing.sm,
+    marginTop: Spacing.xs,
   },
   sheetCloseButtonText: {
-    fontSize: 14,
+    fontSize: 15,
     fontWeight: '600',
-    color: Colors.primary,
+    color: Colors.textInverse,
   },
 });

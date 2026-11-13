@@ -15,6 +15,7 @@ import {
 import { Colors, Spacing, BorderRadius, Shadows, Typography } from '../../constants/theme';
 import { StaffHeader } from '../../components/common/StaffHeader';
 import { robotApi, RobotPoseDto, RobotSnapshotResponse } from '../../api/modules/robot.api';
+import { normalizeRobotPose } from '../../components/map/robotPose';
 import { deliveryApi } from '../../api/modules/delivery.api';
 import { scheduleApi } from '../../api/modules/schedule.api';
 import { facilityApi } from '../../api/modules/facility.api';
@@ -275,8 +276,8 @@ export const MapScreen: React.FC = () => {
       if (snapshot?.robot) {
         setRobotData(snapshot.robot);
       }
-      const pose = snapshot?.latestPose;
-      if (pose && Number.isFinite(Number(pose.xM)) && Number.isFinite(Number(pose.yM))) {
+      const pose = normalizeRobotPose(snapshot?.latestPose);
+      if (pose) {
         setRobotPose(pose);
         setIsPoseLive(
           Boolean(snapshot?.mqttConnected && snapshot?.heartbeatFresh && pose.fresh !== false)
@@ -289,13 +290,18 @@ export const MapScreen: React.FC = () => {
 
     try {
       const history = await robotApi.getRobotLocationHistory(robotId, 0, 1);
-      const lastPose = history?.content?.[0];
-      if (lastPose && Number.isFinite(Number(lastPose.xM)) && Number.isFinite(Number(lastPose.yM))) {
+      const lastPose = normalizeRobotPose(history?.content?.[0]);
+      if (lastPose) {
         setRobotPose(lastPose);
         setIsPoseLive(Boolean(lastPose.fresh));
+      } else {
+        setRobotPose(null);
+        setIsPoseLive(false);
       }
     } catch {
-      // Giữ pose gần nhất
+      // An old pose must not keep appearing as a live location after a failed read.
+      setIsPoseLive(false);
+      setRobotPose(previous => previous?.robotId === robotId ? previous : null);
     }
   }, []);
 
@@ -618,265 +624,198 @@ export const MapScreen: React.FC = () => {
       <StaffHeader />
 
 
-      <ScrollView style={styles.mainScroll} showsVerticalScrollIndicator={false}>
-        {/* ========= VIEW MODE SWITCHER & ROBOT KIOSK BUTTON ========= */}
-        <View style={styles.viewModeBar}>
-          <View style={styles.viewModeInfo}>
-            <Text style={styles.viewModeTitle}>
-              CHẾ ĐỘ: <Text style={{ color: Colors.primary }}>STAFF DISPATCH APP</Text>
-            </Text>
-            <Text style={styles.viewModeSub}>
-              Nhấn trực tiếp vào phòng trên bản đồ 1200x680 để điều Robot AMR
-            </Text>
-          </View>
-          <TouchableOpacity
-            style={styles.openRobotKioskBtn}
-            onPress={() => setShowRobotMonitor(true)}
-            activeOpacity={0.8}
-          >
-            <Video size={16} color="#FFFFFF" />
-            <Text style={styles.openRobotKioskText}>Màn hình & Camera Robot</Text>
-          </TouchableOpacity>
-        </View>
-
-        {/* ========= 2D HOSPITAL SVG MAP (CHUẨN 1200x680 PIXEL) ========= */}
-        <View style={styles.svgMapCard}>
-          <View style={styles.mapCardHeaderRow}>
-            <View style={styles.mapStatusBadge}>
+      <ScrollView
+        style={styles.mainScroll}
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+      >
+        {/* ========= 1. HERO CARD ROBOT ĐEN THAN (#202022) ========= */}
+        <View style={styles.heroCard}>
+          {/* Top row: Status chip + Battery */}
+          <View style={styles.heroTopRow}>
+            <View style={styles.heroStatusChip}>
               <View
                 style={[
-                  styles.statusDotLive,
+                  styles.heroStatusDot,
                   {
                     backgroundColor:
                       robotData?.status === 'BUSY'
                         ? '#06B6D4'
                         : robotData?.status === 'IDLE'
-                        ? '#10B981'
+                        ? '#24A148'
                         : robotData?.status === 'EMERGENCY_STOP' || robotData?.status === 'ERROR'
                         ? '#EF4444'
                         : '#3B82F6',
                   },
                 ]}
               />
-              <Text style={styles.mapStatusBadgeText}>
-                {robotData?.status === 'BUSY'
-                  ? `ROBOT ĐANG DI CHUYỂN${selectedRoom?.name ? `: ${selectedRoom.name}` : ''}`
-                  : robotData?.status === 'EMERGENCY_STOP'
-                  ? 'ROBOT ĐANG DỪNG KHẨN CẤP'
-                  : robotData?.status === 'ERROR'
-                  ? 'ROBOT ĐANG BÁO LỖI'
-                  : activeMap
-                  ? `BE LIVE · ${activeMap.mapName} · ${activeMapRooms.length} PHÒNG · ${activeMapEndpoints.length} ĐIỂM`
-                  : 'BACKEND CHƯA CÓ MAP KHẢ DỤNG'}
+              <Text style={styles.heroChipText}>
+                {robotData?.robotCode || 'MAR-01'}
               </Text>
             </View>
-            <Text style={styles.robotCoordLiveText}>
-              {robotData ? `${robotData.robotName} · ${robotData.status}` : 'Chưa có dữ liệu robot từ Backend'}
+
+            <View style={styles.heroBatteryBadge}>
+              <Text style={styles.heroBatteryText}>
+                🔋 {robotData?.batteryPercent ?? robotData?.batteryRaw ?? '--'}%
+              </Text>
+            </View>
+          </View>
+
+          {/* Middle: Title & Current Job */}
+          <View style={styles.heroMainSection}>
+            <Text style={styles.heroSubLabel}>
+              {activeRobotJob ? 'Nhiệm vụ đang thực hiện' : 'Trạng thái hoạt động'}
+            </Text>
+            <Text style={styles.heroTitle} numberOfLines={2}>
+              {activeRobotJob
+                ? getJobDisplayInfo(activeRobotJob, endpoints).title
+                : robotData?.status === 'BUSY'
+                ? 'Đang di chuyển'
+                : robotData?.status === 'IDLE'
+                ? 'Sẵn sàng nhận lệnh'
+                : 'Đang trực ban'}
+            </Text>
+            <Text style={styles.heroMetaText} numberOfLines={1}>
+              {activeFloor?.floorName || 'Tầng 1'} · {selectedRoom?.name || 'Khu vực trực'} · Nav2 SLAM
             </Text>
           </View>
 
-          {activeMap ? (
-            <BackendHospitalMap
-              map={activeMap}
-              metadata={mapImageMetadata}
-              endpoints={activeMapEndpoints}
-              zones={backendZones}
-              token={authToken}
-              selectedEndpointId={selectedEndpointId}
-              onSelectEndpoint={handleSelectBackendEndpoint}
-              robotPose={robotPose}
-              isPoseLive={isPoseLive}
-              plannedPath={robotSnapshot?.navigationPlan?.points || null}
-            />
-          ) : isLoadingFacility ? (
-            <View style={styles.backendMapState}>
-              <ActivityIndicator size="small" color="#67E8F9" />
-              <Text style={styles.backendMapStateText}>Đang lấy map từ Backend...</Text>
-            </View>
-          ) : (
-            <View style={styles.backendMapState}>
-              <Text style={styles.backendMapStateText}>
-                {facilityError || 'Backend chưa có map khả dụng.'}
-              </Text>
-              <TouchableOpacity onPress={fetchFacilityData} style={styles.mapPickerChevron}>
-                <RefreshCw size={15} color="#67E8F9" />
-              </TouchableOpacity>
-            </View>
-          )}
+          {/* Bottom: 4 Round Action Buttons */}
+          <View style={styles.heroActionsRow}>
+            {/* 1. Hàng đợi */}
+            <TouchableOpacity
+              style={styles.heroActionCol}
+              onPress={() => setShowQueueSheet(true)}
+              activeOpacity={0.8}
+            >
+              <View style={styles.heroActionBtn}>
+                <FileText size={20} color="#FFFFFF" strokeWidth={2} />
+              </View>
+              <Text style={styles.heroActionLabel}>Hàng đợi</Text>
+            </TouchableOpacity>
+
+            {/* 2. Camera & Đàm thoại */}
+            <TouchableOpacity
+              style={styles.heroActionCol}
+              onPress={() => setShowRobotMonitor(true)}
+              activeOpacity={0.8}
+            >
+              <View style={styles.heroActionBtn}>
+                <Video size={20} color="#FFFFFF" strokeWidth={2} />
+              </View>
+              <Text style={styles.heroActionLabel}>Camera</Text>
+            </TouchableOpacity>
+
+            {/* 3. Lịch trình */}
+            <TouchableOpacity
+              style={styles.heroActionCol}
+              onPress={() => setShowScheduleSheet(true)}
+              activeOpacity={0.8}
+            >
+              <View style={styles.heroActionBtn}>
+                <Calendar size={20} color="#FFFFFF" strokeWidth={2} />
+              </View>
+              <Text style={styles.heroActionLabel}>Lịch trình</Text>
+            </TouchableOpacity>
+
+            {/* 4. Dừng khẩn */}
+            <TouchableOpacity
+              style={styles.heroActionCol}
+              onPress={() => {
+                Alert.alert(
+                  'Dừng khẩn cấp robot',
+                  'Bạn có chắc chắn muốn ngắt chuyển động toàn bộ robot ngay lập tức để đảm bảo an toàn?',
+                  [
+                    { text: 'Hủy', style: 'cancel' },
+                    {
+                      text: 'DỪNG NGAY ⚠️',
+                      style: 'destructive',
+                      onPress: () => {
+                        setRobotStatus('paused');
+                        Alert.alert('Đã kích hoạt', 'Robot đã dừng khẩn cấp và bật đèn cảnh báo.');
+                      },
+                    },
+                  ]
+                );
+              }}
+              activeOpacity={0.8}
+            >
+              <View style={[styles.heroActionBtn, { backgroundColor: 'rgba(239, 68, 68, 0.28)' }]}>
+                <AlertTriangle size={20} color="#EF4444" strokeWidth={2} />
+              </View>
+              <Text style={styles.heroActionLabel}>Dừng khẩn</Text>
+            </TouchableOpacity>
+          </View>
         </View>
 
-        {/* ========= TRACKING & FUNCTION DASHBOARD (Hình 5) ========= */}
-        <View style={styles.dashboardContainer}>
-          {/* Header Bar */}
-          <TouchableOpacity
-            style={styles.dashboardHeader}
-            onPress={() => setIsExpanded(!isExpanded)}
-            activeOpacity={0.8}
-          >
-            <View style={styles.statusLeft}>
-              <View
-                style={[
-                  styles.statusDot,
-                  { backgroundColor: robotStatus === 'running' ? '#10B981' : '#F59E0B' },
-                ]}
-              />
-              <Text style={styles.statusTitle}>
-                {robotData?.status === 'OFFLINE' ? 'GAZEBO · OFFLINE' : (robotStatus === 'running' ? 'ĐANG VẬN CHUYỂN' : 'TẠM DỪNG')}
+        {/* ========= 2. CARD BẢN ĐỒ BỆNH VIỆN TRẮNG BO GÓC 20dp ========= */}
+        <View style={styles.mapCard}>
+          <View style={styles.mapCardHeaderRow}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.mapCardTitle}>Sơ đồ bệnh viện</Text>
+              <Text style={styles.mapCardSubtitle} numberOfLines={1}>
+                {activeMap ? `${activeMap.mapName} · ${activeMapRooms.length} phòng` : 'Bản đồ Nav2 SLAM'}
               </Text>
             </View>
-            <View style={styles.statusRight}>
-              <Text style={styles.batteryText}>🔋 {robotData?.batteryPercent ?? robotData?.batteryRaw ?? '--'}%</Text>
-              {isExpanded ? (
-                <ChevronUp size={18} color={Colors.textSecondary} />
-              ) : (
-                <ChevronDown size={18} color={Colors.textSecondary} />
+
+            <View style={{ flexDirection: 'row', gap: 8 }}>
+              {availableMaps.length > 1 && (
+                <TouchableOpacity
+                  style={styles.mapHeaderPill}
+                  onPress={() => setShowMapPicker(true)}
+                  activeOpacity={0.75}
+                >
+                  <Text style={styles.mapHeaderPillText}>Đổi map</Text>
+                </TouchableOpacity>
               )}
+              <TouchableOpacity
+                style={styles.mapHeaderPill}
+                onPress={() => setShowLocationSheet(true)}
+                activeOpacity={0.75}
+              >
+                <Navigation size={12} color={Colors.textPrimary} />
+                <Text style={styles.mapHeaderPillText}>Tọa độ</Text>
+              </TouchableOpacity>
             </View>
-          </TouchableOpacity>
+          </View>
 
-          {/* Expandable Content */}
-          {isExpanded && (
-            <View style={styles.dashboardBody}>
-              {/* 6 Info Cards */}
-              <View style={styles.infoCardsGrid}>
-                <TouchableOpacity
-                  style={styles.infoCard}
-                  onPress={() => setShowLocationSheet(true)}
-                  activeOpacity={0.8}
-                >
-                  <Text style={styles.infoCardLabel}>VỊ TRÍ ROBOT</Text>
-                  <Text style={styles.infoCardValue} numberOfLines={1}>
-                    {activeFloor?.floorCode ? `${activeFloor.floorCode} · ${activeMap?.mapCode || 'Nav2'}` : 'F1 · Khu chờ'}
-                  </Text>
-                </TouchableOpacity>
-
-                <View style={styles.infoCard}>
-                  <Text style={styles.infoCardLabel}>KẾT NỐI</Text>
-                  <Text style={[styles.infoCardValue, { color: robotData?.status === 'OFFLINE' ? '#F59E0B' : '#10B981' }]}>
-                    {robotData?.status === 'OFFLINE' ? '🟡 Sẵn sàng' : '🟢 Ổn định'}
-                  </Text>
-                </View>
-
-                <TouchableOpacity
-                  style={styles.infoCard}
-                  onPress={() => setShowLocationSheet(true)}
-                  activeOpacity={0.8}
-                >
-                  <Text style={styles.infoCardLabel}>TỌA ĐỘ NAV2</Text>
-                  <Text style={[styles.infoCardValue, { color: Colors.primary }]} numberOfLines={1}>
-                    {robotPose
-                      ? `X: ${Number(robotPose.xM).toFixed(2)} | Y: ${Number(robotPose.yM).toFixed(2)}`
-                      : 'Chưa định vị'}
-                  </Text>
-                </TouchableOpacity>
-
-                <View style={styles.infoCard}>
-                  <Text style={styles.infoCardLabel}>BẢO MẬT</Text>
-                  <Text style={[styles.infoCardValue, { color: Colors.primary }]}>
-                    Xác nhận khuôn mặt
-                  </Text>
-                </View>
-
-                <View style={styles.infoCard}>
-                  <Text style={styles.infoCardLabel}>ĐIỂM ĐẾN</Text>
-                  <Text style={styles.infoCardValue}>P. Tim mạch</Text>
-                </View>
-
-                <TouchableOpacity
-                  style={styles.infoCard}
-                  onPress={() => setShowScheduleSheet(true)}
-                  activeOpacity={0.8}
-                >
-                  <Text style={styles.infoCardLabel}>LỊCH TRÌNH</Text>
-                  <Text style={[styles.infoCardValue, { color: Colors.tealDark }]}>
-                    {schedules.length > 0 ? `${schedules.length} đang chạy` : '3 định kỳ'}
-                  </Text>
+          {/* Map Viewer */}
+          <View style={styles.mapInnerContainer}>
+            {activeMap ? (
+              <BackendHospitalMap
+                map={activeMap}
+                metadata={mapImageMetadata}
+                endpoints={activeMapEndpoints}
+                zones={backendZones}
+                token={authToken}
+                selectedEndpointId={selectedEndpointId}
+                onSelectEndpoint={handleSelectBackendEndpoint}
+                robotPose={robotPose}
+                isPoseLive={isPoseLive}
+                plannedPath={robotSnapshot?.navigationPlan?.points || null}
+              />
+            ) : isLoadingFacility ? (
+              <View style={styles.backendMapState}>
+                <ActivityIndicator size="small" color={Colors.hero} />
+                <Text style={styles.backendMapStateText}>Đang lấy map từ Backend...</Text>
+              </View>
+            ) : (
+              <View style={styles.backendMapState}>
+                <Text style={styles.backendMapStateText}>
+                  {facilityError || 'Backend chưa có map khả dụng.'}
+                </Text>
+                <TouchableOpacity onPress={fetchFacilityData} style={styles.mapPickerChevron}>
+                  <RefreshCw size={15} color={Colors.hero} />
                 </TouchableOpacity>
               </View>
+            )}
+          </View>
 
-              {/* Action Buttons Row 1 */}
-              <View style={styles.actionRow}>
-                <TouchableOpacity
-                  style={styles.actionBtnLight}
-                  onPress={() => setShowQueueSheet(true)}
-                  activeOpacity={0.8}
-                >
-                  <FileText size={15} color={Colors.primary} />
-                  <Text style={styles.actionBtnLightText}>Hàng đợi</Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={styles.actionBtnTealSchedule}
-                  onPress={() => setShowScheduleSheet(true)}
-                  activeOpacity={0.8}
-                >
-                  <Calendar size={15} color={Colors.tealDark} />
-                  <Text style={styles.actionBtnTealText}>Lịch trình</Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={styles.actionBtnOrange}
-                  onPress={() => setShowConfirmModal(true)}
-                  activeOpacity={0.8}
-                >
-                  <Pause size={15} color="#D97706" />
-                  <Text style={styles.actionBtnOrangeText}>Tạm dừng</Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={styles.actionBtnRed}
-                  onPress={() => {
-                    Alert.alert(
-                      'Dừng khẩn cấp robot',
-                      'Bạn có chắc chắn muốn ngắt chuyển động toàn bộ robot ngay lập tức để đảm bảo an toàn?',
-                      [
-                        { text: 'Hủy', style: 'cancel' },
-                        {
-                          text: 'DỪNG NGAY ⚠️',
-                          style: 'destructive',
-                          onPress: () => {
-                            setRobotStatus('paused');
-                            Alert.alert('Đã kích hoạt', 'Robot đã dừng khẩn cấp và bật đèn cảnh báo.');
-                          },
-                        },
-                      ]
-                    );
-                  }}
-                  activeOpacity={0.8}
-                >
-                  <AlertTriangle size={15} color="#EF4444" />
-                  <Text style={styles.actionBtnRedText}>Dừng khẩn</Text>
-                </TouchableOpacity>
-              </View>
-
-              {/* Action Buttons Row 2 */}
-              <View style={styles.actionRow}>
-                <TouchableOpacity
-                  style={styles.manualControlBtn}
-                  onPress={() => setShowLocationSheet(true)}
-                  activeOpacity={0.8}
-                >
-                  <Navigation size={16} color={Colors.primary} />
-                  <Text style={styles.manualControlText}>Tọa độ & Vị trí</Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={styles.progressBtn}
-                  onPress={() => {
-                    const activeJob = jobs.find((job) => job.status === 'RUNNING') || jobs.find((job) => job.status === 'QUEUED');
-                    if (activeJob) {
-                      openTimeline(activeJob);
-                    } else {
-                      Alert.alert('Chưa có nhiệm vụ', 'Máy chủ hiện không có nhiệm vụ robot đang chạy hoặc chờ xử lý.');
-                    }
-                  }}
-                  activeOpacity={0.8}
-                >
-                  <Text style={styles.progressBtnText}>Tiến trình ➔</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          )}
+          <View style={styles.mapCardFooter}>
+            <Text style={styles.mapCardFooterText}>
+              Chạm vào phòng hoặc điểm đến trên sơ đồ để điều Robot AMR di chuyển.
+            </Text>
+          </View>
         </View>
       </ScrollView>
 
@@ -1660,6 +1599,161 @@ export const MapScreen: React.FC = () => {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
   mainScroll: { flex: 1 },
+  scrollContent: { paddingBottom: 110 },
+
+  // Hero Card Robot Đen (#202022)
+  heroCard: {
+    backgroundColor: Colors.hero,
+    borderRadius: 24,
+    padding: 20,
+    marginHorizontal: 16,
+    marginTop: 14,
+    marginBottom: 16,
+    ...Shadows.hero,
+  },
+  heroTopRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  heroStatusChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#2D2D31',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 999,
+  },
+  heroStatusDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+  },
+  heroChipText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#FFFFFF',
+    letterSpacing: 0.3,
+  },
+  heroBatteryBadge: {
+    backgroundColor: '#2D2D31',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 999,
+  },
+  heroBatteryText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#FFFFFF',
+  },
+  heroMainSection: {
+    marginVertical: 14,
+  },
+  heroSubLabel: {
+    fontSize: 12,
+    color: '#A1A1AA',
+    fontWeight: '500',
+  },
+  heroTitle: {
+    fontSize: 22,
+    fontWeight: '700',
+    color: '#FFFFFF',
+    marginTop: 4,
+    letterSpacing: -0.3,
+  },
+  heroMetaText: {
+    fontSize: 12,
+    color: '#A1A1AA',
+    marginTop: 6,
+  },
+  heroActionsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: 8,
+    paddingTop: 14,
+    borderTopWidth: 1,
+    borderTopColor: '#2D2D31',
+  },
+  heroActionCol: {
+    alignItems: 'center',
+    flex: 1,
+  },
+  heroActionBtn: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#2D2D31',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  heroActionLabel: {
+    fontSize: 11,
+    color: '#D4D4D8',
+    marginTop: 6,
+    fontWeight: '500',
+  },
+
+  // Map Card Trắng Bo Góc 20dp
+  mapCard: {
+    marginHorizontal: 16,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    marginBottom: 16,
+    ...Shadows.card,
+  },
+  mapCardHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 12,
+  },
+  mapCardTitle: {
+    fontSize: 17,
+    fontWeight: '700',
+    color: Colors.textPrimary,
+    letterSpacing: -0.2,
+  },
+  mapCardSubtitle: {
+    fontSize: 12,
+    color: Colors.textSecondary,
+    marginTop: 2,
+  },
+  mapHeaderPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: Colors.surfaceMuted,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  mapHeaderPillText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: Colors.textPrimary,
+  },
+  mapInnerContainer: {
+    borderRadius: 14,
+    overflow: 'hidden',
+    backgroundColor: '#0A0F1D',
+  },
+  mapCardFooter: {
+    marginTop: 10,
+    paddingTop: 8,
+  },
+  mapCardFooterText: {
+    fontSize: 11,
+    color: Colors.textMuted,
+    textAlign: 'center',
+    lineHeight: 16,
+  },
 
   // Header
   header: {
@@ -1967,35 +2061,35 @@ const styles = StyleSheet.create({
   // Modal / Bottom Sheet General
   modalBackdrop: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
+    backgroundColor: 'rgba(0, 0, 0, 0.45)',
     justifyContent: 'flex-end',
   },
   sheetContainer: {
-    backgroundColor: Colors.surface,
+    backgroundColor: '#FFFFFF',
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
-    padding: Spacing.md,
-    paddingBottom: 32,
-    ...Shadows.floating,
+    padding: Spacing.lg,
+    paddingBottom: 36,
+    ...Shadows.hero,
   },
   sheetHandle: {
-    width: 40,
+    width: 38,
     height: 4,
     borderRadius: 2,
-    backgroundColor: '#CBD5E1',
+    backgroundColor: '#D4D4D8',
     alignSelf: 'center',
     marginBottom: 16,
   },
   sheetCloseButton: {
-    height: 44,
-    borderRadius: 12,
-    borderWidth: 1.5,
-    borderColor: Colors.border,
+    height: 50,
+    borderRadius: 16,
+    backgroundColor: Colors.hero,
     alignItems: 'center',
     justifyContent: 'center',
     marginTop: Spacing.md,
+    ...Shadows.button,
   },
-  sheetCloseButtonText: { fontSize: 14, fontWeight: '600', color: Colors.primary },
+  sheetCloseButtonText: { fontSize: 15, fontWeight: '600', color: '#FFFFFF' },
 
   // Modal 1: Queue (Hình 4)
   queueSheetTitle: {
@@ -2797,16 +2891,6 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.2,
     shadowRadius: 8,
     elevation: 4,
-  },
-  mapCardHeaderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    backgroundColor: '#1E293B',
-    borderBottomWidth: 1,
-    borderBottomColor: '#334155',
   },
   mapStatusBadge: {
     flexDirection: 'row',

@@ -18,6 +18,7 @@ import {
   ArrowLeft,
   AlertOctagon,
   CheckCircle2,
+  Video,
 } from 'lucide-react-native';
 import { Colors, Spacing, BorderRadius, Shadows } from '../../constants/theme';
 import { incidentApi } from '../../api/modules/incident.api';
@@ -32,6 +33,7 @@ interface FallDetectionModalProps {
   visible: boolean;
   onClose: () => void;
   onAcknowledge?: () => void;
+  onStartCall?: () => void;
   alertItem?: AlertResponse | null;
   incidentId?: string;
   location?: string;
@@ -50,13 +52,13 @@ export const FallDetectionModal: React.FC<FallDetectionModalProps> = ({
   visible,
   onClose,
   onAcknowledge,
+  onStartCall,
   alertItem,
   incidentId,
   location = 'Chưa có vị trí từ Backend',
   robotName = 'Robot chưa xác định',
 }) => {
   const { user } = useAuthStore();
-  const [seconds, setSeconds] = useState(14);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [incidentStatus, setIncidentStatus] = useState<
     'OPEN' | 'IN_PROGRESS' | 'RESOLVED' | 'FALSE_ALARM'
@@ -70,7 +72,7 @@ export const FallDetectionModal: React.FC<FallDetectionModalProps> = ({
       ? `${(dataJson.confidence * 100).toFixed(1)}%`
       : typeof metrics?.confidence === 'number'
       ? `${(metrics.confidence * 100).toFixed(1)}%`
-      : '94.2%';
+      : null;
   const algorithmName = dataJson?.algorithm || metrics?.algorithm || 'lower_body_rules_v1';
   const detectionMode = metrics?.detection_mode || 'lower_body';
   const reasonCode = metrics?.reason || 'RAPID_SUPPORT_LOSS_AND_PERSISTENT_LEG_COLLAPSE';
@@ -90,22 +92,6 @@ export const FallDetectionModal: React.FC<FallDetectionModalProps> = ({
     }
   }, [visible, alertItem?.alertId, alertItem?.status]);
 
-  useEffect(() => {
-    let interval: any;
-    if (visible && incidentStatus === 'OPEN') {
-      interval = setInterval(() => {
-        setSeconds((prev) => prev + 1);
-      }, 1000);
-    }
-    return () => clearInterval(interval);
-  }, [visible, incidentStatus]);
-
-  const formatTimer = (sec: number) => {
-    const m = Math.floor(sec / 60).toString().padStart(2, '0');
-    const s = (sec % 60).toString().padStart(2, '0');
-    return `${m}:${s}`;
-  };
-
   const eventTimeStr = alertItem?.createdAt
     ? new Date(alertItem.createdAt).toLocaleTimeString('vi-VN', {
         hour: '2-digit',
@@ -118,7 +104,7 @@ export const FallDetectionModal: React.FC<FallDetectionModalProps> = ({
     {
       id: 1,
       icon: '📷',
-      title: `AI Vision (${algorithmName}) phát hiện nghi té ngã — độ tin cậy ${confidencePct}`,
+      title: `AI Vision (${algorithmName}) phát hiện nghi té ngã${confidencePct ? ` — độ tin cậy ${confidencePct}` : ' — đã xác thực bởi AI'}`,
       time: eventTimeStr,
       statusDot: '#EF4444',
     },
@@ -152,25 +138,23 @@ export const FallDetectionModal: React.FC<FallDetectionModalProps> = ({
     setIsSubmitting(true);
     try {
       if (alertItem?.alertId && alertItem.status === 'OPEN') {
-        await alertApi.acknowledgeAlert(alertItem.alertId).catch(() => null);
+        await alertApi.acknowledgeAlert(alertItem.alertId);
       }
       if (resolvedIncidentId) {
-        await incidentApi.acknowledgeIncident(resolvedIncidentId).catch(() => null);
-        await incidentApi.startIncident(resolvedIncidentId).catch(() => null);
+        await incidentApi.acknowledgeIncident(resolvedIncidentId);
+        await incidentApi.startIncident(resolvedIncidentId);
       }
       setIncidentStatus('IN_PROGRESS');
       if (onAcknowledge) onAcknowledge();
       Alert.alert(
         'Đã tiếp nhận cảnh báo',
-        'Đã xác nhận tiếp nhận cảnh báo té ngã và chuyển trạng thái sự cố sang Đang xử lý (IN_PROGRESS)!'
+        'Đã xác nhận tiếp nhận cảnh báo té ngã và chuyển trạng thái sự cố sang Đang xử lý!'
       );
     } catch (err: any) {
       console.log('Phản hồi server sự cố:', err);
-      setIncidentStatus('IN_PROGRESS');
-      if (onAcknowledge) onAcknowledge();
       Alert.alert(
-        'Đã tiếp nhận cảnh báo',
-        'Đã ghi nhận sự cố té ngã và phát lệnh hỗ trợ y tế khẩn cấp!'
+        'Không thể tiếp nhận',
+        err?.message || 'Không thể gửi phản hồi tiếp nhận lên máy chủ. Vui lòng thử lại.'
       );
     } finally {
       setIsSubmitting(false);
@@ -190,10 +174,8 @@ export const FallDetectionModal: React.FC<FallDetectionModalProps> = ({
       setIncidentStatus('FALSE_ALARM');
       if (onAcknowledge) onAcknowledge();
       Alert.alert('Báo động giả', 'Đã cập nhật trạng thái báo động giả lên hệ thống!');
-    } catch {
-      setIncidentStatus('FALSE_ALARM');
-      if (onAcknowledge) onAcknowledge();
-      Alert.alert('Báo động giả', 'Đã đóng cảnh báo do báo động giả.');
+    } catch (err: any) {
+      Alert.alert('Lỗi cập nhật', err?.message || 'Không thể cập nhật trạng thái báo động giả.');
     } finally {
       setIsSubmitting(false);
     }
@@ -207,18 +189,16 @@ export const FallDetectionModal: React.FC<FallDetectionModalProps> = ({
         await incidentApi.resolveIncident(
           resolvedIncidentId,
           'Đã sơ cứu kịp thời và đưa nạn nhân vào phòng y tế an toàn'
-        ).catch(() => null);
+        );
       }
       if (alertItem?.alertId) {
-        await alertApi.resolveAlert(alertItem.alertId).catch(() => null);
+        await alertApi.resolveAlert(alertItem.alertId);
       }
       setIncidentStatus('RESOLVED');
       if (onAcknowledge) onAcknowledge();
       Alert.alert('Hoàn tất giải quyết', 'Đã cập nhật báo cáo xử lý sự cố thành công!');
-    } catch {
-      setIncidentStatus('RESOLVED');
-      if (onAcknowledge) onAcknowledge();
-      Alert.alert('Hoàn tất', 'Sự cố đã được xử lý xong.');
+    } catch (err: any) {
+      Alert.alert('Lỗi giải quyết', err?.message || 'Không thể cập nhật báo cáo xử lý sự cố.');
     } finally {
       setIsSubmitting(false);
     }
@@ -267,8 +247,8 @@ export const FallDetectionModal: React.FC<FallDetectionModalProps> = ({
               <Text style={styles.urgentSub}>{displayLocation} · {displayRobot}</Text>
             </View>
             <View style={styles.urgentTimerBox}>
-              <Text style={styles.urgentTimerText}>{formatTimer(seconds)}</Text>
-              <Text style={styles.urgentTimerLabel}>THỜI GIAN</Text>
+              <Text style={styles.urgentTimerText}>{eventTimeStr}</Text>
+              <Text style={styles.urgentTimerLabel}>PHÁT HIỆN</Text>
             </View>
           </View>
 
@@ -290,7 +270,7 @@ export const FallDetectionModal: React.FC<FallDetectionModalProps> = ({
             <View style={styles.videoBox}>
               <View style={styles.boundingBox}>
                 <View style={styles.boundingTag}>
-                  <Text style={styles.boundingTagText}>TÉ NGÃ · {confidencePct}</Text>
+                  <Text style={styles.boundingTagText}>TÉ NGÃ{confidencePct ? ` · ${confidencePct}` : ' · AI VISION'}</Text>
                 </View>
 
                 <View style={styles.fallenPersonSilhouette}>
@@ -325,11 +305,26 @@ export const FallDetectionModal: React.FC<FallDetectionModalProps> = ({
 
           {/* ===== BỘ NÚT ĐIỀU HÀNH XỬ LÝ SỰ CỐ TAI NẠN ===== */}
           <View style={styles.actionButtonGroup}>
+            {/* Nút Gọi trực tiếp Robot (Camera LiveKit + Đàm thoại 2 chiều) */}
+            <TouchableOpacity
+              style={styles.directCallBtn}
+              onPress={() => {
+                onClose();
+                onStartCall?.();
+              }}
+              activeOpacity={0.85}
+            >
+              <Video size={18} color="#FFFFFF" />
+              <Text style={styles.directCallBtnText}>
+                📹 Gọi trực tiếp Robot (Camera LiveKit + Mic/Loa)
+              </Text>
+            </TouchableOpacity>
+
             <TouchableOpacity
               style={[
                 styles.acknowledgeBtn,
                 incidentStatus === 'IN_PROGRESS' && styles.acknowledgeBtnDone,
-                incidentStatus === 'RESOLVED' && { backgroundColor: '#059669' },
+                incidentStatus === 'RESOLVED' && { backgroundColor: '#166534' },
                 incidentStatus === 'FALSE_ALARM' && { backgroundColor: '#64748B' },
               ]}
               onPress={handleAcknowledge}
@@ -369,7 +364,7 @@ export const FallDetectionModal: React.FC<FallDetectionModalProps> = ({
                   disabled={isSubmitting}
                   activeOpacity={0.8}
                 >
-                  <AlertOctagon size={16} color="#DC2626" />
+                  <AlertOctagon size={16} color={Colors.danger} />
                   <Text style={styles.falseAlarmBtnText}>Báo động giả</Text>
                 </TouchableOpacity>
 
@@ -387,7 +382,7 @@ export const FallDetectionModal: React.FC<FallDetectionModalProps> = ({
           </View>
 
           {/* ===== EVENT TIMELINE (CHÙM SỰ KIỆN) ===== */}
-          <Text style={styles.sectionTitle}>DỮ LIỆU TEXT & METRICS TỪ BACKEND</Text>
+          <Text style={styles.sectionTitle}>DỮ LIỆU TỪ MÁY CHỦ</Text>
           <View style={styles.eventsList}>
             {eventsList.map((event) => (
               <View key={event.id} style={styles.eventItem}>
@@ -409,8 +404,8 @@ export const FallDetectionModal: React.FC<FallDetectionModalProps> = ({
             onPress={onClose}
             activeOpacity={0.8}
           >
-            <ArrowLeft size={16} color={Colors.primary} />
-            <Text style={styles.exitBottomBtnText}>Thoát ra xem các giao diện khác</Text>
+            <ArrowLeft size={16} color={Colors.textPrimary} />
+            <Text style={styles.exitBottomBtnText}>Đóng & Quay lại màn hình chính</Text>
           </TouchableOpacity>
         </ScrollView>
       </View>
@@ -421,7 +416,7 @@ export const FallDetectionModal: React.FC<FallDetectionModalProps> = ({
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#F8FAFC',
+    backgroundColor: Colors.background,
     paddingTop: 50,
   },
   header: {
@@ -432,57 +427,60 @@ const styles = StyleSheet.create({
     paddingBottom: Spacing.sm,
     backgroundColor: '#FFFFFF',
     borderBottomWidth: 1,
-    borderBottomColor: '#E2E8F0',
+    borderBottomColor: Colors.border,
   },
   backBtnHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    backgroundColor: '#F0F9FF',
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 8,
+    backgroundColor: Colors.surfaceMuted,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 12,
     borderWidth: 1,
-    borderColor: '#BAE6FD',
+    borderColor: Colors.border,
   },
   backBtnHeaderText: {
     fontSize: 12,
     fontWeight: '700',
-    color: Colors.primary,
+    color: Colors.textPrimary,
   },
   headerCenter: {
     alignItems: 'center',
   },
-  brandText: { fontSize: 8, fontWeight: '700', color: '#64748B', letterSpacing: 0.5 },
-  staffName: { fontSize: 13, fontWeight: '700', color: '#0A2540' },
+  brandText: { fontSize: 9, fontWeight: '700', color: Colors.textMuted, letterSpacing: 0.6 },
+  staffName: { fontSize: 14, fontWeight: '700', color: Colors.textPrimary },
   closeBtn: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: '#F1F5F9',
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: Colors.surfaceMuted,
     alignItems: 'center',
     justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: Colors.border,
   },
   scrollBody: {
     padding: Spacing.md,
-    paddingBottom: 40,
+    paddingBottom: 50,
   },
   urgentBanner: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#991B1B',
-    borderRadius: 16,
-    padding: 14,
+    backgroundColor: Colors.danger,
+    borderRadius: 20,
+    padding: 16,
     marginBottom: Spacing.md,
+    ...Shadows.hero,
   },
   urgentIconBox: {
     width: 44,
     height: 44,
-    borderRadius: 12,
-    backgroundColor: 'rgba(255,255,255,0.15)',
+    borderRadius: 14,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
     alignItems: 'center',
     justifyContent: 'center',
-    marginRight: 10,
+    marginRight: 12,
   },
   urgentTextBox: {
     flex: 1,
@@ -490,10 +488,10 @@ const styles = StyleSheet.create({
   drillTag: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(255,255,255,0.2)',
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 4,
+    backgroundColor: 'rgba(255, 255, 255, 0.22)',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
     alignSelf: 'flex-start',
     marginBottom: 4,
     gap: 4,
@@ -507,29 +505,30 @@ const styles = StyleSheet.create({
   drillTagText: {
     fontSize: 9,
     fontWeight: '800',
-    color: '#FEF08A',
+    color: '#FFFFFF',
     letterSpacing: 0.5,
   },
   urgentTitle: {
-    fontSize: 15,
+    fontSize: 16,
     fontWeight: '800',
     color: '#FFFFFF',
     marginBottom: 2,
+    letterSpacing: -0.2,
   },
   urgentSub: {
-    fontSize: 11,
-    color: '#FECACA',
+    fontSize: 12,
+    color: '#FEE2E2',
     fontWeight: '500',
   },
   urgentTimerBox: {
     alignItems: 'center',
-    backgroundColor: 'rgba(0,0,0,0.2)',
-    paddingHorizontal: 8,
-    paddingVertical: 6,
-    borderRadius: 8,
+    backgroundColor: 'rgba(0, 0, 0, 0.25)',
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 12,
   },
   urgentTimerText: {
-    fontSize: 16,
+    fontSize: 13,
     fontWeight: '800',
     color: '#FFFFFF',
   },
@@ -538,10 +537,11 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#FECACA',
     letterSpacing: 0.5,
+    marginTop: 2,
   },
   aiCard: {
     backgroundColor: '#FFFFFF',
-    borderRadius: BorderRadius.lg,
+    borderRadius: 20,
     overflow: 'hidden',
     borderWidth: 1,
     borderColor: Colors.border,
@@ -552,9 +552,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingHorizontal: Spacing.sm + 4,
-    paddingVertical: Spacing.xs + 2,
-    backgroundColor: '#F8FAFC',
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm,
+    backgroundColor: Colors.surfaceMuted,
     borderBottomWidth: 1,
     borderBottomColor: Colors.border,
   },
@@ -564,13 +564,13 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   redDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: '#EF4444',
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+    backgroundColor: Colors.danger,
   },
   aiHeaderText: {
-    fontSize: 10,
+    fontSize: 11,
     fontWeight: '700',
     color: Colors.textSecondary,
     letterSpacing: 0.5,
@@ -584,16 +584,16 @@ const styles = StyleSheet.create({
     width: 6,
     height: 6,
     borderRadius: 3,
-    backgroundColor: '#10B981',
+    backgroundColor: '#24A148',
   },
   aiStatusText: {
-    fontSize: 10,
+    fontSize: 11,
     fontWeight: '600',
-    color: '#10B981',
+    color: '#166534',
   },
   videoBox: {
     height: VIDEO_H,
-    backgroundColor: '#0F172A',
+    backgroundColor: '#0A0F1D',
     justifyContent: 'center',
     alignItems: 'center',
     position: 'relative',
@@ -602,8 +602,8 @@ const styles = StyleSheet.create({
     width: VIDEO_H * 0.75,
     height: VIDEO_H * 0.58,
     borderWidth: 2,
-    borderColor: '#EF4444',
-    borderRadius: 8,
+    borderColor: Colors.danger,
+    borderRadius: 10,
     position: 'relative',
     justifyContent: 'center',
     alignItems: 'center',
@@ -612,10 +612,10 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: -12,
     left: 8,
-    backgroundColor: '#EF4444',
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 4,
+    backgroundColor: Colors.danger,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
   },
   boundingTagText: {
     fontSize: 9,
@@ -633,7 +633,7 @@ const styles = StyleSheet.create({
     borderRadius: 11,
     backgroundColor: 'rgba(239, 68, 68, 0.4)',
     borderWidth: 1.5,
-    borderColor: '#EF4444',
+    borderColor: Colors.danger,
   },
   bodySilhouette: {
     width: 58,
@@ -641,65 +641,80 @@ const styles = StyleSheet.create({
     borderRadius: 6,
     backgroundColor: 'rgba(239, 68, 68, 0.4)',
     borderWidth: 1.5,
-    borderColor: '#EF4444',
+    borderColor: Colors.danger,
   },
   recTag: {
     position: 'absolute',
     bottom: 8,
     left: 10,
     backgroundColor: 'rgba(0,0,0,0.6)',
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
   },
   recText: {
     fontSize: 9,
     fontWeight: '700',
-    color: '#EF4444',
+    color: Colors.danger,
   },
   metricsRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-around',
-    paddingVertical: Spacing.sm,
+    paddingVertical: Spacing.md,
     backgroundColor: '#FFFFFF',
   },
   metricCol: {
     alignItems: 'center',
   },
   metricLabel: {
-    fontSize: 8,
+    fontSize: 9,
     fontWeight: '700',
     color: Colors.textMuted,
     letterSpacing: 0.5,
     marginBottom: 2,
   },
   metricVal: {
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: '700',
     color: Colors.textPrimary,
   },
   metricDivider: {
     width: 1,
-    height: 18,
+    height: 20,
     backgroundColor: Colors.border,
   },
   actionButtonGroup: {
     marginBottom: Spacing.md,
-    gap: 8,
+    gap: 10,
   },
   acknowledgeBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#EF4444',
-    borderRadius: BorderRadius.md,
-    height: 48,
+    backgroundColor: Colors.danger,
+    borderRadius: 16,
+    height: 52,
     gap: Spacing.xs + 2,
-    ...Shadows.card,
+    ...Shadows.button,
   },
   acknowledgeBtnDone: {
-    backgroundColor: '#0284C7',
+    backgroundColor: Colors.hero,
+  },
+  directCallBtn: {
+    height: 52,
+    borderRadius: 16,
+    backgroundColor: Colors.hero,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    ...Shadows.button,
+  },
+  directCallBtnText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#FFFFFF',
   },
   acknowledgeBtnText: {
     fontSize: 14,
@@ -716,26 +731,26 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#FEF2F2',
-    borderWidth: 1.5,
+    backgroundColor: Colors.dangerSurface,
+    borderWidth: 1,
     borderColor: '#FECACA',
-    borderRadius: BorderRadius.md,
-    height: 44,
+    borderRadius: 14,
+    height: 48,
     gap: 6,
   },
   falseAlarmBtnText: {
     fontSize: 13,
     fontWeight: '700',
-    color: '#DC2626',
+    color: Colors.danger,
   },
   resolveBtn: {
     flex: 1.5,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#059669',
-    borderRadius: BorderRadius.md,
-    height: 44,
+    backgroundColor: '#166534',
+    borderRadius: 14,
+    height: 48,
     gap: 6,
   },
   resolveBtnText: {
@@ -744,72 +759,74 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
   },
   sectionTitle: {
-    fontSize: 10,
+    fontSize: 11,
     fontWeight: '700',
     color: Colors.textSecondary,
-    letterSpacing: 0.6,
+    letterSpacing: 0.5,
     marginBottom: Spacing.xs + 2,
     marginTop: Spacing.xs,
   },
   eventsList: {
     backgroundColor: '#FFFFFF',
-    borderRadius: BorderRadius.lg,
-    padding: Spacing.sm,
+    borderRadius: 20,
+    padding: Spacing.md,
     borderWidth: 1,
     borderColor: Colors.border,
     marginBottom: Spacing.lg,
-    gap: 8,
+    gap: 10,
+    ...Shadows.card,
   },
   eventItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 6,
+    paddingVertical: 8,
     borderBottomWidth: 1,
-    borderBottomColor: '#F1F5F9',
+    borderBottomColor: Colors.border,
   },
   eventIconCircle: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: '#F8FAFC',
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: Colors.surfaceMuted,
     alignItems: 'center',
     justifyContent: 'center',
-    marginRight: 10,
+    marginRight: 12,
   },
   eventTextBox: {
     flex: 1,
   },
   eventTitle: {
-    fontSize: 12,
+    fontSize: 13,
     fontWeight: '600',
     color: Colors.textPrimary,
+    lineHeight: 18,
   },
   eventTime: {
-    fontSize: 10,
+    fontSize: 11,
     color: Colors.textMuted,
-    marginTop: 1,
+    marginTop: 2,
   },
   eventDot: {
-    width: 7,
-    height: 7,
-    borderRadius: 3.5,
+    width: 8,
+    height: 8,
+    borderRadius: 4,
     marginLeft: 6,
   },
   exitBottomBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#F0F9FF',
-    borderRadius: BorderRadius.md,
-    height: 44,
+    backgroundColor: Colors.surfaceMuted,
+    borderRadius: 16,
+    height: 48,
     gap: 6,
     borderWidth: 1,
-    borderColor: '#BAE6FD',
+    borderColor: Colors.border,
     marginBottom: Spacing.xl,
   },
   exitBottomBtnText: {
     fontSize: 13,
-    fontWeight: '700',
-    color: Colors.primary,
+    fontWeight: '600',
+    color: Colors.textPrimary,
   },
 });

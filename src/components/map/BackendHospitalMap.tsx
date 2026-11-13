@@ -21,6 +21,7 @@ import Svg, {
 import { Layers, Lock } from 'lucide-react-native';
 import { API_CONFIG } from '../../api/config';
 import { EndpointResponse, MapResponse, ZoneDto } from '../../api/types';
+import { normalizeRobotPose } from './robotPose';
 import {
   analyzeSlamMapGeometry,
   decodePngGrayscale,
@@ -214,17 +215,9 @@ export const BackendHospitalMap: React.FC<BackendHospitalMapProps> = ({
   }, [plannedPath]);
 
   const validRobotPose = useMemo(() => {
-    if (!robotPose) return null;
-    const xM = Number(robotPose.xM);
-    const yM = Number(robotPose.yM);
-    if (!Number.isFinite(xM) || !Number.isFinite(yM)) return null;
-    if (robotPose.mapId && robotPose.mapId !== map.mapId) return null;
-    return {
-      ...robotPose,
-      xM,
-      yM,
-      yawRad: Number(robotPose.yawRad) || 0,
-    };
+    const pose = normalizeRobotPose(robotPose);
+    if (!pose || (pose.mapId && pose.mapId !== map.mapId)) return null;
+    return pose;
   }, [map.mapId, robotPose]);
 
   const geometry = useMemo(() => {

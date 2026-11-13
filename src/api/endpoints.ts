@@ -18,6 +18,8 @@ export const ENDPOINTS = {
     ME: '/staff/me',
     SHIFTS: '/staff/shifts',
     SHIFT_DETAIL: (shiftId: string) => `/staff/shifts/${shiftId}`,
+    SHIFT_CHECK_IN: (shiftId: string) => `/staff/shifts/${shiftId}/check-in`,
+    SHIFT_CHECK_OUT: (shiftId: string) => `/staff/shifts/${shiftId}/check-out`,
     ON_DUTY: '/staff/on-duty',
   },
 

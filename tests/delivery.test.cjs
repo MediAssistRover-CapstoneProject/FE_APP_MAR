@@ -11,6 +11,7 @@ function load(name, imports = {}) {
   return module.exports;
 }
 const h = load('deliveryHandoff');
+const cancellation = load('deliveryCancellation');
 const { robotDeliveryProof } = load('robotDeliveryProof', { './deliveryHandoff': h });
 const jobId = '11111111-1111-4111-8111-111111111111', stepId = '22222222-2222-4222-8222-222222222222';
 const actor = '33333333-3333-4333-8333-333333333333', other = '44444444-4444-4444-8444-444444444444';
@@ -93,4 +94,72 @@ test('pending operation survives remount in its own server/account namespace', a
   assert.deepEqual(await s.loadDeliveryAttempt('server:sender'),attempt);
   assert.equal(await s.loadDeliveryAttempt('server:receiver'),null);
   await s.saveDeliveryAttempt('server:sender',null); assert.equal(await s.loadDeliveryAttempt('server:sender'),null);
+});
+
+const cancelSnapshot = () => ({ job: job(), delivery: {
+  request: { serviceRequestId: requestId, requestType: 'DELIVERY', status: 'IN_PROGRESS', requestedByAccountId: other },
+  expectedSenderAccountId: actor, expectedReceiverAccountId: requestId,
+} });
+test('cancellation is offered to creator or sender, not a receiver or unrelated account', () => {
+  assert.equal(cancellation.canCancelDelivery(cancelSnapshot(), actor), true);
+  assert.equal(cancellation.canCancelDelivery(cancelSnapshot(), other), true);
+  assert.equal(cancellation.canCancelDelivery(cancelSnapshot(), requestId), false);
+  const wrong = cancelSnapshot(); wrong.delivery.request.serviceRequestId = other;
+  assert.equal(cancellation.canCancelDelivery(wrong, actor), false);
+  for (const status of ['CANCELLED', 'SUCCEEDED', 'FAILED', 'RECOVERY_REQUIRED']) {
+    const snapshot = cancelSnapshot(); snapshot.job.status = status;
+    assert.equal(cancellation.canCancelDelivery(snapshot, actor), false);
+  }
+});
+test('cancellation validates reason and submits the selected job ID with trimmed reason', async () => {
+  assert.throws(() => cancellation.cancellationReason('   '));
+  assert.throws(() => cancellation.cancellationReason('x'.repeat(1001)));
+  const calls = [];
+  const result = await cancellation.requestDeliveryCancellation({ jobId, accountId: actor, reason: '  Gửi nhầm hàng  ',
+    stillCurrent: () => true, loadLatest: async () => cancelSnapshot(),
+    cancelJob: async (id, reason) => { calls.push([id, reason]); return { ...job(), cancelRequestedAt: 'now' }; },
+  });
+  assert.deepEqual(calls, [[jobId, 'Gửi nhầm hàng']]);
+  assert.equal(result.status, 'RUNNING'); // acceptance is not physical stop
+  assert.match(cancellation.cancellationMessage({ ...cancelSnapshot(), job: result }), /chưa xác nhận robot đã dừng/);
+});
+test('fresh ownership or terminal state wins over stale screen before cancellation', async () => {
+  let sent = 0;
+  for (const latest of [
+    { ...cancelSnapshot(), job: { ...job(), status: 'SUCCEEDED' } },
+    { ...cancelSnapshot(), delivery: { ...cancelSnapshot().delivery, expectedSenderAccountId: other } },
+  ]) {
+    await assert.rejects(cancellation.requestDeliveryCancellation({ jobId, accountId: actor, reason: 'Hủy',
+      stillCurrent: () => true, loadLatest: async () => latest, cancelJob: async () => { sent++; return job(); },
+    }));
+  }
+  assert.equal(sent, 0);
+});
+test('pending cancellation is reconciled without sending a duplicate POST', async () => {
+  let sent = 0;
+  const latest = cancelSnapshot(); latest.job.cancelRequestedAt = '2026-11-11T01:00:00Z';
+  const result = await cancellation.requestDeliveryCancellation({ jobId, accountId: actor, reason: 'Thử lại',
+    stillCurrent: () => true, loadLatest: async () => latest, cancelJob: async () => { sent++; return job(); },
+  });
+  assert.equal(sent, 0); assert.equal(result.cancelRequestedAt, latest.job.cancelRequestedAt);
+});
+test('changing account during cancellation refresh prevents POST', async () => {
+  let current = true, sent = 0;
+  await assert.rejects(cancellation.requestDeliveryCancellation({ jobId, accountId: actor, reason: 'Hủy',
+    stillCurrent: () => current, loadLatest: async () => { current = false; return cancelSnapshot(); },
+    cancelJob: async () => { sent++; return job(); },
+  }));
+  assert.equal(sent, 0);
+});
+test('transport error remains an unknown result; retry reads pending intent before POST', async () => {
+  let sent = 0;
+  const latest = cancelSnapshot();
+  const options = { jobId, accountId: actor, reason: 'Hủy', stillCurrent: () => true, loadLatest: async () => latest,
+    cancelJob: async () => { sent++; latest.job.cancelRequestedAt = 'now'; throw Error('response lost'); },
+  };
+  await assert.rejects(cancellation.requestDeliveryCancellation(options), /response lost/);
+  await cancellation.requestDeliveryCancellation(options);
+  assert.equal(sent, 1);
+  latest.job.status = 'RECOVERY_REQUIRED';
+  assert.match(cancellation.cancellationMessage(latest), /Chưa xác nhận robot đã dừng an toàn/);
 });

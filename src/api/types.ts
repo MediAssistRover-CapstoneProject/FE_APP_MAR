@@ -475,6 +475,8 @@ export interface ShiftResponse {
   startsAt: string;
   endsAt: string;
   status: 'PLANNED' | 'ACTIVE' | 'COMPLETED' | 'CANCELLED';
+  checkedInAt?: string | null;
+  checkedOutAt?: string | null;
   note?: string | null;
   slots?: SlotResponse[];
   createdAt: string;

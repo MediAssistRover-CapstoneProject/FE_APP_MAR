@@ -49,6 +49,22 @@ export const staffApi = {
   },
 
   /**
+   * 5. Check-in ca trực
+   * Endpoint: POST /api/v1/staff/shifts/{shiftId}/check-in
+   */
+  async checkIn(shiftId: string): Promise<ShiftResponse> {
+    return apiClient.post<ShiftResponse>(ENDPOINTS.STAFF.SHIFT_CHECK_IN(shiftId), {});
+  },
+
+  /**
+   * 6. Check-out ca trực
+   * Endpoint: POST /api/v1/staff/shifts/{shiftId}/check-out
+   */
+  async checkOut(shiftId: string): Promise<ShiftResponse> {
+    return apiClient.post<ShiftResponse>(ENDPOINTS.STAFF.SHIFT_CHECK_OUT(shiftId), {});
+  },
+
+  /**
    * 4. Lấy danh sách nhân viên đang trực (on-duty)
    * Endpoint: GET /api/v1/staff/on-duty
    */

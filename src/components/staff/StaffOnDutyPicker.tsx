@@ -25,28 +25,40 @@ import {
 
 interface StaffOnDutyPickerProps {
   mapId?: string;
+  roomId?: string;
+  roomName?: string;
   selectedStaff: OnDutyStaffResponse | null;
   onSelect: (staff: OnDutyStaffResponse) => void;
   onClear?: () => void;
+  disabled?: boolean;
 }
 
 export const StaffOnDutyPicker: React.FC<StaffOnDutyPickerProps> = ({
   mapId,
+  roomId,
+  roomName,
   selectedStaff,
   onSelect,
   onClear,
+  disabled = false,
 }) => {
   const [showModal, setShowModal] = useState(false);
   const [staffList, setStaffList] = useState<OnDutyStaffResponse[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
   const [searchText, setSearchText] = useState('');
+  const [filterByRoom, setFilterByRoom] = useState(true);
+
+  useEffect(() => {
+    setFilterByRoom(true);
+  }, [roomId]);
 
   const loadStaff = useCallback(async () => {
     setIsLoading(true);
     setError('');
     try {
-      const res = await staffApi.getOnDutyStaff({ mapId, page: 0, size: 100 });
+      const activeRoomFilter = filterByRoom ? roomId : undefined;
+      const res = await staffApi.getOnDutyStaff({ mapId, roomId: activeRoomFilter, page: 0, size: 100 });
       setStaffList(res.content || []);
     } catch (err: any) {
       setError(err?.message || 'Không tải được danh sách nhân viên trực.');
@@ -54,7 +66,7 @@ export const StaffOnDutyPicker: React.FC<StaffOnDutyPickerProps> = ({
     } finally {
       setIsLoading(false);
     }
-  }, [mapId]);
+  }, [mapId, roomId, filterByRoom]);
 
   useEffect(() => {
     if (showModal) {
@@ -116,9 +128,17 @@ export const StaffOnDutyPicker: React.FC<StaffOnDutyPickerProps> = ({
           )}
         </View>
       ) : (
-        <TouchableOpacity style={styles.selectTrigger} onPress={() => setShowModal(true)}>
-          <User size={18} color={Colors.primary} />
-          <Text style={[styles.flex, styles.triggerText]}>Chọn nhân viên đang trực</Text>
+        <TouchableOpacity
+          style={[styles.selectTrigger, disabled && { opacity: 0.55 }]}
+          onPress={() => { if (!disabled) setShowModal(true); }}
+          disabled={disabled}
+        >
+          <User size={18} color={disabled ? Colors.textMuted : Colors.primary} />
+          <Text style={[styles.flex, styles.triggerText]}>
+            {roomId
+              ? `Chọn nhân viên trực tại ${roomName || 'phòng đã chọn'}`
+              : 'Chọn nhân viên đang trực'}
+          </Text>
           <ChevronDown size={18} color={Colors.textSecondary} />
         </TouchableOpacity>
       )}
@@ -134,7 +154,11 @@ export const StaffOnDutyPicker: React.FC<StaffOnDutyPickerProps> = ({
           <View style={styles.modal}>
             {/* Header */}
             <View style={styles.modalHeader}>
-              <Text style={[styles.heading, styles.flex]}>Nhân viên đang trực</Text>
+              <Text style={[styles.heading, styles.flex]}>
+                {roomId && filterByRoom
+                  ? `Nhân viên trực · ${roomName || 'Phòng'}`
+                  : 'Nhân viên đang trực'}
+              </Text>
               <TouchableOpacity
                 onPress={loadStaff}
                 disabled={isLoading}
@@ -153,6 +177,19 @@ export const StaffOnDutyPicker: React.FC<StaffOnDutyPickerProps> = ({
                 <X size={22} color={Colors.textSecondary} />
               </TouchableOpacity>
             </View>
+
+            {roomId && (
+              <View style={styles.filterBar}>
+                <Text style={styles.filterBarText}>
+                  {filterByRoom ? `Đang lọc: ${roomName || 'Phòng đã chọn'}` : 'Đang xem tất cả phòng'}
+                </Text>
+                <TouchableOpacity onPress={() => setFilterByRoom(!filterByRoom)}>
+                  <Text style={styles.filterBarToggle}>
+                    {filterByRoom ? 'Xem tất cả phòng' : `Chỉ xem ${roomName || 'phòng'}`}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            )}
 
             {/* Search */}
             <View style={styles.searchBox}>
@@ -177,6 +214,8 @@ export const StaffOnDutyPicker: React.FC<StaffOnDutyPickerProps> = ({
                     ? 'Đang tải...'
                     : searchText.trim()
                     ? 'Không tìm thấy nhân viên phù hợp.'
+                    : roomId && filterByRoom
+                    ? 'Phòng này chưa có nhân viên đang trực.'
                     : 'Không có nhân viên nào đang trực.'}
                 </Text>
               ) : (
@@ -225,7 +264,7 @@ export const StaffOnDutyPicker: React.FC<StaffOnDutyPickerProps> = ({
             </ScrollView>
 
             <Text style={styles.footerText}>
-              {filtered.length} nhân viên{mapId ? ' trên bản đồ hiện tại' : ''}
+              {filtered.length} nhân viên{roomId && filterByRoom ? ` tại ${roomName || 'phòng này'}` : mapId ? ' trên bản đồ hiện tại' : ''}
             </Text>
           </View>
         </View>
@@ -236,6 +275,31 @@ export const StaffOnDutyPicker: React.FC<StaffOnDutyPickerProps> = ({
 
 const styles = StyleSheet.create({
   flex: { flex: 1 },
+  filterBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    backgroundColor: '#F0FDF4',
+    borderWidth: 1,
+    borderColor: '#BBF7D0',
+    borderRadius: 8,
+    marginHorizontal: 16,
+    marginBottom: 6,
+  },
+  filterBarText: {
+    fontSize: 12,
+    color: '#065F46',
+    fontWeight: '600',
+    flex: 1,
+  },
+  filterBarToggle: {
+    fontSize: 11,
+    color: '#0284C7',
+    fontWeight: '700',
+    paddingLeft: 8,
+  },
   // Trigger button
   selectTrigger: {
     flexDirection: 'row',

@@ -24,6 +24,7 @@ export interface DeliveryCreateRequest {
   deliveryGroupId?: string;
   expectedSenderAccountId?: string;
   expectedReceiverAccountId?: string;
+  receiverShiftId?: string;
   targetMode: 'ENDPOINT' | 'ENDPOINT_GROUP';
   recipientName: string;
   recipientContact?: string;

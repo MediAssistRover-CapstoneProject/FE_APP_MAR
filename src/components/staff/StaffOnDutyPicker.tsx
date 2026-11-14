@@ -1,3 +1,11 @@
+/**
+ * StaffOnDutyPicker.tsx
+ * Bộ chọn nhân viên đang trực cho việc giao nhận y tế:
+ * - Giao diện mobile chuẩn: Card người nhận đã chọn gọn gàng, nút Đổi/Bỏ chọn touch target >= 44dp.
+ * - Danh sách mở dưới dạng MobileBottomSheet thích nghi màn hình.
+ * - Tôn trọng prop disabled ở mọi nhánh (trigger, Đổi, Bỏ chọn, chọn trong sheet).
+ * - Không hiển thị UUID trực tiếp làm subtitle chính.
+ */
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
@@ -5,11 +13,10 @@ import {
   StyleSheet,
   TouchableOpacity,
   ActivityIndicator,
-  Modal,
   ScrollView,
   TextInput,
 } from 'react-native';
-import { Colors } from '../../constants/theme';
+import { Colors, BorderRadius, Shadows } from '../../constants/theme';
 import { staffApi } from '../../api/modules/staff.api';
 import { OnDutyStaffResponse } from '../../api/types';
 import {
@@ -21,7 +28,9 @@ import {
   ChevronDown,
   Clock,
   MapPin,
+  Check,
 } from 'lucide-react-native';
+import { MobileBottomSheet } from '../common/MobileBottomSheet';
 
 interface StaffOnDutyPickerProps {
   mapId?: string;
@@ -58,7 +67,12 @@ export const StaffOnDutyPicker: React.FC<StaffOnDutyPickerProps> = ({
     setError('');
     try {
       const activeRoomFilter = filterByRoom ? roomId : undefined;
-      const res = await staffApi.getOnDutyStaff({ mapId, roomId: activeRoomFilter, page: 0, size: 100 });
+      const res = await staffApi.getOnDutyStaff({
+        mapId,
+        roomId: activeRoomFilter,
+        page: 0,
+        size: 100,
+      });
       setStaffList(res.content || []);
     } catch (err: any) {
       setError(err?.message || 'Không tải được danh sách nhân viên trực.');
@@ -88,53 +102,78 @@ export const StaffOnDutyPicker: React.FC<StaffOnDutyPickerProps> = ({
         (s) =>
           s.fullName.toLowerCase().includes(searchText.toLowerCase()) ||
           (s.roomName || '').toLowerCase().includes(searchText.toLowerCase()) ||
-          (s.roomCode || '').toLowerCase().includes(searchText.toLowerCase()),
+          (s.roomCode || '').toLowerCase().includes(searchText.toLowerCase())
       )
     : staffList;
 
   return (
     <>
-      {/* Selected staff display or trigger button */}
+      {/* Hiển thị nhân viên đã chọn hoặc nút bấm mở danh sách */}
       {selectedStaff ? (
-        <View style={styles.selectedBox}>
+        <View style={[styles.selectedBox, disabled && styles.boxDisabled]}>
           <View style={styles.selectedInfo}>
             <View style={styles.avatar}>
-              <User size={18} color="#fff" />
+              <User size={20} color="#FFFFFF" />
             </View>
             <View style={styles.flex}>
               <Text style={styles.selectedName}>{selectedStaff.fullName}</Text>
               <Text style={styles.selectedDetail}>
-                {selectedStaff.roomName || selectedStaff.roomCode || 'Không rõ phòng'}
+                {selectedStaff.roomName || selectedStaff.roomCode || 'Phòng trực'}
                 {' · '}
                 {formatTime(selectedStaff.startsAt)} – {formatTime(selectedStaff.endsAt)}
               </Text>
-              <Text style={styles.selectedId} selectable>
-                {selectedStaff.accountId}
-              </Text>
             </View>
             <TouchableOpacity
-              style={styles.changeBtn}
-              onPress={() => setShowModal(true)}
+              style={[styles.changeBtn, disabled && styles.btnDisabled]}
+              onPress={() => {
+                if (!disabled) setShowModal(true);
+              }}
+              disabled={disabled}
+              accessibilityLabel="Đổi người nhận"
+              accessibilityRole="button"
+              activeOpacity={0.8}
             >
-              <RefreshCw size={14} color={Colors.primary} />
-              <Text style={styles.changeText}>Đổi</Text>
+              <RefreshCw size={14} color={disabled ? '#A1A1AA' : Colors.hero} />
+              <Text style={[styles.changeText, disabled && { color: '#A1A1AA' }]}>Đổi</Text>
             </TouchableOpacity>
           </View>
           {onClear && (
-            <TouchableOpacity onPress={onClear} style={styles.clearBtn}>
-              <X size={14} color={Colors.textSecondary} />
-              <Text style={styles.clearText}>Xóa chọn · nhập thủ công</Text>
+            <TouchableOpacity
+              onPress={() => {
+                if (!disabled) onClear();
+              }}
+              disabled={disabled}
+              style={[styles.clearBtn, disabled && styles.btnDisabled]}
+              accessibilityLabel="Bỏ chọn người nhận"
+              accessibilityRole="button"
+              activeOpacity={0.7}
+            >
+              <X size={14} color={disabled ? '#A1A1AA' : '#71717A'} />
+              <Text style={[styles.clearText, disabled && { color: '#A1A1AA' }]}>
+                Bỏ chọn người nhận
+              </Text>
             </TouchableOpacity>
           )}
         </View>
       ) : (
         <TouchableOpacity
-          style={[styles.selectTrigger, disabled && { opacity: 0.55 }]}
-          onPress={() => { if (!disabled) setShowModal(true); }}
+          style={[styles.selectTrigger, disabled && styles.triggerDisabled]}
+          onPress={() => {
+            if (!disabled) setShowModal(true);
+          }}
           disabled={disabled}
+          accessibilityLabel="Chọn nhân viên đang trực"
+          accessibilityRole="button"
+          activeOpacity={0.8}
         >
-          <User size={18} color={disabled ? Colors.textMuted : Colors.primary} />
-          <Text style={[styles.flex, styles.triggerText]}>
+          <User size={18} color={disabled ? Colors.textMuted : Colors.hero} />
+          <Text
+            style={[
+              styles.flex,
+              styles.triggerText,
+              disabled && { color: Colors.textMuted },
+            ]}
+          >
             {roomId
               ? `Chọn nhân viên trực tại ${roomName || 'phòng đã chọn'}`
               : 'Chọn nhân viên đang trực'}
@@ -143,269 +182,298 @@ export const StaffOnDutyPicker: React.FC<StaffOnDutyPickerProps> = ({
         </TouchableOpacity>
       )}
 
-      {/* Staff picker modal */}
-      <Modal
+      {/* Staff picker Bottom Sheet */}
+      <MobileBottomSheet
         visible={showModal}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setShowModal(false)}
+        onClose={() => setShowModal(false)}
+        title={
+          roomId && filterByRoom
+            ? `Nhân viên trực · ${roomName || 'Phòng'}`
+            : 'Nhân viên đang trực'
+        }
+        subtitle="Chọn nhân viên y tế đang nhận ca trực để giao hàng"
       >
-        <View style={styles.overlay}>
-          <View style={styles.modal}>
-            {/* Header */}
-            <View style={styles.modalHeader}>
-              <Text style={[styles.heading, styles.flex]}>
-                {roomId && filterByRoom
-                  ? `Nhân viên trực · ${roomName || 'Phòng'}`
-                  : 'Nhân viên đang trực'}
+        <View style={styles.sheetContent}>
+          {/* Lọc theo phòng */}
+          {roomId && (
+            <View style={styles.filterBar}>
+              <Text style={styles.filterBarText} numberOfLines={1}>
+                {filterByRoom
+                  ? `Đang lọc: ${roomName || 'Phòng đã chọn'}`
+                  : 'Đang xem tất cả phòng'}
               </Text>
               <TouchableOpacity
-                onPress={loadStaff}
-                disabled={isLoading}
-                style={styles.refreshBtn}
+                onPress={() => setFilterByRoom(!filterByRoom)}
+                style={styles.filterToggleBtn}
+                activeOpacity={0.7}
               >
-                {isLoading ? (
-                  <ActivityIndicator size="small" color={Colors.primary} />
-                ) : (
-                  <RefreshCw size={16} color={Colors.primary} />
-                )}
-              </TouchableOpacity>
-              <TouchableOpacity
-                onPress={() => setShowModal(false)}
-                accessibilityLabel="Đóng"
-              >
-                <X size={22} color={Colors.textSecondary} />
+                <Text style={styles.filterBarToggle}>
+                  {filterByRoom ? 'Xem tất cả' : `Chỉ xem ${roomName || 'phòng'}`}
+                </Text>
               </TouchableOpacity>
             </View>
+          )}
 
-            {roomId && (
-              <View style={styles.filterBar}>
-                <Text style={styles.filterBarText}>
-                  {filterByRoom ? `Đang lọc: ${roomName || 'Phòng đã chọn'}` : 'Đang xem tất cả phòng'}
-                </Text>
-                <TouchableOpacity onPress={() => setFilterByRoom(!filterByRoom)}>
-                  <Text style={styles.filterBarToggle}>
-                    {filterByRoom ? 'Xem tất cả phòng' : `Chỉ xem ${roomName || 'phòng'}`}
-                  </Text>
-                </TouchableOpacity>
-              </View>
-            )}
-
-            {/* Search */}
+          {/* Ô tìm kiếm & nút tải lại */}
+          <View style={styles.searchRow}>
             <View style={styles.searchBox}>
-              <Search size={16} color={Colors.textMuted} />
+              <Search size={16} color="#71717A" />
               <TextInput
                 style={styles.searchInput}
-                placeholder="Tìm theo tên hoặc phòng..."
-                placeholderTextColor={Colors.textMuted}
+                placeholder="Tìm theo tên hoặc phòng trực..."
+                placeholderTextColor="#A1A1AA"
                 value={searchText}
                 onChangeText={setSearchText}
                 autoCapitalize="none"
               />
             </View>
-
-            {/* Staff list */}
-            <ScrollView style={styles.listContainer} keyboardShouldPersistTaps="handled">
-              {error ? (
-                <Text style={styles.error}>{error}</Text>
-              ) : filtered.length === 0 ? (
-                <Text style={styles.emptyText}>
-                  {isLoading
-                    ? 'Đang tải...'
-                    : searchText.trim()
-                    ? 'Không tìm thấy nhân viên phù hợp.'
-                    : roomId && filterByRoom
-                    ? 'Phòng này chưa có nhân viên đang trực.'
-                    : 'Không có nhân viên nào đang trực.'}
-                </Text>
+            <TouchableOpacity
+              onPress={loadStaff}
+              disabled={isLoading}
+              style={styles.refreshBtn}
+              accessibilityLabel="Tải lại danh sách"
+              activeOpacity={0.7}
+            >
+              {isLoading ? (
+                <ActivityIndicator size="small" color={Colors.hero} />
               ) : (
-                filtered.map((staff) => {
-                  const isSelected = selectedStaff?.accountId === staff.accountId;
-                  return (
-                    <TouchableOpacity
-                      key={staff.staffProfileId + staff.shiftId}
-                      style={[styles.staffItem, isSelected && styles.staffItemSelected]}
-                      onPress={() => {
+                <RefreshCw size={18} color={Colors.hero} />
+              )}
+            </TouchableOpacity>
+          </View>
+
+          {/* Danh sách nhân viên */}
+          <ScrollView
+            style={styles.listContainer}
+            contentContainerStyle={styles.listContent}
+            keyboardShouldPersistTaps="handled"
+          >
+            {error ? (
+              <Text style={styles.errorText}>{error}</Text>
+            ) : filtered.length === 0 ? (
+              <Text style={styles.emptyText}>
+                {isLoading
+                  ? 'Đang tải danh sách nhân viên trực...'
+                  : searchText.trim()
+                  ? 'Không tìm thấy nhân viên phù hợp.'
+                  : roomId && filterByRoom
+                  ? 'Phòng này chưa có nhân viên đang trực.'
+                  : 'Không có nhân viên nào đang trực.'}
+              </Text>
+            ) : (
+              filtered.map((staff) => {
+                const isSelected = selectedStaff?.accountId === staff.accountId;
+                return (
+                  <TouchableOpacity
+                    key={staff.staffProfileId + staff.shiftId}
+                    style={[
+                      styles.staffItem,
+                      isSelected && styles.staffItemSelected,
+                      disabled && { opacity: 0.6 },
+                    ]}
+                    onPress={() => {
+                      if (!disabled) {
                         onSelect(staff);
                         setShowModal(false);
-                      }}
+                      }
+                    }}
+                    disabled={disabled}
+                    activeOpacity={0.75}
+                  >
+                    <View
+                      style={[
+                        styles.itemAvatar,
+                        isSelected && styles.itemAvatarSelected,
+                      ]}
                     >
-                      <View style={[styles.avatar, isSelected && styles.avatarSelected]}>
-                        {isSelected ? (
-                          <CheckCircle2 size={18} color="#fff" />
-                        ) : (
-                          <User size={18} color="#fff" />
-                        )}
-                      </View>
-                      <View style={styles.flex}>
-                        <Text style={styles.staffName}>{staff.fullName}</Text>
-                        <View style={styles.metaRow}>
-                          <MapPin size={12} color={Colors.textSecondary} />
-                          <Text style={styles.staffMeta}>
-                            {staff.roomName || staff.roomCode || 'Chưa rõ phòng'}
-                          </Text>
-                        </View>
-                        <View style={styles.metaRow}>
-                          <Clock size={12} color={Colors.textSecondary} />
-                          <Text style={styles.staffMeta}>
-                            {formatTime(staff.startsAt)} – {formatTime(staff.endsAt)}
-                          </Text>
-                        </View>
-                      </View>
-                      {staff.deliverable && (
-                        <View style={styles.deliverableBadge}>
-                          <Text style={styles.deliverableText}>Nhận hàng</Text>
-                        </View>
+                      {isSelected ? (
+                        <Check size={18} color="#FFFFFF" strokeWidth={2.5} />
+                      ) : (
+                        <User size={18} color="#FFFFFF" />
                       )}
-                    </TouchableOpacity>
-                  );
-                })
-              )}
-            </ScrollView>
+                    </View>
+                    <View style={styles.flex}>
+                      <Text style={styles.staffName}>{staff.fullName}</Text>
+                      <View style={styles.metaRow}>
+                        <MapPin size={12} color="#71717A" />
+                        <Text style={styles.staffMeta}>
+                          {staff.roomName || staff.roomCode || 'Chưa rõ phòng'}
+                        </Text>
+                        <Text style={styles.metaDot}>•</Text>
+                        <Clock size={12} color="#71717A" />
+                        <Text style={styles.staffMeta}>
+                          {formatTime(staff.startsAt)} – {formatTime(staff.endsAt)}
+                        </Text>
+                      </View>
+                    </View>
+                    {staff.deliverable && (
+                      <View style={styles.deliverableBadge}>
+                        <Text style={styles.deliverableText}>Nhận hàng</Text>
+                      </View>
+                    )}
+                  </TouchableOpacity>
+                );
+              })
+            )}
+          </ScrollView>
 
-            <Text style={styles.footerText}>
-              {filtered.length} nhân viên{roomId && filterByRoom ? ` tại ${roomName || 'phòng này'}` : mapId ? ' trên bản đồ hiện tại' : ''}
-            </Text>
-          </View>
+          {/* Footer tóm tắt */}
+          <Text style={styles.footerText}>
+            {filtered.length} nhân viên
+            {roomId && filterByRoom
+              ? ` tại ${roomName || 'phòng này'}`
+              : mapId
+              ? ' trên bản đồ hiện tại'
+              : ''}
+          </Text>
         </View>
-      </Modal>
+      </MobileBottomSheet>
     </>
   );
 };
 
 const styles = StyleSheet.create({
   flex: { flex: 1 },
-  filterBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-    backgroundColor: '#F0FDF4',
-    borderWidth: 1,
-    borderColor: '#BBF7D0',
-    borderRadius: 8,
-    marginHorizontal: 16,
-    marginBottom: 6,
-  },
-  filterBarText: {
-    fontSize: 12,
-    color: '#065F46',
-    fontWeight: '600',
-    flex: 1,
-  },
-  filterBarToggle: {
-    fontSize: 11,
-    color: '#0284C7',
-    fontWeight: '700',
-    paddingLeft: 8,
-  },
-  // Trigger button
   selectTrigger: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
-    padding: 13,
+    gap: 12,
+    paddingHorizontal: 16,
+    minHeight: 52,
     borderWidth: 1,
-    borderColor: '#dbe5e8',
-    borderRadius: 10,
-    backgroundColor: '#fff',
+    borderColor: '#E4E4E7',
+    borderRadius: 14,
+    backgroundColor: '#FFFFFF',
+    ...Shadows.sm,
+  },
+  triggerDisabled: {
+    backgroundColor: '#F4F4F5',
+    opacity: 0.6,
   },
   triggerText: {
     fontSize: 14,
-    color: Colors.textSecondary,
+    fontWeight: '500',
+    color: '#71717A',
   },
-  // Selected staff display
   selectedBox: {
-    backgroundColor: '#e6f4f0',
-    borderRadius: 10,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
     borderWidth: 1,
-    borderColor: Colors.primary,
-    padding: 12,
-    gap: 8,
+    borderColor: '#E4E4E7',
+    padding: 14,
+    gap: 10,
+    ...Shadows.card,
+  },
+  boxDisabled: {
+    backgroundColor: '#F4F4F5',
+    opacity: 0.6,
   },
   selectedInfo: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
+    gap: 12,
+  },
+  avatar: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: Colors.hero,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   selectedName: {
-    fontSize: 14,
+    fontSize: 15,
     fontWeight: '700',
     color: Colors.textPrimary,
   },
   selectedDetail: {
-    fontSize: 12,
-    color: Colors.textSecondary,
-    marginTop: 2,
-  },
-  selectedId: {
-    fontSize: 11,
-    color: Colors.textMuted,
+    fontSize: 13,
+    color: '#71717A',
     marginTop: 2,
   },
   changeBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
-    padding: 6,
+    gap: 6,
+    paddingHorizontal: 12,
+    minHeight: 44,
+    borderRadius: 12,
+    backgroundColor: '#F4F4F5',
+    borderWidth: 1,
+    borderColor: '#E4E4E7',
+    justifyContent: 'center',
   },
   changeText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: Colors.primary,
+    fontSize: 13,
+    fontWeight: '700',
+    color: Colors.hero,
   },
   clearBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
-    paddingTop: 4,
+    gap: 6,
+    minHeight: 44,
+    paddingHorizontal: 6,
+    borderTopWidth: 1,
+    borderTopColor: '#F4F4F5',
+    paddingTop: 8,
   },
   clearText: {
     fontSize: 12,
-    color: Colors.textSecondary,
+    fontWeight: '600',
+    color: '#71717A',
   },
-  // Modal
-  overlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.4)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 22,
+  btnDisabled: {
+    opacity: 0.4,
   },
-  modal: {
-    width: '100%',
-    maxWidth: 540,
-    maxHeight: '80%',
-    padding: 20,
-    borderRadius: 16,
-    backgroundColor: '#fff',
+  sheetContent: {
     gap: 12,
+    maxHeight: 520,
   },
-  modalHeader: {
+  filterBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    backgroundColor: '#F4F4F5',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#E4E4E7',
+  },
+  filterBarText: {
+    fontSize: 12,
+    color: '#3F3F46',
+    fontWeight: '600',
+    flex: 1,
+  },
+  filterToggleBtn: {
+    minHeight: 32,
+    paddingHorizontal: 8,
+    justifyContent: 'center',
+  },
+  filterBarToggle: {
+    fontSize: 12,
+    color: Colors.hero,
+    fontWeight: '700',
+    textDecorationLine: 'underline',
+  },
+  searchRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
   },
-  heading: {
-    fontSize: 17,
-    fontWeight: '700',
-    color: Colors.textPrimary,
-  },
-  refreshBtn: {
-    padding: 6,
-  },
-  // Search
   searchBox: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
     borderWidth: 1,
-    borderColor: '#dbe5e8',
-    borderRadius: 10,
+    borderColor: '#E4E4E7',
+    borderRadius: 12,
     paddingHorizontal: 12,
-    paddingVertical: 8,
-    backgroundColor: '#f8fafc',
+    minHeight: 44,
+    backgroundColor: '#F4F4F5',
   },
   searchInput: {
     flex: 1,
@@ -413,75 +481,97 @@ const styles = StyleSheet.create({
     color: Colors.textPrimary,
     padding: 0,
   },
-  // List
+  refreshBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    backgroundColor: '#F4F4F5',
+    borderWidth: 1,
+    borderColor: '#E4E4E7',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   listContainer: {
-    maxHeight: 360,
+    maxHeight: 320,
+  },
+  listContent: {
+    gap: 8,
+    paddingVertical: 4,
   },
   staffItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
+    gap: 12,
     padding: 12,
-    borderRadius: 10,
+    borderRadius: 14,
     borderWidth: 1,
-    borderColor: '#e2e8f0',
-    marginBottom: 8,
+    borderColor: '#E4E4E7',
+    backgroundColor: '#FFFFFF',
+    minHeight: 64,
   },
   staffItemSelected: {
-    backgroundColor: '#e6f4f0',
-    borderColor: Colors.primary,
+    backgroundColor: '#F7F7F5',
+    borderColor: Colors.hero,
+    borderWidth: 1.5,
   },
-  avatar: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: Colors.primary,
+  itemAvatar: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#71717A',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  avatarSelected: {
-    backgroundColor: '#059669',
+  itemAvatarSelected: {
+    backgroundColor: Colors.hero,
   },
   staffName: {
     fontSize: 14,
-    fontWeight: '600',
+    fontWeight: '700',
     color: Colors.textPrimary,
   },
   metaRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    marginTop: 2,
+    marginTop: 3,
+    flexWrap: 'wrap',
   },
   staffMeta: {
     fontSize: 12,
-    color: Colors.textSecondary,
+    color: '#71717A',
+  },
+  metaDot: {
+    fontSize: 10,
+    color: '#D4D4D8',
   },
   deliverableBadge: {
-    backgroundColor: '#dcfce7',
+    backgroundColor: '#ECFDF5',
     paddingHorizontal: 8,
     paddingVertical: 4,
-    borderRadius: 6,
+    borderRadius: BorderRadius.full,
+    borderWidth: 1,
+    borderColor: '#A7F3D0',
   },
   deliverableText: {
     fontSize: 11,
-    fontWeight: '600',
+    fontWeight: '700',
     color: '#059669',
   },
-  // Footer
   footerText: {
     fontSize: 12,
-    color: Colors.textMuted,
+    color: '#A1A1AA',
     textAlign: 'center',
+    paddingTop: 4,
   },
   emptyText: {
-    fontSize: 14,
-    color: Colors.textSecondary,
+    fontSize: 13,
+    color: '#71717A',
     textAlign: 'center',
     paddingVertical: 32,
   },
-  error: {
-    color: '#b42318',
+  errorText: {
+    color: '#DC2626',
     fontSize: 13,
     textAlign: 'center',
     paddingVertical: 16,

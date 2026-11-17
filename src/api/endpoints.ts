@@ -27,6 +27,7 @@ export const ENDPOINTS = {
   ROBOTS: {
     LIST: '/robots',
     DETAIL: (id: string) => `/robots/${id}`,
+    BATTERY: (id: string) => `/robots/${id}/battery`,
     SNAPSHOT: (id: string) => `/robots/${id}/snapshot`,
     LOCATION_HISTORY: (id: string) => `/robots/${id}/location-history`,
     STREAM: (id: string) => `/robots/${id}/stream`,
@@ -45,6 +46,7 @@ export const ENDPOINTS = {
     MAPS: '/maps',
     MAP_DETAIL: (id: string) => `/maps/${id}`,
     MAP_IMAGE_METADATA: (id: string) => `/maps/${id}/image-metadata`,
+    MAP_PRESENTATION_PUBLISHED: (id: string) => `/maps/${id}/presentation/published`,
     ENDPOINTS: '/endpoints',
     ENDPOINT_DETAIL: (id: string) => `/endpoints/${id}`,
     ENDPOINT_GROUPS: '/endpoint-groups',

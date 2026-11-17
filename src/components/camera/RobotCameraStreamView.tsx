@@ -24,8 +24,9 @@ import {
   Layers,
 } from 'lucide-react-native';
 import { cameraApi, CameraHealthResponse } from '../../api/modules/camera.api';
-import { RobotDto } from '../../api/types';
+import { RobotBatteryResponse, RobotDto } from '../../api/types';
 import { Colors } from '../../constants/theme';
+import { formatRobotBatteryDisplay } from '../map/robotBattery';
 
 const { width: SCREEN_W } = Dimensions.get('window');
 
@@ -35,6 +36,7 @@ interface RobotCameraStreamViewProps {
   showControls?: boolean;
   onExpandPress?: () => void;
   robot?: RobotDto | null;
+  battery?: RobotBatteryResponse | null;
 }
 
 export const RobotCameraStreamView: React.FC<RobotCameraStreamViewProps> = ({
@@ -43,6 +45,7 @@ export const RobotCameraStreamView: React.FC<RobotCameraStreamViewProps> = ({
   showControls = true,
   onExpandPress,
   robot,
+  battery = null,
 }) => {
   const [streamSource, setStreamSource] = useState<'robot_pi' | 'ai_vision'>('robot_pi');
   const [cameraStatus, setCameraStatus] = useState<'CONNECTING' | 'STREAMING' | 'OFFLINE'>('CONNECTING');
@@ -205,7 +208,7 @@ export const RobotCameraStreamView: React.FC<RobotCameraStreamViewProps> = ({
                   ROBOT: {robot?.robotCode || 'CHƯA XÁC ĐỊNH'} · {robot?.status || 'KHÔNG CÓ DỮ LIỆU'}
                 </Text>
                 <Text style={styles.hudTelemetrySub}>
-                  PIN: {robot?.batteryPercent ?? robot?.batteryRaw ?? '--'}%
+                  PIN: {formatRobotBatteryDisplay(battery, robot).badgeText}
                 </Text>
               </View>
               <View style={styles.hudStatusRight}>

@@ -4,9 +4,13 @@ export interface CameraHealthResponse {
   service: string;
   status: 'STREAMING' | 'STARTING' | 'OFFLINE' | 'ERROR' | string;
   fps: number;
-  frame_id: number;
-  resolution: string;
+  frame_id?: number;
+  resolution?: string;
   stream_endpoint: string;
+  frameFresh?: boolean;
+  encodedFps?: number;
+  frameAgeSeconds?: number | null;
+  topic?: string;
 }
 
 export interface AiVisionStateResponse {
@@ -18,22 +22,34 @@ export interface AiVisionStateResponse {
 }
 
 /**
- * Camera API: Gọi trực tiếp tới Camera Robot (Raspberry Pi Port 8090 hoặc AI Vision Port 8001)
+ * Camera API: Kết nối luồng Camera trực tiếp từ Robot (Raspberry Pi Streamer 8081, ROS MJPEG 8080, hoặc AI Vision 8001)
  */
 export const cameraApi = {
   /**
-   * Lấy URL luồng video trực tiếp từ robot
+   * Lấy URL luồng video trực tiếp từ robot theo đúng adapter
+   * - robot_pi (mặc định): Python camera server cổng 8081, endpoint /stream
+   * - ros_mjpeg: Vendor web_video_server cổng 8080, endpoint /stream?topic=...
+   * - ai_vision: AI Vision Service cổng 8001, endpoint /video
    */
-  getStreamUrl(source: 'robot_pi' | 'ai_vision' = 'robot_pi', customHost?: string): string {
+  getStreamUrl(
+    source: 'robot_pi' | 'ros_mjpeg' | 'ai_vision' = 'robot_pi',
+    customHost?: string
+  ): string {
+    const configuredUrl = process.env.EXPO_PUBLIC_ROBOT_CAMERA_URL?.trim();
+    if (configuredUrl && source === 'robot_pi') return configuredUrl;
+
     const host = customHost || getBackendHost();
     if (source === 'ai_vision') {
       return `http://${host}:${AI_VISION_PORT}/video`;
     }
-    return `http://${host}:${ROBOT_CAMERA_PORT}/video`;
+    if (source === 'ros_mjpeg') {
+      return `http://${host}:8080/stream?topic=/ascamera/camera_publisher/rgb0/image&type=mjpeg&width=640&height=480&quality=60`;
+    }
+    return `http://${host}:${ROBOT_CAMERA_PORT}/stream`;
   },
 
   /**
-   * Lấy URL ảnh snapshot mới nhất (cho fallback snapshot polling)
+   * Lấy URL ảnh snapshot mới nhất từ máy chủ Python (8081/snapshot)
    */
   getSnapshotUrl(customHost?: string): string {
     const host = customHost || getBackendHost();
@@ -41,7 +57,7 @@ export const cameraApi = {
   },
 
   /**
-   * Kiểm tra tình trạng kết nối camera trực tiếp trên Raspberry Pi
+   * Kiểm tra tình trạng kết nối camera trực tiếp trên Raspberry Pi qua /health (cổng 8081)
    */
   async checkCameraHealth(customHost?: string, timeoutMs = 3000): Promise<CameraHealthResponse> {
     const host = customHost || getBackendHost();
@@ -62,15 +78,35 @@ export const cameraApi = {
       }
 
       const data = await res.json();
-      return data as CameraHealthResponse;
-    } catch (err: any) {
+      const encodedFps =
+        typeof data.encodedFps === 'number'
+          ? data.encodedFps
+          : typeof data.fps === 'number'
+          ? data.fps
+          : 0;
+      const frameFresh = Boolean(data.frameFresh);
+      const isStreaming = frameFresh || encodedFps > 0 || (Number(data.sourceReceivedFps) > 0);
+
+      return {
+        service: 'MAR-Pi-Camera-Streamer',
+        status: isStreaming ? 'STREAMING' : data.lastSourceError ? 'ERROR' : 'STARTING',
+        fps: encodedFps,
+        frame_id: typeof data.frameRevision === 'number' ? data.frameRevision : 0,
+        resolution: Array.isArray(data.streamSize) ? `${data.streamSize[0]}x${data.streamSize[1]}` : '640x480',
+        stream_endpoint: '/stream',
+        frameFresh,
+        encodedFps,
+        frameAgeSeconds: data.frameAgeSeconds ?? null,
+        topic: data.topic,
+      };
+    } catch {
       return {
         service: 'MAR-Pi-Camera-Streamer',
         status: 'OFFLINE',
         fps: 0,
         frame_id: 0,
         resolution: '640x480',
-        stream_endpoint: '/video',
+        stream_endpoint: '/stream',
       };
     } finally {
       clearTimeout(timer);

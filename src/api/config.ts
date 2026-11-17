@@ -92,7 +92,7 @@ export const getLocalBackendUrl = (): string => {
   return `http://${host}:${LOCAL_BACKEND_PORT}/api/v1`;
 };
 
-export const ROBOT_CAMERA_PORT = 8090;
+export const ROBOT_CAMERA_PORT = 8081;
 export const AI_VISION_PORT = 8001;
 
 export const API_CONFIG = {

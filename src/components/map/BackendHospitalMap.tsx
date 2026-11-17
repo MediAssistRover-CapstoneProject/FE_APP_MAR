@@ -20,7 +20,7 @@ import Svg, {
 } from 'react-native-svg';
 import { Layers, Lock } from 'lucide-react-native';
 import { API_CONFIG } from '../../api/config';
-import { EndpointResponse, MapResponse, ZoneDto } from '../../api/types';
+import { EndpointResponse, MapPresentationPublishedResponse, MapResponse, ZoneDto } from '../../api/types';
 import { normalizeRobotPose } from './robotPose';
 import {
   analyzeSlamMapGeometry,
@@ -47,6 +47,7 @@ export interface MapPlanPoint {
 interface BackendHospitalMapProps {
   map: MapResponse;
   metadata?: Record<string, any> | null;
+  presentation?: MapPresentationPublishedResponse | null;
   endpoints: EndpointResponse[];
   zones: ZoneDto[];
   token: string | null;
@@ -104,6 +105,7 @@ const readPolygon = (polygonJson: unknown): MapPoint[] => {
 export const BackendHospitalMap: React.FC<BackendHospitalMapProps> = ({
   map,
   metadata,
+  presentation,
   endpoints,
   zones,
   token,
@@ -220,10 +222,16 @@ export const BackendHospitalMap: React.FC<BackendHospitalMapProps> = ({
     return pose;
   }, [map.mapId, robotPose]);
 
+
+  const presentationFeatures = presentation?.document?.features || [];
+  const hasPresentation = presentationFeatures.length > 0;
+
   const geometry = useMemo(() => {
+    const presSource = presentation?.source;
     const resolution = Math.max(
       Number(
-        metadata?.resolution ??
+        (hasPresentation ? presSource?.resolutionMPerPixel : undefined) ??
+          metadata?.resolution ??
           metadata?.resolution_m_per_pixel ??
           metadata?.resolutionMPerPixel ??
           map.resolutionMPerPixel
@@ -240,14 +248,16 @@ export const BackendHospitalMap: React.FC<BackendHospitalMapProps> = ({
 
     const pixelWidth = Math.max(
       1,
-      (autoAlign?.width && autoAlign.width > 0 ? autoAlign.width : 0) ||
+      (hasPresentation && presSource?.widthPx && presSource.widthPx > 0 ? presSource.widthPx : 0) ||
+        (autoAlign?.width && autoAlign.width > 0 ? autoAlign.width : 0) ||
         (metaWidthPx > 0 ? metaWidthPx : 0) ||
         (naturalSize?.width && naturalSize.width > 0 ? naturalSize.width : 0) ||
         (Number(map.widthM) > 0 ? Number(map.widthM) / resolution : 1)
     );
     const pixelHeight = Math.max(
       1,
-      (autoAlign?.height && autoAlign.height > 0 ? autoAlign.height : 0) ||
+      (hasPresentation && presSource?.heightPx && presSource.heightPx > 0 ? presSource.heightPx : 0) ||
+        (autoAlign?.height && autoAlign.height > 0 ? autoAlign.height : 0) ||
         (metaHeightPx > 0 ? metaHeightPx : 0) ||
         (naturalSize?.height && naturalSize.height > 0 ? naturalSize.height : 0) ||
         (Number(map.heightM) > 0 ? Number(map.heightM) / resolution : 1)
@@ -256,7 +266,8 @@ export const BackendHospitalMap: React.FC<BackendHospitalMapProps> = ({
     const origin = Array.isArray(metadata?.origin) ? metadata.origin : [];
     const originX =
       Number(
-        metadata?.origin_x_m ??
+        (hasPresentation ? presSource?.originXM : undefined) ??
+          metadata?.origin_x_m ??
           metadata?.originXM ??
           metadata?.originX ??
           origin[0] ??
@@ -264,7 +275,8 @@ export const BackendHospitalMap: React.FC<BackendHospitalMapProps> = ({
       ) || 0;
     const originY =
       Number(
-        metadata?.origin_y_m ??
+        (hasPresentation ? presSource?.originYM : undefined) ??
+          metadata?.origin_y_m ??
           metadata?.originYM ??
           metadata?.originY ??
           origin[1] ??
@@ -272,7 +284,8 @@ export const BackendHospitalMap: React.FC<BackendHospitalMapProps> = ({
       ) || 0;
     const originYaw =
       Number(
-        metadata?.origin_yaw_rad ??
+        (hasPresentation ? presSource?.originYawRad : undefined) ??
+          metadata?.origin_yaw_rad ??
           metadata?.originYawRad ??
           metadata?.originYaw ??
           metadata?.yaw ??
@@ -282,18 +295,19 @@ export const BackendHospitalMap: React.FC<BackendHospitalMapProps> = ({
     const cosO = Math.cos(originYaw);
     const sinO = Math.sin(originYaw);
 
-    // Góc xoay tự động từ bộ nhận diện viền tường SLAM (fallback -20° khi đang tải ảnh)
-    const rotationDeg = autoAlign ? autoAlign.rotationDeg : -20;
+    // Góc xoay chuẩn từ bản vẽ presentation (nếu có) hoặc từ bộ nhận diện viền tường SLAM
+    const docRotation = presentation?.document?.rotationDegrees;
+    const rotationDeg =
+      hasPresentation && typeof docRotation === 'number' && Number.isFinite(docRotation)
+        ? docRotation
+        : autoAlign
+        ? autoAlign.rotationDeg
+        : -20;
     const rotationRad = (rotationDeg * Math.PI) / 180;
     const cosR = Math.cos(rotationRad);
     const sinR = Math.sin(rotationRad);
 
-    // Quy đổi tọa độ mét (xM, yM) sang tọa độ xoay quanh tâm ảnh (pixelWidth/2, pixelHeight/2)
-    const worldToRotatedCenter = (point: MapPoint) => {
-      const dx = point.x - originX;
-      const dy = point.y - originY;
-      const u = (cosO * dx + sinO * dy) / resolution;
-      const v = pixelHeight - (-sinO * dx + cosO * dy) / resolution;
+    const uvToRotatedCenter = (u: number, v: number) => {
       const relU = u - pixelWidth / 2;
       const relV = v - pixelHeight / 2;
       return {
@@ -304,20 +318,48 @@ export const BackendHospitalMap: React.FC<BackendHospitalMapProps> = ({
       };
     };
 
-    // Khung bao từ thuật toán nhận diện viền tường SLAM
-    let xMin = autoAlign ? autoAlign.xMin : -pixelWidth * 0.45;
-    let xMax = autoAlign ? autoAlign.xMax : pixelWidth * 0.45;
-    let yMin = autoAlign ? autoAlign.yMin : -pixelHeight * 0.42;
-    let yMax = autoAlign ? autoAlign.yMax : pixelHeight * 0.42;
+    // Quy đổi tọa độ mét (xM, yM) sang tọa độ xoay quanh tâm ảnh (pixelWidth/2, pixelHeight/2)
+    const worldToRotatedCenter = (point: MapPoint) => {
+      const dx = point.x - originX;
+      const dy = point.y - originY;
+      const u = (cosO * dx + sinO * dy) / resolution;
+      const v = pixelHeight - (-sinO * dx + cosO * dy) / resolution;
+      return uvToRotatedCenter(u, v);
+    };
 
-    // Đảm bảo mọi Zone, Endpoint và vị trí Robot trên map cũng nằm trọn trong khung nhìn
-    const expandWithPoint = (pt: MapPoint) => {
-      const { rx, ry } = worldToRotatedCenter(pt);
-      const margin = 6;
+    // Tọa độ trong presentation/published là mét tương đối từ góc gốc bản đồ (dx, dy)
+    const presentationToRotatedCenter = (point: MapPoint) => {
+      const u = point.x / resolution;
+      const v = pixelHeight - point.y / resolution;
+      return uvToRotatedCenter(u, v);
+    };
+
+    // Khung bao từ bản vẽ presentation hoặc từ thuật toán nhận diện viền tường SLAM
+    let xMin = hasPresentation ? Infinity : autoAlign ? autoAlign.xMin : -pixelWidth * 0.45;
+    let xMax = hasPresentation ? -Infinity : autoAlign ? autoAlign.xMax : pixelWidth * 0.45;
+    let yMin = hasPresentation ? Infinity : autoAlign ? autoAlign.yMin : -pixelHeight * 0.42;
+    let yMax = hasPresentation ? -Infinity : autoAlign ? autoAlign.yMax : pixelHeight * 0.42;
+
+    const expandRotated = (rx: number, ry: number, margin = 6) => {
       if (rx - margin < xMin) xMin = rx - margin;
       if (rx + margin > xMax) xMax = rx + margin;
       if (ry - margin < yMin) yMin = ry - margin;
       if (ry + margin > yMax) yMax = ry + margin;
+    };
+
+    if (hasPresentation) {
+      presentationFeatures.forEach((f) => {
+        f.points?.forEach((pt) => {
+          const { rx, ry } = presentationToRotatedCenter(pt);
+          expandRotated(rx, ry, 10);
+        });
+      });
+    }
+
+    // Đảm bảo mọi Zone, Endpoint và vị trí Robot trên map cũng nằm trọn trong khung nhìn
+    const expandWithPoint = (pt: MapPoint) => {
+      const { rx, ry } = worldToRotatedCenter(pt);
+      expandRotated(rx, ry, 6);
     };
 
     visibleEndpoints.forEach((ep) =>
@@ -328,11 +370,30 @@ export const BackendHospitalMap: React.FC<BackendHospitalMapProps> = ({
       expandWithPoint({ x: validRobotPose.xM, y: validRobotPose.yM });
     }
 
+    if (!Number.isFinite(xMin) || !Number.isFinite(xMax)) {
+      xMin = -pixelWidth * 0.45;
+      xMax = pixelWidth * 0.45;
+    }
+    if (!Number.isFinite(yMin) || !Number.isFinite(yMax)) {
+      yMin = -pixelHeight * 0.42;
+      yMax = pixelHeight * 0.42;
+    }
+
     const viewWidth = Math.max(10, xMax - xMin);
     const viewHeight = Math.max(10, yMax - yMin);
 
     const toViewPixel = (point: MapPoint) => {
       const { rx, ry, rawU, rawV } = worldToRotatedCenter(point);
+      return {
+        x: rx - xMin,
+        y: ry - yMin,
+        rawU,
+        rawV,
+      };
+    };
+
+    const presentationToViewPixel = (point: MapPoint) => {
+      const { rx, ry, rawU, rawV } = presentationToRotatedCenter(point);
       return {
         x: rx - xMin,
         y: ry - yMin,
@@ -360,13 +421,17 @@ export const BackendHospitalMap: React.FC<BackendHospitalMapProps> = ({
       viewWidth,
       viewHeight,
       toViewPixel,
+      presentationToViewPixel,
       toViewHeadingRad,
     };
   }, [
     autoAlign,
+    hasPresentation,
     map,
     metadata,
     naturalSize,
+    presentation,
+    presentationFeatures,
     validRobotPose,
     visibleEndpoints,
     visibleZones,
@@ -399,13 +464,18 @@ export const BackendHospitalMap: React.FC<BackendHospitalMapProps> = ({
           styles.canvasContainer,
           {
             aspectRatio,
-            backgroundColor: filterMode === 'otto_dark' ? '#1E242B' : '#CDCDCD',
+            backgroundColor:
+              filterMode === 'otto_dark'
+                ? '#0F172A'
+                : hasPresentation
+                ? presentation?.document?.backgroundColor || '#F8FAFC'
+                : '#CDCDCD',
           },
         ]}
       >
         <View style={styles.gridBackground} />
 
-        {!imageFailed && (
+        {!hasPresentation && !imageFailed && (
           <Image
             source={mapImageSource}
             resizeMode="stretch"
@@ -435,8 +505,8 @@ export const BackendHospitalMap: React.FC<BackendHospitalMapProps> = ({
           />
         )}
 
-        {/* Lớp phủ Filter công nghiệp chuẩn OTTO Fleet Manager */}
-        {filterMode !== 'raw' && (
+        {/* Lớp phủ Filter công nghiệp chuẩn OTTO Fleet Manager (chỉ dùng cho ảnh SLAM PNG thô) */}
+        {!hasPresentation && filterMode !== 'raw' && (
           <View
             pointerEvents="none"
             style={[
@@ -536,6 +606,133 @@ export const BackendHospitalMap: React.FC<BackendHospitalMapProps> = ({
               fill="url(#ottoCadGrid)"
             />
           )}
+
+          {/* 0.5. Lớp bản đồ vector chuẩn kiến trúc từ GET /maps/{mapId}/presentation/published */}
+          {hasPresentation &&
+            presentationFeatures
+              .slice()
+              .sort((a, b) => {
+                const order: Record<string, number> = {
+                  CORRIDOR: 0,
+                  ROOM: 1,
+                  WALL: 2,
+                  DOOR: 3,
+                  LANDMARK: 4,
+                  LABEL: 5,
+                };
+                return (order[a.type] ?? 9) - (order[b.type] ?? 9);
+              })
+              .map((feature) => {
+                const pts = (feature.points || []).map(geometry.presentationToViewPixel);
+                if (pts.length === 0) return null;
+                const strokePx = Math.max(
+                  1.2,
+                  (Number(feature.lineWidthM) || 0.04) / geometry.resolution
+                );
+                const fontPx = Math.max(
+                  4.5,
+                  Math.min(11, (Number(feature.fontSizeM) || 0.11) / geometry.resolution)
+                );
+                const ptsStr = pts.map((p) => `${p.x},${p.y}`).join(' ');
+                const featureColor = feature.color || '#334155';
+                const isDark = filterMode === 'otto_dark';
+
+                if (feature.type === 'ROOM' || feature.type === 'CORRIDOR') {
+                  const cx = pts.reduce((s, p) => s + p.x, 0) / pts.length;
+                  const cy = pts.reduce((s, p) => s + p.y, 0) / pts.length;
+                  const labelText = feature.label || feature.roomName || '';
+                  const fillColor =
+                    feature.type === 'CORRIDOR'
+                      ? isDark
+                        ? 'rgba(148, 163, 184, 0.16)'
+                        : 'rgba(226, 232, 240, 0.55)'
+                      : `${featureColor}${isDark ? '38' : '26'}`;
+                  return (
+                    <G key={feature.id}>
+                      {pts.length >= 3 ? (
+                        <Polygon
+                          points={ptsStr}
+                          fill={fillColor}
+                          stroke={featureColor}
+                          strokeWidth={Math.max(0.9, strokePx * 0.75)}
+                          strokeLinejoin="round"
+                        />
+                      ) : (
+                        <Polyline
+                          points={ptsStr}
+                          fill="none"
+                          stroke={featureColor}
+                          strokeWidth={strokePx}
+                          strokeLinecap="round"
+                        />
+                      )}
+                      {!!labelText && (
+                        <>
+                          <SvgText
+                            x={cx}
+                            y={cy + fontPx * 0.35}
+                            fontSize={fontPx}
+                            fontWeight="700"
+                            fill="none"
+                            stroke={isDark ? 'rgba(15, 23, 42, 0.9)' : 'rgba(255, 255, 255, 0.92)'}
+                            strokeWidth={1.6}
+                            textAnchor="middle"
+                          >
+                            {labelText}
+                          </SvgText>
+                          <SvgText
+                            x={cx}
+                            y={cy + fontPx * 0.35}
+                            fontSize={fontPx}
+                            fontWeight="700"
+                            fill={isDark ? '#F8FAFC' : '#0F172A'}
+                            textAnchor="middle"
+                          >
+                            {labelText}
+                          </SvgText>
+                        </>
+                      )}
+                    </G>
+                  );
+                }
+
+                if (feature.type === 'WALL' || feature.type === 'DOOR') {
+                  return (
+                    <Polyline
+                      key={feature.id}
+                      points={ptsStr}
+                      fill="none"
+                      stroke={isDark && featureColor === '#334155' ? '#CBD5E1' : featureColor}
+                      strokeWidth={feature.type === 'DOOR' ? strokePx * 1.15 : strokePx}
+                      strokeDasharray={feature.type === 'DOOR' ? '3,2' : undefined}
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  );
+                }
+
+                const pt0 = pts[0];
+                const labelText = feature.label || feature.endpointName || '';
+                return (
+                  <G key={feature.id}>
+                    {feature.type === 'LANDMARK' && (
+                      <Circle cx={pt0.x} cy={pt0.y} r={2.5} fill={featureColor} />
+                    )}
+                    {!!labelText && (
+                      <SvgText
+                        x={pt0.x}
+                        y={pt0.y - 3.5}
+                        fontSize={fontPx}
+                        fontWeight="600"
+                        fill={isDark ? '#E2E8F0' : featureColor}
+                        textAnchor="middle"
+                      >
+                        {labelText}
+                      </SvgText>
+                    )}
+                  </G>
+                );
+              })}
 
           {/* 1. Vẽ các phân khu Traffic Control (Zones) theo chuẩn OTTO Fleet Manager */}
           {visibleZones.map(({ zone, points }) => {
@@ -774,14 +971,14 @@ export const BackendHospitalMap: React.FC<BackendHospitalMapProps> = ({
           </Text>
         </TouchableOpacity>
 
-        {isLoadingImage && !naturalSize && !autoAlign && !imageFailed && (
+        {!hasPresentation && isLoadingImage && !naturalSize && !autoAlign && !imageFailed && (
           <View style={styles.loadingOverlay} pointerEvents="none">
             <ActivityIndicator size="small" color="#2563EB" />
             <Text style={styles.loadingText}>Đang tải & căn chỉnh viền map...</Text>
           </View>
         )}
 
-        {imageFailed && (
+        {!hasPresentation && imageFailed && (
           <View style={styles.warningBadge} pointerEvents="none">
             <Text style={styles.warningText}>
               BE chưa trả ảnh PNG · đang hiển thị tọa độ waypoint/zone

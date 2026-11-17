@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   Animated,
-  Dimensions,
+  Image,
   Modal,
   ScrollView,
   StyleSheet,
@@ -12,6 +13,7 @@ import {
 } from 'react-native';
 import {
   Bot,
+  Camera,
   LogOut,
   Video,
   Mic,
@@ -20,9 +22,18 @@ import {
   VolumeX,
   RefreshCw,
   WifiOff,
+  Radio,
 } from 'lucide-react-native';
 import WebView, { WebViewMessageEvent } from 'react-native-webview';
-import { EndpointResponse, JobResponse, MapResponse, RobotDto, ZoneDto } from '../../api/types';
+import {
+  EndpointResponse,
+  JobResponse,
+  MapResponse,
+  RobotBatteryResponse,
+  RobotDto,
+  ZoneDto,
+} from '../../api/types';
+import { robotApi } from '../../api/modules/robot.api';
 import { MapPlanPoint, MapRobotPose } from './BackendHospitalMap';
 import {
   buildMediaCallHtml,
@@ -30,60 +41,104 @@ import {
   statusLabel,
   statusColor,
 } from '../media/MediaCallModal';
+import { RobotCameraStreamView } from '../camera/RobotCameraStreamView';
 import { apiClient } from '../../api/client';
-import { mediaSessionApi } from '../../api/modules/mediaSession.api';
+import { BATTERY_REFRESH_INTERVAL_MS, MQTT_PREVIEW_POLL_MS } from '../../api/pollingPolicy';
+import {
+  isOpenCameraSession,
+  isOwnMonitorSession,
+  mediaSessionApi,
+  MediaSessionMode,
+} from '../../api/modules/mediaSession.api';
 import { normalizeRobotPose } from './robotPose';
+import { formatRobotBatteryDisplay, pickNewerRobotBattery } from './robotBattery';
 
 interface Props {
   visible: boolean;
   onClose: () => void;
   robot: RobotDto | null;
+  battery?: RobotBatteryResponse | null;
   map: MapResponse | null;
   metadata: Record<string, any> | null;
   endpoints: EndpointResponse[];
   zones: ZoneDto[];
   token: string | null;
   activeJob: JobResponse | null;
+  activeJobId?: string | null;
   robotPose?: MapRobotPose | null;
   isPoseLive?: boolean;
   plannedPath?: MapPlanPoint[] | null;
+}
+
+type CameraSourceTab = 'webrtc' | 'mqtt_preview' | 'pi_lan';
+
+function translateCameraError(error: any): string {
+  const code = error?.code || error?.message || '';
+  const map: Record<string, string> = {
+    MEDIA_DISABLED: 'Máy chủ chưa bật dịch vụ camera trực tiếp.',
+    MEDIA_DEVICE_NOT_CONNECTED:
+      'Robot hiện chưa kết nối dịch vụ camera trực tiếp (WebRTC) hoặc đang ngoại tuyến.',
+    ROBOT_MEDIA_SESSION_ALREADY_OPEN:
+      'Robot đang có phiên camera khác trên hệ thống. Đang đồng bộ lại phiên...',
+    MEDIA_SERVER_UNAVAILABLE: 'Chưa kết nối được máy chủ LiveKit camera.',
+    MEDIA_CONFIGURATION_INVALID: 'Cấu hình dịch vụ camera trên máy chủ chưa đầy đủ.',
+    MEDIA_EXTERNAL_WSS_ORIGIN_REQUIRED: 'Máy chủ chưa cấu hình địa chỉ WSS camera bảo mật.',
+  };
+  if (map[code]) return map[code];
+  if (error?.message && map[error.message]) return map[error.message];
+  return error?.message || 'Chưa kết nối được camera. Hệ thống sẽ tự thử lại.';
 }
 
 export const BackendRobotMonitorModal: React.FC<Props> = ({
   visible,
   onClose,
   robot,
-  map,
-  metadata,
-  endpoints,
-  zones,
-  token: propToken,
+  battery,
   activeJob,
+  activeJobId,
   robotPose,
-  isPoseLive,
-  plannedPath,
 }) => {
-  // LiveKit WebRTC state
   const webViewRef = useRef<any>(null);
+  const [cameraTab, setCameraTab] = useState<CameraSourceTab>('webrtc');
+  const [sessionMode, setSessionMode] = useState<MediaSessionMode>('MONITOR');
   const [callStatus, setCallStatus] = useState<CallStatus>('INIT');
   const [micEnabled, setMicEnabled] = useState(false);
   const [audioMuted, setAudioMuted] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [keyReload, setKeyReload] = useState(0);
+  const [polledBattery, setPolledBattery] = useState<RobotBatteryResponse | null>(null);
 
-  // Native negotiation state
+  // WebRTC LiveKit credentials (từ POST /api/v1/media-sessions/{id}/join-token)
   const [sessionCredentials, setSessionCredentials] = useState<{
     url: string;
     token: string;
     sessionId: string;
+    mode: MediaSessionMode;
   } | null>(null);
   const [isNegotiating, setIsNegotiating] = useState(false);
+
+  // Fallback / MQTT Snapshot state (từ GET /api/v1/jobs/{jobId}/camera-preview.jpg — khớp LiveMapping.jsx)
+  const [resolvedJobId, setResolvedJobId] = useState<string | null>(
+    activeJobId || activeJob?.jobId || null
+  );
+  const [mqttPreviewFrame, setMqttPreviewFrame] = useState<{
+    dataUri: string;
+    capturedAt: string | null;
+    revision: string | null;
+  } | null>(null);
+  const [mqttPreviewMessage, setMqttPreviewMessage] = useState<string>(
+    'Đang chờ khung hình camera từ phiên quét / nhiệm vụ của robot...'
+  );
+
+  // Quản lý đóng phiên MONITOR khi thoát modal (khớp robotCamera.js trên FE_WEB_MAR)
+  const ownedSessionRef = useRef<{ sessionId: string; viewerToken: string } | null>(null);
+  const viewerTokenRef = useRef<string | null>(null);
 
   // Live dot animation
   const pulseAnim = useRef(new Animated.Value(1)).current;
 
   useEffect(() => {
-    if (callStatus === 'CONNECTED') {
+    if (callStatus === 'CONNECTED' || mqttPreviewFrame?.dataUri) {
       const loop = Animated.loop(
         Animated.sequence([
           Animated.timing(pulseAnim, { toValue: 0.3, duration: 700, useNativeDriver: true }),
@@ -93,22 +148,37 @@ export const BackendRobotMonitorModal: React.FC<Props> = ({
       loop.start();
       return () => loop.stop();
     }
-  }, [callStatus, pulseAnim]);
+  }, [callStatus, mqttPreviewFrame?.dataUri, pulseAnim]);
 
-  // Native session negotiation when modal opens
+  const closeOwnedMonitorSession = useCallback(async () => {
+    const owned = ownedSessionRef.current;
+    ownedSessionRef.current = null;
+    if (owned?.sessionId) {
+      await mediaSessionApi
+        .endSession(owned.sessionId, 'MONITOR_VIEW_CLOSED', owned.viewerToken)
+        .catch(() => {});
+    }
+  }, []);
+
+  // 1. Luồng chính: Kết nối WebRTC LiveKit (Khớp FE_WEB_MAR src/features/media/robotCamera.js)
   useEffect(() => {
     if (!visible) {
+      void closeOwnedMonitorSession();
       setCallStatus('INIT');
+      setSessionMode('MONITOR');
       setMicEnabled(false);
       setAudioMuted(false);
       setErrorMsg(null);
       setSessionCredentials(null);
+      setMqttPreviewFrame(null);
       setIsNegotiating(false);
       return;
     }
 
     let isMounted = true;
-    const initSession = async () => {
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const initWebRtcCamera = async () => {
       if (!robot?.robotId) {
         setCallStatus('ERROR');
         setErrorMsg('Không xác định được ID của Robot');
@@ -120,47 +190,74 @@ export const BackendRobotMonitorModal: React.FC<Props> = ({
       setErrorMsg(null);
 
       try {
-        // 1. Kiểm tra danh sách phiên media đang mở trên BE
-        const existingSessions = await mediaSessionApi.getSessions().catch(() => []);
+        // Lấy token có quyền mở phiên MONITOR & đọc camera-preview.jpg (tự động cấp quyền Admin viewer nếu cần)
+        const viewerAuth = await mediaSessionApi.acquireCameraViewerAuth();
+        if (!isMounted) return;
+        viewerTokenRef.current = viewerAuth.token;
+
+        // Bước 1: GET /api/v1/media/configuration (Khớp robotCamera.js line 60)
+        const config = await mediaSessionApi.getConfiguration(viewerAuth.token);
+        if (!isMounted) return;
+        if (config?.enabled !== true) {
+          setCallStatus('ERROR');
+          setErrorMsg('Máy chủ chưa bật dịch vụ camera trực tiếp.');
+          setIsNegotiating(false);
+          return;
+        }
+
+        // Bước 2: GET /api/v1/media-sessions
+        const existingSessions = await mediaSessionApi
+          .getSessions(viewerAuth.token)
+          .catch(() => []);
+        if (!isMounted) return;
+
+        // Chỉ tái sử dụng phiên MONITOR do chính tài khoản này mở và còn hiệu lực
         let activeSession = existingSessions.find(
           (s) =>
             s.robotId === robot.robotId &&
-            (s.state === 'RINGING' || s.state === 'CONNECTING' || s.state === 'ACTIVE')
+            s.mode === 'MONITOR' &&
+            s.staffAccountId === viewerAuth.accountId &&
+            isOpenCameraSession(s)
         );
 
-        if (activeSession) {
-          if (activeSession.state === 'RINGING') {
-            try {
-              activeSession = await mediaSessionApi.acceptSession(activeSession.sessionId);
-            } catch (err) {
-              console.log('Error accepting session:', err);
-            }
-          }
-        } else {
-          // 2. Thử tạo phiên mới
+        // Xem camera đơn thuần không gọi accept cho cuộc SOS, không nâng ASSIST, không hủy job
+        // và không kết thúc phiên của Staff khác.
+
+        // Bước 3: POST /api/v1/media-sessions với mode MONITOR
+        if (!activeSession) {
           try {
-            activeSession = await mediaSessionApi.createSession({
-              robotId: robot.robotId,
-              mode: 'ASSIST',
-            });
-            if (activeSession.state === 'RINGING') {
-              activeSession = await mediaSessionApi.acceptSession(activeSession.sessionId);
+            const created = await mediaSessionApi.createSession(
+              {
+                robotId: robot.robotId,
+                mode: 'MONITOR',
+              },
+              viewerAuth.token
+            );
+            if (!isMounted) {
+              // Nếu modal đã đóng trong lúc request đang gửi, hủy phiên vừa tạo ngay lập tức
+              if (created?.sessionId) {
+                void mediaSessionApi
+                  .endSession(created.sessionId, 'MONITOR_VIEW_CLOSED', viewerAuth.token)
+                  .catch(() => {});
+              }
+              return;
+            }
+            activeSession = created;
+            if (activeSession?.sessionId) {
+              ownedSessionRef.current = {
+                sessionId: activeSession.sessionId,
+                viewerToken: viewerAuth.token,
+              };
             }
           } catch (createErr: any) {
-            const msg = createErr?.message || '';
+            // Nếu xung đột ROBOT_MEDIA_SESSION_ALREADY_OPEN (409), báo bận và cho thử lại
             if (
-              msg.includes('incident') ||
-              msg.includes('403') ||
-              msg.includes('AccessDenied') ||
-              msg.includes('require an accessible incident')
+              createErr?.status === 409 ||
+              String(createErr?.message || '').includes('ROBOT_MEDIA_SESSION_ALREADY_OPEN')
             ) {
-              if (isMounted) {
-                setCallStatus('ERROR');
-                setErrorMsg(
-                  'Robot chưa có sự cố khẩn cấp (SOS) hoặc phiên chưa được kích hoạt bởi Quản trị viên.'
-                );
-                setIsNegotiating(false);
-              }
+              setCallStatus('ERROR');
+              setErrorMsg('Robot đang bận truyền media (phiên khác đang diễn ra). Vui lòng thử lại sau.');
+              setIsNegotiating(false);
               return;
             }
             throw createErr;
@@ -168,13 +265,16 @@ export const BackendRobotMonitorModal: React.FC<Props> = ({
         }
 
         if (!activeSession?.sessionId) {
-          throw new Error('Không tạo hoặc mở được phiên đàm thoại cho Robot này');
+          throw new Error('Không mở được phiên xem camera cho Robot này.');
         }
 
-        // 3. Lấy LiveKit join token trực tiếp từ BE (giữ Staff JWT ngoài WebView)
-        const creds = await mediaSessionApi.getJoinToken(activeSession.sessionId);
+        // Bước 4: POST /api/v1/media-sessions/{sessionId}/join-token (Khớp robotCamera.js line 89)
+        const creds = await mediaSessionApi.getJoinToken(
+          activeSession.sessionId,
+          viewerAuth.token
+        );
         if (!creds?.url || !creds?.token) {
-          throw new Error('BE không cấp được LiveKit credentials');
+          throw new Error('Máy chủ không cấp được vé kết nối WebRTC LiveKit.');
         }
 
         if (isMounted) {
@@ -182,26 +282,110 @@ export const BackendRobotMonitorModal: React.FC<Props> = ({
             url: creds.url,
             token: creds.token,
             sessionId: activeSession.sessionId,
+            mode: activeSession.mode || sessionMode,
           });
           setCallStatus('CONNECTING');
           setIsNegotiating(false);
         }
       } catch (err: any) {
-        if (isMounted) {
-          console.log('Error negotiating media session:', err);
-          setCallStatus('ERROR');
-          setErrorMsg(err?.message || 'Không thể kết nối đến camera robot');
-          setIsNegotiating(false);
+        if (!isMounted) return;
+        const friendlyMsg = translateCameraError(err);
+        setCallStatus('ERROR');
+        setErrorMsg(friendlyMsg);
+        setIsNegotiating(false);
+
+        // Tự động thử kết nối lại sau 8 giây giống robotCamera.js nếu robot chưa kịp kết nối
+        if (err?.status !== 401 && err?.status !== 403) {
+          retryTimer = setTimeout(() => {
+            if (isMounted) {
+              setKeyReload((k) => k + 1);
+            }
+          }, 8000);
         }
       }
     };
 
-    void initSession();
+    void initWebRtcCamera();
 
     return () => {
       isMounted = false;
+      if (retryTimer) clearTimeout(retryTimer);
     };
-  }, [visible, robot?.robotId, keyReload]);
+  }, [visible, robot?.robotId, sessionMode, keyReload, closeOwnedMonitorSession]);
+
+  // 2. Luồng dự phòng & song song: chỉ polling GET /api/v1/jobs/{jobId}/camera-preview.jpg
+  // khi Staff thật sự chọn tab Ảnh MQTT (tránh kéo JPEG ngầm mỗi 1.8s lúc đang xem WebRTC)
+  useEffect(() => {
+    if (!visible || !robot?.robotId || cameraTab !== 'mqtt_preview') return;
+
+    let alive = true;
+    let pollTimer: ReturnType<typeof setTimeout> | null = null;
+    let cachedAuth: { token: string } | null = null;
+    let lastJobLookupAt = 0;
+
+    const pollJobCameraPreview = async () => {
+      try {
+        if (!cachedAuth) {
+          cachedAuth = await mediaSessionApi.acquireCameraViewerAuth();
+        }
+        if (!alive) return;
+
+        let targetJobId = activeJobId || activeJob?.jobId || resolvedJobId;
+        const now = Date.now();
+        if (!targetJobId && now - lastJobLookupAt >= 10_000) {
+          lastJobLookupAt = now;
+          targetJobId = await mediaSessionApi.findRobotActiveOrLatestJobId(
+            robot.robotId,
+            cachedAuth.token
+          );
+          if (alive && targetJobId) {
+            setResolvedJobId(targetJobId);
+          }
+        }
+
+        if (targetJobId) {
+          const preview = await mediaSessionApi.fetchJobCameraPreview(
+            targetJobId,
+            cachedAuth.token
+          );
+          if (!alive) return;
+
+          if (preview.status === 200 && preview.dataUri) {
+            setMqttPreviewFrame({
+              dataUri: preview.dataUri,
+              capturedAt: preview.capturedAt,
+              revision: preview.revision,
+            });
+            setMqttPreviewMessage(
+              preview.capturedAt
+                ? `Ảnh camera từ phiên quét lúc ${new Date(preview.capturedAt).toLocaleTimeString('vi-VN')}`
+                : `Đang nhận ảnh camera từ Robot (Job ${targetJobId.slice(0, 8)})`
+            );
+          } else if (preview.status === 204) {
+            setMqttPreviewMessage('Chưa có ảnh camera MQTT mới hoặc phiên quét đã dừng quá 10 giây.');
+          }
+        } else {
+          setMqttPreviewMessage('Chưa có phiên quét bản đồ đang chạy trên Robot.');
+        }
+      } catch {
+        cachedAuth = null;
+        if (alive) {
+          setMqttPreviewMessage('Đang kiểm tra luồng ảnh camera từ phiên quét...');
+        }
+      }
+
+      if (alive) {
+        pollTimer = setTimeout(pollJobCameraPreview, MQTT_PREVIEW_POLL_MS);
+      }
+    };
+
+    void pollJobCameraPreview();
+
+    return () => {
+      alive = false;
+      if (pollTimer) clearTimeout(pollTimer);
+    };
+  }, [visible, robot?.robotId, cameraTab, activeJobId, activeJob?.jobId, resolvedJobId]);
 
   const handleMessage = useCallback((event: WebViewMessageEvent) => {
     try {
@@ -229,8 +413,11 @@ export const BackendRobotMonitorModal: React.FC<Props> = ({
   }, []);
 
   const handleToggleMic = useCallback(() => {
-    sendCommand({ type: 'toggleMic' });
-  }, [sendCommand]);
+    Alert.alert(
+      'Chế độ xem camera (MONITOR)',
+      'Xem camera từ bản đồ chỉ truyền hình ảnh trực tiếp, không bật micro hoặc loa robot để đảm bảo an toàn vận hành. Đàm thoại hai chiều được kích hoạt trong phiên cứu hộ SOS hoặc cảnh báo sự cố.'
+    );
+  }, []);
 
   const handleToggleAudio = useCallback(() => {
     sendCommand({ type: 'toggleAudio' });
@@ -242,25 +429,87 @@ export const BackendRobotMonitorModal: React.FC<Props> = ({
     setKeyReload((k) => k + 1);
   }, []);
 
+  const handleModalClose = useCallback(() => {
+    void closeOwnedMonitorSession();
+    onClose();
+  }, [closeOwnedMonitorSession, onClose]);
+
   const baseUrl = apiClient.getBaseUrl();
-  const isConnected = callStatus === 'CONNECTED';
-  const battery = robot?.batteryPercent ?? robot?.batteryRaw;
+  const isWebRtcLive = callStatus === 'CONNECTED';
+  const hasMqttFallbackFrame = Boolean(mqttPreviewFrame?.dataUri);
+
+  const hasParentBatterySync = battery !== undefined;
+
+  useEffect(() => {
+    const targetRobotId = robot?.robotId;
+    if (!visible || !targetRobotId) {
+      setPolledBattery(null);
+      return;
+    }
+
+    // Nếu MapScreen đã đồng bộ pin xuống modal qua prop thì tránh poll song song trừ khi bấm tải lại
+    if (hasParentBatterySync && keyReload === 0) {
+      return;
+    }
+
+    let cancelled = false;
+    setPolledBattery((prev) => (prev?.robotId === targetRobotId ? prev : null));
+
+    const fetchBattery = async () => {
+      try {
+        const res = await robotApi.getRobotBattery(targetRobotId);
+        if (!cancelled && res && (!res.robotId || res.robotId === targetRobotId)) {
+          setPolledBattery(res);
+        }
+      } catch {
+        // Giữ dữ liệu pin gần nhất hoặc prop cha khi polling gặp lỗi mạng
+      }
+    };
+
+    void fetchBattery();
+    if (hasParentBatterySync) {
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const timer = setInterval(() => {
+      void fetchBattery();
+    }, BATTERY_REFRESH_INTERVAL_MS);
+
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [visible, robot?.robotId, keyReload, hasParentBatterySync]);
+
+  const effectiveBattery = pickNewerRobotBattery(battery, polledBattery, robot?.robotId);
+  const batteryDisplay = formatRobotBatteryDisplay(effectiveBattery, robot);
   const validPose = normalizeRobotPose(robotPose);
 
-  // Build the injectable HTML for LiveKit
   const htmlContent = useMemo(() => {
     return buildMediaCallHtml({
       baseUrl,
       livekitUrl: sessionCredentials?.url,
       livekitToken: sessionCredentials?.token,
       robotId: robot?.robotId,
-      mode: 'ASSIST',
+      mode: sessionCredentials?.mode || sessionMode,
       existingSessionId: sessionCredentials?.sessionId,
     });
-  }, [baseUrl, sessionCredentials, robot?.robotId]);
+  }, [baseUrl, sessionCredentials, robot?.robotId, sessionMode]);
+
+  const effectiveStatusLabel =
+    isWebRtcLive
+      ? '🟢 Trực tiếp (WebRTC)'
+      : hasMqttFallbackFrame
+        ? '🟢 Ảnh trực tiếp (MQTT)'
+        : statusLabel(callStatus);
+
+  const effectiveStatusColor =
+    isWebRtcLive || hasMqttFallbackFrame ? '#059669' : statusColor(callStatus);
 
   return (
-    <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
+    <Modal visible={visible} animationType="slide" onRequestClose={handleModalClose}>
       <View style={styles.container}>
         {/* HEADER */}
         <View style={styles.header}>
@@ -268,23 +517,25 @@ export const BackendRobotMonitorModal: React.FC<Props> = ({
             <Bot size={22} color="#38BDF8" />
             <View style={styles.identityText}>
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                {isConnected && (
+                {(isWebRtcLive || hasMqttFallbackFrame) && (
                   <Animated.View style={[styles.liveIndicator, { opacity: pulseAnim }]} />
                 )}
                 <Text style={styles.title} numberOfLines={1}>
-                  {robot?.robotName || robot?.robotCode || 'Robot AMR'}
+                  {robot?.robotName && robot.robotName !== 'string'
+                    ? robot.robotName
+                    : robot?.robotCode || 'Robot AMR'}
                 </Text>
               </View>
               <Text style={styles.subtitle} numberOfLines={1}>
                 {robot
-                  ? `${robot.robotCode} · ${robot.model} · ${robot.status}`
-                  : 'Kết nối LiveKit WebRTC trực tiếp'}
+                  ? `${robot.robotCode} · ${robot.status} · Chế độ ${sessionMode}`
+                  : 'Kết nối Camera Robot'}
               </Text>
             </View>
           </View>
           <TouchableOpacity
             style={styles.headerExitButton}
-            onPress={onClose}
+            onPress={handleModalClose}
             activeOpacity={0.8}
             accessibilityLabel="Thoát màn hình Robot"
           >
@@ -298,7 +549,14 @@ export const BackendRobotMonitorModal: React.FC<Props> = ({
           <View style={styles.statsRow}>
             <View style={styles.statCard}>
               <Text style={styles.statLabel}>PIN</Text>
-              <Text style={styles.statValue}>{battery == null ? '--' : `${battery}%`}</Text>
+              <Text style={[styles.statValue, { color: batteryDisplay.tintColor }]} numberOfLines={1}>
+                {batteryDisplay.detailText}
+              </Text>
+              {!!batteryDisplay.subText && (
+                <Text style={styles.statSubText} numberOfLines={1}>
+                  {batteryDisplay.subText}
+                </Text>
+              )}
             </View>
             <View style={styles.statCard}>
               <Text style={styles.statLabel}>TỌA ĐỘ NAV2</Text>
@@ -309,121 +567,220 @@ export const BackendRobotMonitorModal: React.FC<Props> = ({
               </Text>
             </View>
             <View style={styles.statCard}>
-              <Text style={styles.statLabel}>TRẠNG THÁI GỌI</Text>
+              <Text style={styles.statLabel}>TRẠNG THÁI CAMERA</Text>
               <Text
-                style={[styles.statValue, { color: statusColor(callStatus), fontSize: 12 }]}
+                style={[styles.statValue, { color: effectiveStatusColor, fontSize: 12 }]}
                 numberOfLines={1}
               >
-                {statusLabel(callStatus)}
+                {effectiveStatusLabel}
               </Text>
             </View>
           </View>
 
-          {/* ================= 1. LIVEKIT CAMERA & 2-WAY AUDIO TALK ================= */}
+          {/* ================= 1. CAMERA & 2-WAY AUDIO TALK ================= */}
           <View style={styles.cameraBox}>
             <View style={styles.cameraHeaderRow}>
               <View style={styles.cameraHeaderLeft}>
                 <Video size={16} color="#38BDF8" />
                 <Text style={styles.cameraHeaderTitle}>Camera & Đàm thoại Robot</Text>
               </View>
-              <View style={[styles.liveStatusTag, { backgroundColor: statusColor(callStatus) }]}>
-                <Text style={styles.liveStatusText}>{statusLabel(callStatus)}</Text>
+              <View style={[styles.liveStatusTag, { backgroundColor: effectiveStatusColor }]}>
+                <Text style={styles.liveStatusText}>{effectiveStatusLabel}</Text>
               </View>
             </View>
 
-            {/* Video Player (WebView LiveKit WebRTC) */}
-            <View style={styles.videoPlayerContainer}>
-              {visible && sessionCredentials && (
-                <WebView
-                  key={`${sessionCredentials.sessionId}-${keyReload}`}
-                  ref={webViewRef}
-                  source={{ html: htmlContent, baseUrl: 'https://mediassistrover.duckdns.org' }}
-                  style={styles.videoWebview}
-                  originWhitelist={['*']}
-                  javaScriptEnabled
-                  domStorageEnabled
-                  mediaPlaybackRequiresUserAction={false}
-                  allowsInlineMediaPlayback
-                  mediaCapturePermissionGrantType="grant"
-                  onShouldStartLoadWithRequest={() => true}
-                  onMessage={handleMessage}
-                  onError={(e: any) => {
-                    if (e?.nativeEvent?.code === -999) return;
-                    setCallStatus('ERROR');
-                    setErrorMsg(e.nativeEvent.description || 'Lỗi kết nối WebRTC');
-                  }}
-                />
-              )}
+            {/* Thanh chọn nguồn Camera đồng bộ với Web Admin (LiveMapping.jsx) */}
+            <View style={styles.sourceTabsRow}>
+              <TouchableOpacity
+                style={[
+                  styles.sourceTabBtn,
+                  cameraTab === 'webrtc' && styles.sourceTabBtnActive,
+                ]}
+                onPress={() => setCameraTab('webrtc')}
+                activeOpacity={0.8}
+              >
+                <Video size={12} color={cameraTab === 'webrtc' ? '#FFFFFF' : '#94A3B8'} />
+                <Text
+                  style={[
+                    styles.sourceTabText,
+                    cameraTab === 'webrtc' && styles.sourceTabTextActive,
+                  ]}
+                >
+                  WebRTC LiveKit
+                </Text>
+              </TouchableOpacity>
 
-              {/* Loading overlay when connecting */}
-              {!isConnected && callStatus !== 'ENDED' && callStatus !== 'ERROR' && (
-                <View style={styles.connectingOverlay}>
-                  <ActivityIndicator size="large" color="#38BDF8" />
-                  <Text style={styles.connectingText}>
-                    {isNegotiating ? 'Đang chuẩn bị phiên đàm thoại...' : statusLabel(callStatus)}
-                  </Text>
-                  <Text style={styles.connectingSubText}>
-                    {isNegotiating
-                      ? 'Đang xác thực và cấp vé LiveKit từ hệ thống...'
-                      : 'Đang kết nối camera và âm thanh từ Robot...'}
-                  </Text>
-                </View>
-              )}
+              <TouchableOpacity
+                style={[
+                  styles.sourceTabBtn,
+                  cameraTab === 'mqtt_preview' && styles.sourceTabBtnActive,
+                ]}
+                onPress={() => setCameraTab('mqtt_preview')}
+                activeOpacity={0.8}
+              >
+                <Camera size={12} color={cameraTab === 'mqtt_preview' ? '#FFFFFF' : '#94A3B8'} />
+                <Text
+                  style={[
+                    styles.sourceTabText,
+                    cameraTab === 'mqtt_preview' && styles.sourceTabTextActive,
+                  ]}
+                >
+                  Ảnh Quét Map (MQTT)
+                </Text>
+              </TouchableOpacity>
 
-              {/* Error overlay */}
-              {callStatus === 'ERROR' && (
-                <View style={styles.errorOverlay}>
-                  <WifiOff size={36} color="#EF4444" />
-                  <Text style={styles.errorTitle}>Lỗi kết nối Camera</Text>
-                  <Text style={styles.errorMsg} numberOfLines={3}>
-                    {errorMsg || 'Không thể kết nối LiveKit tới Robot'}
-                  </Text>
-                  <TouchableOpacity style={styles.retryBtn} onPress={handleReloadCall}>
-                    <RefreshCw size={14} color="#FFFFFF" />
-                    <Text style={styles.retryBtnText}>Thử lại</Text>
-                  </TouchableOpacity>
-                </View>
-              )}
+              <TouchableOpacity
+                style={[
+                  styles.sourceTabBtn,
+                  cameraTab === 'pi_lan' && styles.sourceTabBtnActive,
+                ]}
+                onPress={() => setCameraTab('pi_lan')}
+                activeOpacity={0.8}
+              >
+                <Radio size={12} color={cameraTab === 'pi_lan' ? '#FFFFFF' : '#94A3B8'} />
+                <Text
+                  style={[
+                    styles.sourceTabText,
+                    cameraTab === 'pi_lan' && styles.sourceTabTextActive,
+                  ]}
+                >
+                  Stream Pi (LAN)
+                </Text>
+              </TouchableOpacity>
             </View>
 
-            {/* Talk & Audio Controls Row */}
-            <View style={styles.audioControlsRow}>
-              <TouchableOpacity
-                style={[
-                  styles.audioBtn,
-                  micEnabled ? styles.micBtnActive : styles.audioBtnNormal,
-                ]}
-                onPress={handleToggleMic}
-                disabled={!isConnected}
-                activeOpacity={0.8}
-              >
-                {micEnabled ? <Mic size={18} color="#FFFFFF" /> : <MicOff size={18} color="#94A3B8" />}
-                <Text style={[styles.audioBtnText, micEnabled && { color: '#FFFFFF' }]}>
-                  {micEnabled ? 'Đang nói (Mic BẬT)' : 'Bật Mic nói'}
-                </Text>
-              </TouchableOpacity>
+            {/* Video Player Container */}
+            {cameraTab === 'pi_lan' ? (
+              <View style={{ padding: 8, backgroundColor: '#020617' }}>
+                <RobotCameraStreamView
+                  height={230}
+                  showControls
+                  robot={robot}
+                  battery={effectiveBattery}
+                />
+              </View>
+            ) : cameraTab === 'mqtt_preview' ? (
+              <View style={styles.videoPlayerContainer}>
+                {mqttPreviewFrame?.dataUri ? (
+                  <View style={{ flex: 1 }}>
+                    <Image
+                      source={{ uri: mqttPreviewFrame.dataUri }}
+                      style={styles.mqttPreviewImage}
+                      resizeMode="contain"
+                    />
+                    <View style={styles.mqttTimestampBadge}>
+                      <Text style={styles.mqttTimestampText}>{mqttPreviewMessage}</Text>
+                    </View>
+                  </View>
+                ) : (
+                  <View style={styles.connectingOverlay}>
+                    <Camera size={32} color="#38BDF8" />
+                    <Text style={styles.connectingText}>Camera phiên quét bản đồ (MQTT)</Text>
+                    <Text style={styles.connectingSubText}>{mqttPreviewMessage}</Text>
+                  </View>
+                )}
+              </View>
+            ) : (
+              <View style={styles.videoPlayerContainer}>
+                {visible && sessionCredentials && (
+                  <WebView
+                    key={`${sessionCredentials.sessionId}-${sessionCredentials.mode}-${keyReload}`}
+                    ref={webViewRef}
+                    source={{ html: htmlContent, baseUrl: 'https://mediassistrover.duckdns.org' }}
+                    style={styles.videoWebview}
+                    originWhitelist={['*']}
+                    javaScriptEnabled
+                    domStorageEnabled
+                    mediaPlaybackRequiresUserAction={false}
+                    allowsInlineMediaPlayback
+                    mediaCapturePermissionGrantType="deny"
+                    onShouldStartLoadWithRequest={() => true}
+                    onMessage={handleMessage}
+                    onError={(e: any) => {
+                      if (e?.nativeEvent?.code === -999) return;
+                      setCallStatus('ERROR');
+                      setErrorMsg(e.nativeEvent.description || 'Lỗi kết nối WebRTC');
+                    }}
+                  />
+                )}
 
-              <TouchableOpacity
-                style={[
-                  styles.audioBtn,
-                  audioMuted ? styles.audioMutedBtn : styles.audioBtnNormal,
-                ]}
-                onPress={handleToggleAudio}
-                disabled={!isConnected}
-                activeOpacity={0.8}
-              >
-                {audioMuted ? <VolumeX size={18} color="#EF4444" /> : <Volume2 size={18} color="#059669" />}
-                <Text style={[styles.audioBtnText, audioMuted && { color: '#EF4444' }]}>
-                  {audioMuted ? 'Loa đang TẮT' : 'Loa Robot BẬT'}
+                {/* Tự động hiển thị ảnh camera-preview.jpg (Fallback giống LiveMapping.jsx) khi WebRTC đang chờ hoặc bận */}
+                {!isWebRtcLive && hasMqttFallbackFrame && mqttPreviewFrame && (
+                  <View style={styles.fallbackPreviewOverlay}>
+                    <Image
+                      source={{ uri: mqttPreviewFrame.dataUri }}
+                      style={styles.mqttPreviewImage}
+                      resizeMode="contain"
+                    />
+                    <View style={styles.mqttTimestampBadge}>
+                      <Text style={styles.mqttTimestampText}>
+                        {mqttPreviewMessage} (Dự phòng MQTT)
+                      </Text>
+                    </View>
+                  </View>
+                )}
+
+                {/* Loading overlay when connecting and no fallback frame */}
+                {!isWebRtcLive &&
+                  !hasMqttFallbackFrame &&
+                  callStatus !== 'ENDED' &&
+                  callStatus !== 'ERROR' && (
+                    <View style={styles.connectingOverlay}>
+                      <ActivityIndicator size="large" color="#38BDF8" />
+                      <Text style={styles.connectingText}>
+                        {isNegotiating
+                          ? 'Đang mở phiên xem camera robot...'
+                          : statusLabel(callStatus)}
+                      </Text>
+                      <Text style={styles.connectingSubText}>
+                        {isNegotiating
+                          ? 'Đang xác thực /api/v1/media-sessions & cấp vé LiveKit...'
+                          : 'Đang kết nối luồng video trực tiếp từ Robot...'}
+                      </Text>
+                    </View>
+                  )}
+
+                {/* Error overlay when both WebRTC and MQTT preview are unavailable */}
+                {callStatus === 'ERROR' && !hasMqttFallbackFrame && (
+                  <View style={styles.errorOverlay}>
+                    <WifiOff size={36} color="#EF4444" />
+                    <Text style={styles.errorTitle}>Chưa nhận được tín hiệu Camera</Text>
+                    <Text style={styles.errorMsg} numberOfLines={3}>
+                      {errorMsg || 'Không thể kết nối LiveKit tới Robot'}
+                    </Text>
+                    <View style={{ flexDirection: 'row', gap: 8, marginTop: 6 }}>
+                      <TouchableOpacity style={styles.retryBtn} onPress={handleReloadCall}>
+                        <RefreshCw size={14} color="#FFFFFF" />
+                        <Text style={styles.retryBtnText}>Kết nối lại</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={[styles.retryBtn, { backgroundColor: '#334155' }]}
+                        onPress={() => setCameraTab('pi_lan')}
+                      >
+                        <Radio size={14} color="#FFFFFF" />
+                        <Text style={styles.retryBtnText}>Stream LAN</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                )}
+              </View>
+            )}
+
+            {/* View-Only Status & Reload Row (MONITOR never enables mic or speaker audio) */}
+            <View style={styles.audioControlsRow}>
+              <View style={[styles.audioBtn, styles.audioBtnNormal]}>
+                <MicOff size={18} color="#94A3B8" />
+                <Text style={styles.audioBtnText}>
+                  Chỉ xem camera · Không thu/phát âm thanh
                 </Text>
-              </TouchableOpacity>
+              </View>
 
               <TouchableOpacity
                 style={styles.refreshCallBtn}
                 onPress={handleReloadCall}
-                accessibilityLabel="Kết nối lại cuộc gọi"
+                accessibilityLabel="Kết nối lại camera"
               >
-                <RefreshCw size={16} color="#0284C7" />
+                <RefreshCw size={16} color="#38BDF8" />
               </TouchableOpacity>
             </View>
           </View>
@@ -498,6 +855,7 @@ const styles = StyleSheet.create({
   },
   statLabel: { color: '#94A3B8', fontWeight: '700', fontSize: 9 },
   statValue: { color: '#FFFFFF', fontWeight: '800', fontSize: 13, marginTop: 3 },
+  statSubText: { color: '#94A3B8', fontWeight: '600', fontSize: 10, marginTop: 2 },
 
   // Camera & Talk Card
   cameraBox: {
@@ -538,15 +896,80 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: '700',
   },
+  sourceTabsRow: {
+    flexDirection: 'row',
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    backgroundColor: '#0F172A',
+    borderBottomWidth: 1,
+    borderBottomColor: '#1E293B',
+  },
+  sourceTabBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 5,
+    paddingVertical: 6,
+    paddingHorizontal: 6,
+    borderRadius: 8,
+    backgroundColor: '#1E293B',
+    borderWidth: 1,
+    borderColor: '#334155',
+  },
+  sourceTabBtnActive: {
+    backgroundColor: '#0284C7',
+    borderColor: '#38BDF8',
+  },
+  sourceTabText: {
+    color: '#94A3B8',
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  sourceTabTextActive: {
+    color: '#FFFFFF',
+  },
   videoPlayerContainer: {
     width: '100%',
-    height: 240,
+    height: 250,
     backgroundColor: '#000000',
     position: 'relative',
   },
   videoWebview: {
     flex: 1,
     backgroundColor: '#000000',
+  },
+  fallbackPreviewOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: '#000000',
+  },
+  mqttPreviewImage: {
+    width: '100%',
+    height: '100%',
+    backgroundColor: '#000000',
+  },
+  mqttTimestampBadge: {
+    position: 'absolute',
+    bottom: 8,
+    left: 8,
+    right: 8,
+    backgroundColor: 'rgba(15, 23, 42, 0.85)',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: 'rgba(56, 189, 248, 0.3)',
+  },
+  mqttTimestampText: {
+    color: '#E2E8F0',
+    fontSize: 10,
+    fontWeight: '600',
+    textAlign: 'center',
   },
   connectingOverlay: {
     position: 'absolute',
@@ -558,15 +981,18 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
+    paddingHorizontal: 16,
   },
   connectingText: {
     color: '#FFFFFF',
     fontWeight: '700',
     fontSize: 13,
+    textAlign: 'center',
   },
   connectingSubText: {
     color: '#94A3B8',
     fontSize: 11,
+    textAlign: 'center',
   },
   errorOverlay: {
     position: 'absolute',
@@ -598,7 +1024,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 7,
     borderRadius: 8,
-    marginTop: 6,
   },
   retryBtnText: {
     color: '#FFFFFF',

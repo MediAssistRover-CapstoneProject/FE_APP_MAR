@@ -2,6 +2,7 @@ import { apiClient } from '../client';
 import { ENDPOINTS } from '../endpoints';
 import {
   MapResponse,
+  MapPresentationPublishedResponse,
   FloorResponse,
   RoomDto,
   ZoneDto,
@@ -46,6 +47,17 @@ export const facilityApi = {
 
   async getMapImageMetadata(id: string): Promise<Record<string, any>> {
     return apiClient.get<Record<string, any>>(ENDPOINTS.FACILITY.MAP_IMAGE_METADATA(id));
+  },
+
+  async getMapPublishedPresentation(id: string): Promise<MapPresentationPublishedResponse | null> {
+    try {
+      return await apiClient.get<MapPresentationPublishedResponse>(
+        ENDPOINTS.FACILITY.MAP_PRESENTATION_PUBLISHED(id)
+      );
+    } catch (error: any) {
+      if (error?.status === 404) return null;
+      throw error;
+    }
   },
 
   async getAllMaps(): Promise<MapResponse[]> {

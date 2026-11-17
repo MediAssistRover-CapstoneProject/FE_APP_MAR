@@ -1,6 +1,6 @@
 import { apiClient } from '../client';
 import { ENDPOINTS } from '../endpoints';
-import { RobotDto, PageResponse } from '../types';
+import { RobotDto, RobotBatteryResponse, PageResponse } from '../types';
 
 export interface RobotPoseDto {
   locationId?: string;
@@ -75,6 +75,11 @@ export const robotApi = {
   // Chi tiết robot theo ID
   async getRobotDetail(id: string): Promise<RobotDto> {
     return apiClient.get<RobotDto>(ENDPOINTS.ROBOTS.DETAIL(id));
+  },
+
+  // Thông số pin mới nhất & % pin ước lượng của robot (GET /robots/{id}/battery)
+  async getRobotBattery(id: string): Promise<RobotBatteryResponse> {
+    return apiClient.get<RobotBatteryResponse>(ENDPOINTS.ROBOTS.BATTERY(id));
   },
 
   // Lấy snapshot trạng thái + tọa độ định vị AMCL/Nav2 thời gian thực (GET /robots/{id}/snapshot)

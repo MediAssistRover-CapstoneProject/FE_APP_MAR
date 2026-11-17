@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -10,20 +10,31 @@ import {
   Dimensions,
   ActivityIndicator,
   Alert,
+  AppState,
+  AppStateStatus,
   Platform,
 } from 'react-native';
+import { useIsFocused } from '@react-navigation/native';
 import { Colors, Spacing, BorderRadius, Shadows, Typography } from '../../constants/theme';
 import { StaffHeader } from '../../components/common/StaffHeader';
 import { robotApi, RobotPoseDto, RobotSnapshotResponse } from '../../api/modules/robot.api';
+import {
+  getMapPollingPlan,
+  shouldFetchBatteryTelemetry,
+  shouldFetchLocationHistoryFallback,
+} from '../../api/pollingPolicy';
 import { normalizeRobotPose } from '../../components/map/robotPose';
+import { formatRobotBatteryDisplay } from '../../components/map/robotBattery';
 import { deliveryApi } from '../../api/modules/delivery.api';
 import { scheduleApi } from '../../api/modules/schedule.api';
 import { facilityApi } from '../../api/modules/facility.api';
 import { dispatchApi } from '../../api/modules/dispatch.api';
 import {
   RobotDto,
+  RobotBatteryResponse,
   DeliveryResponse,
   MapResponse,
+  MapPresentationPublishedResponse,
   FloorResponse,
   EndpointResponse,
   RoomDto,
@@ -145,6 +156,16 @@ const getJobDisplayInfo = (job: JobResponse, epList: EndpointResponse[]) => {
 };
 
 export const MapScreen: React.FC = () => {
+  const isFocused = useIsFocused();
+  const [appState, setAppState] = useState<AppStateStatus>(
+    (AppState.currentState as AppStateStatus) || 'active'
+  );
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (nextState) => {
+      setAppState(nextState);
+    });
+    return () => sub.remove();
+  }, []);
   const [currentTime, setCurrentTime] = useState('');
   const [selectedRoom, setSelectedRoom] = useState<Room | null>(null);
   const [showRoomSheet, setShowRoomSheet] = useState(false);
@@ -153,8 +174,6 @@ export const MapScreen: React.FC = () => {
   const [showConfirmModal, setShowConfirmModal] = useState(false);
   const [showSOSCall, setShowSOSCall] = useState(false);
   const [showSOSStream, setShowSOSStream] = useState(false);
-  const [showScheduleSheet, setShowScheduleSheet] = useState(false);
-  const [showLocationSheet, setShowLocationSheet] = useState(false);
   const [showRobotMonitor, setShowRobotMonitor] = useState(false);
   const [isExpanded, setIsExpanded] = useState(true);
   const [robotStatus, setRobotStatus] = useState<'running' | 'paused'>('running');
@@ -168,6 +187,7 @@ export const MapScreen: React.FC = () => {
   const [activeFloor, setActiveFloor] = useState<FloorResponse | null>(null);
   const [availableMaps, setAvailableMaps] = useState<MapResponse[]>([]);
   const [mapImageMetadata, setMapImageMetadata] = useState<Record<string, any> | null>(null);
+  const [mapPresentation, setMapPresentation] = useState<MapPresentationPublishedResponse | null>(null);
   const [backendFloors, setBackendFloors] = useState<FloorResponse[]>([]);
   const [endpoints, setEndpoints] = useState<EndpointResponse[]>([]);
   const [backendZones, setBackendZones] = useState<ZoneDto[]>([]);
@@ -175,9 +195,6 @@ export const MapScreen: React.FC = () => {
   const [isLoadingFacility, setIsLoadingFacility] = useState(false);
   const [facilityError, setFacilityError] = useState<string | null>(null);
   const [showMapPicker, setShowMapPicker] = useState(false);
-  const [schedules, setSchedules] = useState<ScheduleResponse[]>([]);
-  const [isLoadingSchedules, setIsLoadingSchedules] = useState(false);
-  const [actionScheduleId, setActionScheduleId] = useState<string | null>(null);
 
   // Jobs & Dispatch state (Nhiệm vụ & Điều phối Robot)
   const [jobs, setJobs] = useState<JobResponse[]>([]);
@@ -262,48 +279,106 @@ export const MapScreen: React.FC = () => {
   }, []);
 
   const [robotData, setRobotData] = useState<RobotDto | null>(null);
+  const [robotBattery, setRobotBattery] = useState<RobotBatteryResponse | null>(null);
   const [robotSnapshot, setRobotSnapshot] = useState<RobotSnapshotResponse | null>(null);
   const [robotPose, setRobotPose] = useState<RobotPoseDto | null>(null);
   const [isPoseLive, setIsPoseLive] = useState(false);
   const [isLoadingRobot, setIsLoadingRobot] = useState(false);
   const [deliveryRequests, setDeliveryRequests] = useState<DeliveryResponse[]>([]);
   const [isLoadingQueue, setIsLoadingQueue] = useState(false);
+  const activeRobotIdRef = useRef<string | null>(null);
+  const telemetryRequestSeqRef = useRef(0);
+  const lastBatteryFetchRef = useRef<{ robotId: string; at: number } | null>(null);
+  const lastHistoryFallbackRef = useRef<{ robotId: string; at: number } | null>(null);
+  const wasTelemetryActiveRef = useRef(false);
 
-  const fetchRobotPoseById = useCallback(async (robotId: string) => {
-    try {
-      const snapshot = await robotApi.getRobotSnapshot(robotId);
-      setRobotSnapshot(snapshot);
-      if (snapshot?.robot) {
-        setRobotData(snapshot.robot);
+  const fetchRobotPoseById = useCallback(
+    async (robotId: string, options?: { forceBattery?: boolean }) => {
+      activeRobotIdRef.current = robotId;
+      const seq = ++telemetryRequestSeqRef.current;
+      const now = Date.now();
+      const shouldFetchBattery = shouldFetchBatteryTelemetry(
+        lastBatteryFetchRef.current?.robotId === robotId ? lastBatteryFetchRef.current.at : null,
+        now,
+        Boolean(options?.forceBattery)
+      );
+
+      const snapshotPromise = robotApi.getRobotSnapshot(robotId);
+      const batteryPromise = shouldFetchBattery
+        ? robotApi.getRobotBattery(robotId)
+        : Promise.resolve(null);
+
+      const [snapshotResult, batteryResult] = await Promise.allSettled([
+        snapshotPromise,
+        batteryPromise,
+      ]);
+
+      if (activeRobotIdRef.current !== robotId || seq !== telemetryRequestSeqRef.current) return;
+
+      if (shouldFetchBattery) {
+        if (batteryResult.status === 'fulfilled' && batteryResult.value) {
+          const bat = batteryResult.value;
+          if (!bat.robotId || bat.robotId === robotId) {
+            lastBatteryFetchRef.current = { robotId, at: Date.now() };
+            setRobotBattery(bat);
+          }
+        } else if (batteryResult.status === 'rejected') {
+          setRobotBattery((prev) => (prev?.robotId === robotId ? prev : null));
+        }
       }
-      const pose = normalizeRobotPose(snapshot?.latestPose);
-      if (pose) {
-        setRobotPose(pose);
-        setIsPoseLive(
-          Boolean(snapshot?.mqttConnected && snapshot?.heartbeatFresh && pose.fresh !== false)
-        );
+
+      const snapshotSucceeded = snapshotResult.status === 'fulfilled';
+      if (snapshotSucceeded) {
+        const snapshot = snapshotResult.value;
+        setRobotSnapshot(snapshot);
+        if (snapshot?.robot) {
+          setRobotData(snapshot.robot);
+        }
+        const pose = normalizeRobotPose(snapshot?.latestPose);
+        if (pose) {
+          setRobotPose(pose);
+          setIsPoseLive(
+            Boolean(snapshot?.mqttConnected && snapshot?.heartbeatFresh && pose.fresh !== false)
+          );
+          return;
+        }
+      }
+
+      const canRunHistoryFallback = shouldFetchLocationHistoryFallback(
+        snapshotSucceeded,
+        lastHistoryFallbackRef.current?.robotId === robotId
+          ? lastHistoryFallbackRef.current.at
+          : null,
+        Date.now()
+      );
+      if (!canRunHistoryFallback) {
+        if (snapshotSucceeded) {
+          setIsPoseLive(false);
+        }
         return;
       }
-    } catch {
-      // Fallback sang location-history nếu snapshot chưa khả dụng
-    }
 
-    try {
-      const history = await robotApi.getRobotLocationHistory(robotId, 0, 1);
-      const lastPose = normalizeRobotPose(history?.content?.[0]);
-      if (lastPose) {
-        setRobotPose(lastPose);
-        setIsPoseLive(Boolean(lastPose.fresh));
-      } else {
-        setRobotPose(null);
+      try {
+        lastHistoryFallbackRef.current = { robotId, at: Date.now() };
+        const history = await robotApi.getRobotLocationHistory(robotId, 0, 1);
+        if (activeRobotIdRef.current !== robotId || seq !== telemetryRequestSeqRef.current) return;
+        const lastPose = normalizeRobotPose(history?.content?.[0]);
+        if (lastPose) {
+          setRobotPose(lastPose);
+          setIsPoseLive(Boolean(lastPose.fresh));
+        } else {
+          setRobotPose(null);
+          setIsPoseLive(false);
+        }
+      } catch {
+        if (activeRobotIdRef.current !== robotId || seq !== telemetryRequestSeqRef.current) return;
+        // An old pose must not keep appearing as a live location after a failed read.
         setIsPoseLive(false);
+        setRobotPose((previous) => (previous?.robotId === robotId ? previous : null));
       }
-    } catch {
-      // An old pose must not keep appearing as a live location after a failed read.
-      setIsPoseLive(false);
-      setRobotPose(previous => previous?.robotId === robotId ? previous : null);
-    }
-  }, []);
+    },
+    []
+  );
 
   const fetchRobot = useCallback(async () => {
     setIsLoadingRobot(true);
@@ -315,8 +390,12 @@ export const MapScreen: React.FC = () => {
         || robots[0]
         || null;
       setRobotData(selected);
+      activeRobotIdRef.current = selected?.robotId || null;
+      setRobotBattery((prev) =>
+        selected?.robotId && prev?.robotId === selected.robotId ? prev : null
+      );
       if (selected?.robotId) {
-        await fetchRobotPoseById(selected.robotId);
+        await fetchRobotPoseById(selected.robotId, { forceBattery: true });
       }
     } catch (err) {
       console.log('Error fetching robots:', err);
@@ -325,13 +404,44 @@ export const MapScreen: React.FC = () => {
     }
   }, [fetchRobotPoseById]);
 
+  const robotBatteryDisplay = useMemo(
+    () => formatRobotBatteryDisplay(robotBattery, robotData),
+    [robotBattery, robotData]
+  );
+
+  const mapPollingPlan = getMapPollingPlan({
+    isFocused,
+    isMonitorOpen: showRobotMonitor,
+    appState,
+    robotStatus: robotData?.status,
+    hasActiveJob: Boolean(
+      robotSnapshot?.activeJobId ||
+        jobs.some((job) => job.status === 'RUNNING' || job.status === 'QUEUED')
+    ),
+  });
+
   useEffect(() => {
-    if (!robotData?.robotId) return;
+    if (!mapPollingPlan.active || !robotData?.robotId) {
+      wasTelemetryActiveRef.current = false;
+      return;
+    }
+
+    // Khi quay lại tab Bản đồ hoặc app trở lại foreground -> làm mới ngay vị trí & pin
+    if (!wasTelemetryActiveRef.current) {
+      wasTelemetryActiveRef.current = true;
+      void fetchRobotPoseById(robotData.robotId, { forceBattery: true });
+    }
+
     const interval = setInterval(() => {
-      fetchRobotPoseById(robotData.robotId);
-    }, 3000);
+      void fetchRobotPoseById(robotData.robotId);
+    }, mapPollingPlan.intervalMs);
     return () => clearInterval(interval);
-  }, [robotData?.robotId, fetchRobotPoseById]);
+  }, [
+    robotData?.robotId,
+    mapPollingPlan.active,
+    mapPollingPlan.intervalMs,
+    fetchRobotPoseById,
+  ]);
 
   const fetchFacilityData = useCallback(async () => {
     setIsLoadingFacility(true);
@@ -397,6 +507,7 @@ export const MapScreen: React.FC = () => {
     let mounted = true;
     if (!activeMap) {
       setMapImageMetadata(null);
+      setMapPresentation(null);
       return;
     }
     facilityApi
@@ -407,22 +518,18 @@ export const MapScreen: React.FC = () => {
       .catch(() => {
         if (mounted) setMapImageMetadata(null);
       });
+    facilityApi
+      .getMapPublishedPresentation(activeMap.mapId)
+      .then((pres) => {
+        if (mounted) setMapPresentation(pres);
+      })
+      .catch(() => {
+        if (mounted) setMapPresentation(null);
+      });
     return () => {
       mounted = false;
     };
   }, [activeMap]);
-
-  const fetchSchedules = useCallback(async () => {
-    setIsLoadingSchedules(true);
-    try {
-      const result = await scheduleApi.getAllSchedules();
-      setSchedules(result);
-    } catch (err) {
-      console.log('Error fetching schedules:', err);
-    } finally {
-      setIsLoadingSchedules(false);
-    }
-  }, []);
 
   const fetchDeliveryQueue = useCallback(async () => {
     setIsLoadingQueue(true);
@@ -435,25 +542,6 @@ export const MapScreen: React.FC = () => {
       setIsLoadingQueue(false);
     }
   }, []);
-
-  const handleToggleSchedule = async (scheduleItem: ScheduleResponse) => {
-    setActionScheduleId(scheduleItem.scheduleId);
-    try {
-      if (scheduleItem.status === 'ACTIVE') {
-        await scheduleApi.pauseSchedule(scheduleItem.scheduleId);
-        Alert.alert('Thành công', `Đã tạm dừng lịch trình "${scheduleItem.scheduleName}".`);
-      } else {
-        await scheduleApi.activateSchedule(scheduleItem.scheduleId);
-        Alert.alert('Thành công', `Đã kích hoạt lịch trình "${scheduleItem.scheduleName}".`);
-      }
-      await fetchSchedules();
-    } catch (err: any) {
-      console.log('Error toggling schedule:', err);
-      Alert.alert('Lỗi', err?.message || 'Không thể đổi trạng thái lịch trình');
-    } finally {
-      setActionScheduleId(null);
-    }
-  };
 
   const fetchJobs = useCallback(async () => {
     setIsLoadingJobs(true);
@@ -563,9 +651,8 @@ export const MapScreen: React.FC = () => {
   useEffect(() => {
     fetchRobot();
     fetchFacilityData();
-    fetchSchedules();
     fetchJobs();
-  }, [fetchRobot, fetchFacilityData, fetchSchedules, fetchJobs]);
+  }, [fetchRobot, fetchFacilityData, fetchJobs]);
 
   useEffect(() => {
     if (showQueueSheet) {
@@ -573,12 +660,6 @@ export const MapScreen: React.FC = () => {
       fetchJobs();
     }
   }, [showQueueSheet, fetchDeliveryQueue, fetchJobs]);
-
-  useEffect(() => {
-    if (showScheduleSheet) {
-      fetchSchedules();
-    }
-  }, [showScheduleSheet, fetchSchedules]);
 
   const handleConfirmPause = useCallback(() => {
     setRobotStatus('paused');
@@ -656,7 +737,7 @@ export const MapScreen: React.FC = () => {
 
             <View style={styles.heroBatteryBadge}>
               <Text style={styles.heroBatteryText}>
-                🔋 {robotData?.batteryPercent ?? robotData?.batteryRaw ?? '--'}%
+                🔋 {robotBatteryDisplay.badgeText}
               </Text>
             </View>
           </View>
@@ -706,19 +787,7 @@ export const MapScreen: React.FC = () => {
               <Text style={styles.heroActionLabel}>Camera</Text>
             </TouchableOpacity>
 
-            {/* 3. Lịch trình */}
-            <TouchableOpacity
-              style={styles.heroActionCol}
-              onPress={() => setShowScheduleSheet(true)}
-              activeOpacity={0.8}
-            >
-              <View style={styles.heroActionBtn}>
-                <Calendar size={20} color="#FFFFFF" strokeWidth={2} />
-              </View>
-              <Text style={styles.heroActionLabel}>Lịch trình</Text>
-            </TouchableOpacity>
-
-            {/* 4. Dừng khẩn */}
+            {/* 3. Dừng khẩn */}
             <TouchableOpacity
               style={styles.heroActionCol}
               onPress={() => {
@@ -768,14 +837,6 @@ export const MapScreen: React.FC = () => {
                   <Text style={styles.mapHeaderPillText}>Đổi map</Text>
                 </TouchableOpacity>
               )}
-              <TouchableOpacity
-                style={styles.mapHeaderPill}
-                onPress={() => setShowLocationSheet(true)}
-                activeOpacity={0.75}
-              >
-                <Navigation size={12} color={Colors.textPrimary} />
-                <Text style={styles.mapHeaderPillText}>Tọa độ</Text>
-              </TouchableOpacity>
             </View>
           </View>
 
@@ -785,6 +846,7 @@ export const MapScreen: React.FC = () => {
               <BackendHospitalMap
                 map={activeMap}
                 metadata={mapImageMetadata}
+                presentation={mapPresentation}
                 endpoints={activeMapEndpoints}
                 zones={backendZones}
                 token={authToken}
@@ -987,7 +1049,7 @@ export const MapScreen: React.FC = () => {
                           }}
                           activeOpacity={0.75}
                         >
-                          <View style={[styles.queueNumberBadge, { backgroundColor: Colors.primary }]}>
+                          <View style={[styles.queueNumberBadge, { backgroundColor: Colors.actionSurface }]}>
                             <Text style={styles.queueNumberText}>{idx + 1}</Text>
                           </View>
                           <View style={styles.queueCardContent}>
@@ -1276,243 +1338,12 @@ export const MapScreen: React.FC = () => {
 
       <SOSStreamModal
         visible={showSOSStream}
+        robotId={robotData?.robotId}
+        battery={robotBattery}
         robotName={robotData?.robotName || 'Robot chưa xác định'}
         location={selectedRoom?.name || 'Chưa có vị trí từ Backend'}
         onClose={() => setShowSOSStream(false)}
       />
-
-      {/* ========================================================
-          MODAL 6: LỊCH TRÌNH HOẠT ĐỘNG ROBOT (Staff Schedules)
-      ======================================================== */}
-      <Modal visible={showScheduleSheet} transparent animationType="slide">
-        <View style={styles.modalBackdrop}>
-          <View style={[styles.sheetContainer, { maxHeight: SCREEN_HEIGHT * 0.82 }]}>
-            <View style={styles.sheetHandle} />
-
-            <View style={styles.sheetHeaderRow}>
-              <View>
-                <Text style={styles.sheetCategoryLabel}>HỆ THỐNG ĐIỀU HÀNH · LỊCH TRÌNH</Text>
-                <Text style={styles.queueSheetTitle}>
-                  Lịch trình định kỳ robot ({schedules.length})
-                </Text>
-              </View>
-              {isLoadingSchedules ? (
-                <ActivityIndicator size="small" color={Colors.primary} />
-              ) : (
-                <TouchableOpacity onPress={fetchSchedules} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                  <RefreshCw size={16} color={Colors.primary} />
-                </TouchableOpacity>
-              )}
-            </View>
-
-            <ScrollView showsVerticalScrollIndicator={false} style={{ marginVertical: 8 }}>
-              {schedules.length > 0 ? (
-                schedules.map((sch) => {
-                    const isActive = sch.status === 'ACTIVE';
-                    const isToggling = actionScheduleId === sch.scheduleId;
-                    return (
-                      <View key={sch.scheduleId} style={styles.scheduleCard}>
-                        <View style={styles.scheduleCardTop}>
-                          <View style={styles.scheduleIconCircle}>
-                            <Calendar size={18} color={Colors.primary} />
-                          </View>
-                          <View style={{ flex: 1 }}>
-                            <Text style={styles.scheduleTitle}>{sch.scheduleName}</Text>
-                            <Text style={styles.scheduleCode}>
-                              {sch.scheduleCode} · {sch.scheduleType}
-                            </Text>
-                          </View>
-                          <View style={[styles.scheduleStatusBadge, isActive ? styles.badgeGreen : styles.badgeOrange]}>
-                            <Text style={[styles.scheduleStatusText, isActive ? styles.textGreen : styles.textOrange]}>
-                              {isActive ? 'Đang chạy' : 'Tạm dừng'}
-                            </Text>
-                          </View>
-                        </View>
-
-                        <View style={styles.scheduleMetaGrid}>
-                          <View style={styles.scheduleMetaItem}>
-                            <Text style={styles.scheduleMetaLabel}>CHU KỲ</Text>
-                            <Text style={styles.scheduleMetaVal}>
-                              {sch.cronExpression || (sch.intervalSec ? `Mỗi ${Math.round(sch.intervalSec / 60)} phút` : 'Định kỳ')}
-                            </Text>
-                          </View>
-                          <View style={styles.scheduleMetaItem}>
-                            <Text style={styles.scheduleMetaLabel}>LẦN CHẠY TIẾP</Text>
-                            <Text style={styles.scheduleMetaVal}>
-                              {sch.nextRunAt ? new Date(sch.nextRunAt).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : 'Theo ca trực'}
-                            </Text>
-                          </View>
-                        </View>
-
-                        <TouchableOpacity
-                          style={[styles.scheduleToggleBtn, isActive ? styles.scheduleBtnPause : styles.scheduleBtnResume]}
-                          onPress={() => handleToggleSchedule(sch)}
-                          activeOpacity={0.8}
-                          disabled={isToggling}
-                        >
-                          {isToggling ? (
-                            <ActivityIndicator size="small" color={isActive ? '#D97706' : '#059669'} />
-                          ) : (
-                            <Text style={[styles.scheduleToggleBtnText, isActive ? styles.textOrange : styles.textGreen]}>
-                              {isActive ? '⏸ Tạm dừng lịch trình' : '▶ Kích hoạt lại'}
-                            </Text>
-                          )}
-                        </TouchableOpacity>
-                      </View>
-                    );
-                  })
-              ) : (
-                <View style={styles.backendMapState}>
-                  <Text style={styles.backendMapStateText}>Backend chưa có lịch trình.</Text>
-                </View>
-              )}
-            </ScrollView>
-
-            <TouchableOpacity
-              style={styles.sheetCloseButton}
-              onPress={() => setShowScheduleSheet(false)}
-              activeOpacity={0.8}
-            >
-              <Text style={styles.sheetCloseButtonText}>Đóng</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
-
-      {/* ========================================================
-          MODAL 7: TỌA ĐỘ VÀ VỊ TRÍ ROBOT NAV2 (Telemetry)
-      ======================================================== */}
-      <Modal visible={showLocationSheet} transparent animationType="slide">
-        <View style={styles.modalBackdrop}>
-          <View style={[styles.sheetContainer, { maxHeight: SCREEN_HEIGHT * 0.85 }]}>
-            <View style={styles.sheetHandle} />
-
-            <View style={styles.sheetHeaderRow}>
-              <View>
-                <Text style={styles.sheetCategoryLabel}>ĐỊNH VỊ REAL-TIME · TELEMETRY</Text>
-                <Text style={styles.queueSheetTitle}>Vị trí & Tọa độ Robot Nav2</Text>
-              </View>
-              <TouchableOpacity
-                onPress={() => {
-                  fetchRobot();
-                  fetchFacilityData();
-                }}
-                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-              >
-                <RefreshCw size={16} color={Colors.primary} />
-              </TouchableOpacity>
-            </View>
-
-            <ScrollView showsVerticalScrollIndicator={false} style={{ marginVertical: 8 }}>
-              {/* Robot Identity Box */}
-              <View style={styles.telemetryRobotCard}>
-                <View style={styles.telemetryRobotLeft}>
-                  <View style={styles.telemetryRobotAvatar}>
-                    <Text style={{ fontSize: 24 }}>🤖</Text>
-                  </View>
-                  <View>
-                    <Text style={styles.telemetryRobotName}>
-                      {robotData?.robotName || 'Chưa có dữ liệu robot'}
-                    </Text>
-                    <Text style={styles.telemetryRobotCode}>
-                      Mã: {robotData?.robotCode || 'Chưa cập nhật'} · Model: {robotData?.model || 'Chưa cập nhật'}
-                    </Text>
-                  </View>
-                </View>
-                <View style={[styles.scheduleStatusBadge, styles.badgeGreen]}>
-                  <Text style={[styles.scheduleStatusText, styles.textGreen]}>
-                    {robotData?.status === 'OFFLINE' ? 'OFFLINE' : 'ONLINE'}
-                  </Text>
-                </View>
-              </View>
-
-              {/* Map & Floor Telemetry */}
-              <View style={styles.locationDetailSection}>
-                <Text style={styles.locationSectionTitle}>BẢN ĐỒ & KHÔNG GIAN BỆNH VIỆN</Text>
-                <View style={styles.telemetryGrid}>
-                  <View style={styles.telemetryGridItem}>
-                    <Text style={styles.telemetryLabel}>TẦNG HIỆN TẠI</Text>
-                    <Text style={styles.telemetryValue}>
-                      {activeFloor?.floorName || 'Hospital Ground Floor (F1)'}
-                    </Text>
-                  </View>
-                  <View style={styles.telemetryGridItem}>
-                    <Text style={styles.telemetryLabel}>BẢN ĐỒ NAV2</Text>
-                    <Text style={styles.telemetryValue}>
-                      {activeMap?.mapName || 'Hospital F1 - Gazebo Nav2 V2'}
-                    </Text>
-                  </View>
-                  <View style={styles.telemetryGridItem}>
-                    <Text style={styles.telemetryLabel}>KÍCH THƯỚC MAP</Text>
-                    <Text style={styles.telemetryValue}>
-                      {activeMap?.widthM || 5.0}m × {activeMap?.heightM || 3.0}m ({activeMap?.resolutionMPerPixel || 0.004} m/px)
-                    </Text>
-                  </View>
-                  <View style={styles.telemetryGridItem}>
-                    <Text style={styles.telemetryLabel}>KHUNG THAM CHIẾU</Text>
-                    <Text style={styles.telemetryValue}>frame_id: "map"</Text>
-                  </View>
-                </View>
-              </View>
-
-              {/* Exact Nav2 Coordinates */}
-              <View style={styles.locationDetailSection}>
-                <Text style={styles.locationSectionTitle}>TỌA ĐỘ VẬT LÝ NAV2 (ODOMETRY / SLAM)</Text>
-                <View style={styles.coordsRow}>
-                  <View style={styles.coordBox}>
-                    <Text style={styles.coordLabel}>TRỤC X</Text>
-                    <Text style={styles.coordVal}>
-                      {robotPose ? `${Number(robotPose.xM).toFixed(3)} m` : '-- m'}
-                    </Text>
-                  </View>
-                  <View style={styles.coordBox}>
-                    <Text style={styles.coordLabel}>TRỤC Y</Text>
-                    <Text style={styles.coordVal}>
-                      {robotPose ? `${Number(robotPose.yM).toFixed(3)} m` : '-- m'}
-                    </Text>
-                  </View>
-                  <View style={styles.coordBox}>
-                    <Text style={styles.coordLabel}>GÓC YAW</Text>
-                    <Text style={styles.coordVal}>
-                      {robotPose ? `${Number(robotPose.yawRad || 0).toFixed(3)} rad` : '-- rad'}
-                    </Text>
-                  </View>
-                </View>
-              </View>
-
-              {/* Waypoints List */}
-              <View style={styles.locationDetailSection}>
-                <Text style={styles.locationSectionTitle}>
-                  ĐIỂM ĐÍCH / WAYPOINTS TRÊN BẢN ĐỒ {activeMapEndpoints.length > 0 ? `(${activeMapEndpoints.length})` : '(0)'}
-                </Text>
-                {activeMapEndpoints.length > 0 ? (
-                  activeMapEndpoints.map((ep) => (
-                    <View key={ep.endpointId} style={styles.waypointItem}>
-                      <MapPin size={16} color={Colors.primary} />
-                      <View style={{ flex: 1, marginLeft: 8 }}>
-                        <Text style={styles.waypointName}>{ep.endpointName}</Text>
-                        <Text style={styles.waypointCoords}>
-                          Mã: {ep.endpointCode} · X: {Number(ep.xM).toFixed(2)}m, Y: {Number(ep.yM).toFixed(2)}m ({ep.endpointType})
-                        </Text>
-                      </View>
-                    </View>
-                  ))
-                ) : (
-                  <Text style={styles.emptyMapDataText}>Map này chưa có waypoint trên Backend.</Text>
-                )}
-              </View>
-            </ScrollView>
-
-            <TouchableOpacity
-              style={styles.sheetCloseButton}
-              onPress={() => setShowLocationSheet(false)}
-              activeOpacity={0.8}
-            >
-              <Text style={styles.sheetCloseButtonText}>Đóng</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
 
       {/* ========================================================
           DROPDOWN CHỌN MAP TỪ BACKEND
@@ -1582,12 +1413,14 @@ export const MapScreen: React.FC = () => {
         visible={showRobotMonitor}
         onClose={() => setShowRobotMonitor(false)}
         robot={robotData}
+        battery={robotBattery}
         map={activeMap}
         metadata={mapImageMetadata}
         endpoints={activeMapEndpoints}
         zones={backendZones}
         token={authToken}
         activeJob={activeRobotJob}
+        activeJobId={robotSnapshot?.activeJobId || activeRobotJob?.jobId || null}
         robotPose={robotPose}
         isPoseLive={isPoseLive}
         plannedPath={robotSnapshot?.navigationPlan?.points || null}
@@ -1603,7 +1436,7 @@ const styles = StyleSheet.create({
 
   // Hero Card Robot Đen (#202022)
   heroCard: {
-    backgroundColor: Colors.hero,
+    backgroundColor: Colors.heroSurface,
     borderRadius: 24,
     padding: 20,
     marginHorizontal: 16,
@@ -1620,7 +1453,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    backgroundColor: '#2D2D31',
+    backgroundColor: Colors.darkRaised,
     paddingHorizontal: 10,
     paddingVertical: 5,
     borderRadius: 999,
@@ -1637,7 +1470,7 @@ const styles = StyleSheet.create({
     letterSpacing: 0.3,
   },
   heroBatteryBadge: {
-    backgroundColor: '#2D2D31',
+    backgroundColor: Colors.darkRaised,
     paddingHorizontal: 10,
     paddingVertical: 5,
     borderRadius: 999,
@@ -1684,7 +1517,7 @@ const styles = StyleSheet.create({
     width: 48,
     height: 48,
     borderRadius: 24,
-    backgroundColor: '#2D2D31',
+    backgroundColor: Colors.darkRaised,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -2083,7 +1916,7 @@ const styles = StyleSheet.create({
   sheetCloseButton: {
     height: 50,
     borderRadius: 16,
-    backgroundColor: Colors.hero,
+    backgroundColor: Colors.actionSurface,
     alignItems: 'center',
     justifyContent: 'center',
     marginTop: Spacing.md,
@@ -2867,7 +2700,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 8,
     borderRadius: 8,
-    backgroundColor: Colors.primary,
+    backgroundColor: Colors.actionSurface,
     shadowColor: Colors.primary,
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.25,

@@ -60,6 +60,8 @@ export interface PageResponse<T> {
 }
 
 // ----- 3. Robot Types -----
+export type BatteryUnit = 'UNKNOWN' | 'MILLIVOLT' | 'RAW_ADC';
+
 export interface RobotDto {
   robotId: string;
   currentMapId?: string;
@@ -68,11 +70,33 @@ export interface RobotDto {
   model: string;
   serialNumber?: string | null;
   runtimeVersion?: string;
-  status: 'OFFLINE' | 'STARTING' | 'IDLE' | 'BUSY' | 'EMERGENCY_STOP' | 'ERROR' | 'MAINTENANCE';
-  batteryRaw?: number;
+  status: 'OFFLINE' | 'STARTING' | 'IDLE' | 'BUSY' | 'EMERGENCY_STOP' | 'ERROR' | 'MAINTENANCE' | 'RETIRED';
+  batteryRaw?: number | null;
+  batteryUnit?: BatteryUnit | string | null;
   batteryPercent?: number | null;
-  batteryCapturedAt?: string;
+  batteryCapturedAt?: string | null;
   lastHeartbeatAt?: string;
+}
+
+export interface RobotBatteryResponse {
+  robotId: string;
+  batteryRaw?: number | null;
+  batteryUnit?: BatteryUnit | string | null;
+  voltageV?: number | null;
+  batteryPercent?: number | null;
+  source?: string | null;
+  estimateMethod?: string | null;
+  profileId?: string | null;
+  estimateStatus?: string | null;
+  curveCalibrated?: boolean | null;
+  seriesCells?: number | null;
+  parallelCells?: number | null;
+  nominalCapacityMah?: number | null;
+  nominalVoltageV?: number | null;
+  capturedAt?: string | null;
+  ageSec?: number | null;
+  fresh?: boolean | null;
+  receivedAt?: string | null;
 }
 
 // ----- 4. Room, Floor & Zone Types -----
@@ -149,6 +173,66 @@ export interface MapResponse {
   updatedAt?: string;
 }
 
+export interface MapPresentationPoint {
+  x: number;
+  y: number;
+}
+
+export type MapPresentationFeatureType =
+  | 'ROOM'
+  | 'CORRIDOR'
+  | 'WALL'
+  | 'DOOR'
+  | 'LABEL'
+  | 'LANDMARK';
+
+export interface MapPresentationFeature {
+  id: string;
+  type: MapPresentationFeatureType;
+  label: string;
+  color: string;
+  points: MapPresentationPoint[];
+  lineWidthM: number;
+  fontSizeM: number;
+  endpointId?: string | null;
+  endpointName?: string | null;
+  roomId?: string | null;
+  roomCode?: string | null;
+  roomName?: string | null;
+  roomType?: string | null;
+  departmentCode?: string | null;
+  roomDescription?: string | null;
+  roomPublicVisible?: boolean | null;
+}
+
+export interface MapPresentationSource {
+  mapId?: string;
+  assetHash?: string;
+  widthM?: number;
+  heightM?: number;
+  resolutionMPerPixel?: number;
+  originXM?: number;
+  originYM?: number;
+  originYawRad?: number;
+  frameId?: string;
+  widthPx?: number;
+  heightPx?: number;
+}
+
+export interface MapPresentationDocument {
+  schemaVersion?: number;
+  backgroundColor: string;
+  features: MapPresentationFeature[];
+  rotationDegrees?: number;
+}
+
+export interface MapPresentationPublishedResponse {
+  source?: MapPresentationSource;
+  revision?: number;
+  document?: MapPresentationDocument;
+  publishedAt?: string;
+}
+
 export interface EndpointResponse {
   endpointId: string;
   mapId: string;
@@ -217,6 +301,7 @@ export interface AlertQueryParams {
   page?: number;
   size?: number;
 }
+
 
 export interface IncidentResponse {
   incidentId: string;

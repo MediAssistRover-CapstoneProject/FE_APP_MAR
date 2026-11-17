@@ -26,6 +26,9 @@ import {
 import { Colors, Spacing, BorderRadius, Shadows } from '../../constants/theme';
 import { alertApi } from '../../api/modules/alert.api';
 import { incidentApi } from '../../api/modules/incident.api';
+import { robotApi } from '../../api/modules/robot.api';
+import { RobotBatteryResponse } from '../../api/types';
+import { formatRobotBatteryDisplay, pickNewerRobotBattery } from '../map/robotBattery';
 
 const { width: SCREEN_W } = Dimensions.get('window');
 const VIDEO_H = SCREEN_W * 0.65;
@@ -36,6 +39,8 @@ interface SOSStreamModalProps {
   onDispatch?: () => void;
   alertId?: string;
   incidentId?: string;
+  robotId?: string;
+  battery?: RobotBatteryResponse | null;
   robotName?: string;
   location?: string;
   onResolve?: (alertId: string) => void;
@@ -47,6 +52,8 @@ export const SOSStreamModal: React.FC<SOSStreamModalProps> = ({
   onDispatch,
   alertId,
   incidentId,
+  robotId,
+  battery = null,
   robotName = 'Robot chưa xác định',
   location = 'Tầng 4 · Khu Hành lang chính',
   onResolve,
@@ -56,6 +63,29 @@ export const SOSStreamModal: React.FC<SOSStreamModalProps> = ({
   const [micEnabled, setMicEnabled] = useState(true);
   const [isDispatching, setIsDispatching] = useState(false);
   const [isResolving, setIsResolving] = useState(false);
+  const [polledBattery, setPolledBattery] = useState<RobotBatteryResponse | null>(null);
+
+  useEffect(() => {
+    if (!visible || !robotId) {
+      setPolledBattery(null);
+      return;
+    }
+    let cancelled = false;
+    robotApi
+      .getRobotBattery(robotId)
+      .then((res) => {
+        if (!cancelled && res && (!res.robotId || res.robotId === robotId)) {
+          setPolledBattery(res);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [visible, robotId]);
+
+  const effectiveBattery = pickNewerRobotBattery(battery, polledBattery, robotId);
+  const batteryDisplay = formatRobotBatteryDisplay(effectiveBattery, null);
 
   // Timer đếm giây cuộc gọi
   useEffect(() => {
@@ -142,10 +172,12 @@ export const SOSStreamModal: React.FC<SOSStreamModalProps> = ({
 
           <View style={styles.metricCard}>
             <View style={styles.metricHeader}>
-              <Battery size={14} color="#10B981" />
+              <Battery size={14} color={batteryDisplay.tintColor} />
               <Text style={styles.metricLabel}>PIN</Text>
             </View>
-            <Text style={[styles.metricValue, { color: '#10B981' }]}>78%</Text>
+            <Text style={[styles.metricValue, { color: batteryDisplay.tintColor }]} numberOfLines={1}>
+              {batteryDisplay.detailText}
+            </Text>
           </View>
         </View>
 

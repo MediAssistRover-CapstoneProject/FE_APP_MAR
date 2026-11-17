@@ -10,14 +10,18 @@ import {
   Platform,
   Alert,
   ActivityIndicator,
+  AppState,
+  AppStateStatus,
   Modal,
 } from 'react-native';
+import { useIsFocused } from '@react-navigation/native';
 import { Colors, Spacing, BorderRadius, Typography, Shadows } from '../../constants/theme';
 import { StaffHeader } from '../../components/common/StaffHeader';
-import { deliveryApi, type DeliveryResponse } from '../../api/modules/delivery.api';
+import { deliveryApi, type AuthVerificationPurpose, type DeliveryResponse } from '../../api/modules/delivery.api';
 import { dispatchApi } from '../../api/modules/dispatch.api';
 import { facilityApi } from '../../api/modules/facility.api';
 import { staffApi } from '../../api/modules/staff.api';
+import { getMissionPollingPlan } from '../../api/pollingPolicy';
 import {
   EndpointResponse,
   JobResponse,
@@ -29,6 +33,7 @@ import {
   UserProfileResponse,
 } from '../../api/types';
 import { useAuthStore } from '../../store/useAuthStore';
+import { useStaffProfileStore } from '../../store/useStaffProfileStore';
 import { apiClient } from '../../api/client';
 import { StaffOnDutyPicker } from '../../components/staff/StaffOnDutyPicker';
 import { DeliveryCancelAction } from '../../components/delivery/DeliveryCancelAction';
@@ -84,11 +89,18 @@ interface JobSnapshot {
   delivery?: DeliveryResponse;
 }
 
-async function loadJobSnapshot(jobId: string): Promise<JobSnapshot> {
+async function loadJobSnapshot(
+  jobId: string,
+  cachedDelivery?: DeliveryResponse | null
+): Promise<JobSnapshot> {
   const job = await dispatchApi.getJobDetail(jobId);
-  const delivery = job.serviceRequestId
-    ? await deliveryApi.getDeliveryById(job.serviceRequestId)
-    : undefined;
+  let delivery =
+    cachedDelivery && cachedDelivery.request?.serviceRequestId === job.serviceRequestId
+      ? cachedDelivery
+      : undefined;
+  if (!delivery && job.serviceRequestId) {
+    delivery = await deliveryApi.getDeliveryById(job.serviceRequestId);
+  }
   if (!delivery || delivery.request.requestType !== 'DELIVERY') throw new Error('Nhiệm vụ này không phải giao hàng trong phạm vi tài khoản.');
   return { job, delivery };
 }
@@ -145,6 +157,15 @@ const STEP_LABELS: Record<string, string> = {
 };
 
 export const MissionScreen: React.FC = () => {
+  const isFocused = useIsFocused();
+  const [appState, setAppState] = useState<AppStateStatus>(
+    (AppState.currentState as AppStateStatus) || 'active'
+  );
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (next) => setAppState(next));
+    return () => sub.remove();
+  }, []);
+
   const { user, fetchMe } = useAuthStore();
   const [activeAccount, setActiveAccount] = useState<UserProfileResponse | null>(user);
   const currentSenderAccount = activeAccount || user;
@@ -248,6 +269,11 @@ export const MissionScreen: React.FC = () => {
   const [isSendingStepResponse, setIsSendingStepResponse] = useState(false);
   const [respondedStepId, setRespondedStepId] = useState('');
   const [scan, setScan] = useState<DeliveryScanContext | null>(null);
+  const [recentQrVerified, setRecentQrVerified] = useState<{
+    jobId: string;
+    purpose: AuthVerificationPurpose;
+    at: number;
+  } | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [pendingDeliveryLabel, setPendingDeliveryLabel] = useState('');
   const [attemptReady, setAttemptReady] = useState(false);
@@ -256,8 +282,34 @@ export const MissionScreen: React.FC = () => {
   const stepInFlight = useRef(false);
   const submitInFlight = useRef(false);
   const attemptRef = useRef<DeliveryAttempt | null>(null);
+  const scrollViewRef = useRef<React.ElementRef<typeof ScrollView> | null>(null);
+  const handoffCardYRef = useRef<number>(0);
+  const handoffActionOffsetYRef = useRef<number>(0);
+  const deliveriesMapRef = useRef<Record<string, DeliveryResponse>>({});
+  const recentJobsRef = useRef<JobResponse[]>([]);
+  const snapshotRef = useRef<JobSnapshot | null>(null);
+  const wasMissionPollingRef = useRef(false);
+  const prevIsFocusedRef = useRef(isFocused);
+  const prevAppStateRef = useRef<AppStateStatus>(appState);
+
+  useEffect(() => {
+    deliveriesMapRef.current = deliveriesMap;
+  }, [deliveriesMap]);
+  useEffect(() => {
+    recentJobsRef.current = recentJobs;
+  }, [recentJobs]);
+  useEffect(() => {
+    snapshotRef.current = snapshot;
+  }, [snapshot]);
 
   const activeJob = snapshot?.job || null;
+
+  const scrollToHandoffControls = useCallback(() => {
+    setTimeout(() => {
+      const y = Math.max(0, handoffCardYRef.current + handoffActionOffsetYRef.current - 16);
+      scrollViewRef.current?.scrollTo({ y, animated: true });
+    }, 140);
+  }, []);
 
   const fromRoom = selectedPickupDuty
     ? `${selectedPickupDuty.room.roomName} (${selectedPickupDuty.room.roomCode}) · phòng trực của bạn`
@@ -293,7 +345,8 @@ export const MissionScreen: React.FC = () => {
       try {
         let staffMe: StaffMeResponse | null = null;
         try {
-          staffMe = await staffApi.getStaffMe();
+          const cachedProfile = await useStaffProfileStore.getState().ensureLoaded(false);
+          staffMe = cachedProfile.staffMe;
         } catch (meErr) {
           console.log('Error fetching staffMe for duty rooms:', meErr);
         }
@@ -546,16 +599,35 @@ export const MissionScreen: React.FC = () => {
     };
   }, [scope, resolveSenderDutyRooms]);
 
-  const refreshSelectedJob = useCallback(async (jobId: string): Promise<JobSnapshot> => {
-    const revision = ++jobReadRevision.current;
-    const requestScope = scopeRef.current;
-    const detail = await loadJobSnapshot(jobId);
-    if (scopeRef.current === requestScope && selectedJobId.current === jobId && jobReadRevision.current === revision) {
-      setSnapshot(detail);
-      setJobError('');
-    }
-    return detail;
-  }, []);
+  const refreshSelectedJob = useCallback(
+    async (jobId: string, options?: { forceDeliveryRefresh?: boolean }): Promise<JobSnapshot> => {
+      const revision = ++jobReadRevision.current;
+      const requestScope = scopeRef.current;
+      const prevSnap = snapshotRef.current;
+      const cachedDelivery =
+        !options?.forceDeliveryRefresh
+          ? (prevSnap?.job?.jobId === jobId ? prevSnap.delivery : undefined) ||
+            (prevSnap?.job?.serviceRequestId
+              ? deliveriesMapRef.current[prevSnap.job.serviceRequestId]
+              : undefined)
+          : undefined;
+      const detail = await loadJobSnapshot(jobId, cachedDelivery);
+      if (
+        scopeRef.current === requestScope &&
+        selectedJobId.current === jobId &&
+        jobReadRevision.current === revision
+      ) {
+        setSnapshot(detail);
+        setJobError('');
+        const reqId = detail.job.serviceRequestId;
+        if (reqId && detail.delivery && !deliveriesMapRef.current[reqId]) {
+          setDeliveriesMap((prev) => ({ ...prev, [reqId]: detail.delivery! }));
+        }
+      }
+      return detail;
+    },
+    []
+  );
 
   const followJob = useCallback(async (jobId: string) => {
     const target = jobId.trim().toLowerCase();
@@ -566,6 +638,7 @@ export const MissionScreen: React.FC = () => {
     if (selectedJobId.current !== target) {
       selectedJobId.current = target;
       setScan(null);
+      setRecentQrVerified(null);
       setSnapshot(null);
       setRespondedStepId('');
     }
@@ -573,7 +646,7 @@ export const MissionScreen: React.FC = () => {
     setJobError('');
     const requestScope = scopeRef.current;
     try {
-      await refreshSelectedJob(target);
+      await refreshSelectedJob(target, { forceDeliveryRefresh: true });
     } catch (error) {
       if (scopeRef.current === requestScope && selectedJobId.current === target) {
         setJobError((error as { message?: string })?.message || 'Không tải được nhiệm vụ đã chọn.');
@@ -703,13 +776,13 @@ export const MissionScreen: React.FC = () => {
       );
       setRecentJobs(deliveryJobs);
 
-      // Nạp chi tiết DeliveryResponse cho các job có serviceRequestId
+      // Nạp chi tiết DeliveryResponse cho các job có serviceRequestId chưa có trong cache
       const missingIds = Array.from(
         new Set(
           deliveryJobs
             .map((j) => j.serviceRequestId)
             .filter((id): id is string => typeof id === 'string' && id.length > 0)
-            .filter((id) => !deliveriesMap[id])
+            .filter((id) => !deliveriesMapRef.current[id])
         )
       );
 
@@ -736,16 +809,19 @@ export const MissionScreen: React.FC = () => {
     } finally {
       if (scopeRef.current === requestScope) setIsLoadingJobs(false);
     }
-  }, [followJob, deliveriesMap]);
+  }, [followJob]);
 
   useEffect(() => {
     selectedJobId.current = null;
     attemptRef.current = null;
+    deliveriesMapRef.current = {};
+    setDeliveriesMap({});
     setAttemptReady(false);
     submitInFlight.current = false;
     stepInFlight.current = false;
     setSnapshot(null);
     setScan(null);
+    setRecentQrVerified(null);
     setRecentJobs([]);
     setManualJobIdInput('');
     setJobError('');
@@ -769,10 +845,51 @@ export const MissionScreen: React.FC = () => {
   }, [scope, user?.accountId, loadRecentJobsAndDetail]);
 
   useEffect(() => {
+    const becameFocused = !prevIsFocusedRef.current && isFocused;
+    const becameForeground = prevAppStateRef.current !== 'active' && appState === 'active';
+    prevIsFocusedRef.current = isFocused;
+    prevAppStateRef.current = appState;
+
+    if (isFocused && appState === 'active' && (becameFocused || becameForeground)) {
+      void loadRecentJobsAndDetail(selectedJobId.current || undefined);
+    }
+  }, [isFocused, appState, loadRecentJobsAndDetail]);
+
+  const currentStep = activeJob?.steps?.find(step => step.jobStepId === activeJob.selectedJobStepId);
+  const currentStepCode = currentStep?.stepCodeSnapshot;
+  const runningStep = selectedRunningStep(activeJob);
+  const phase = deliveryPhase(runningStep);
+  const assignedAccount = expectedDeliveryAccount(activeJob, phase, snapshot?.delivery);
+  const myTurn = !assignedAccount || !user?.accountId || assignedAccount === user.accountId.toLowerCase();
+  const qrContext = scanContext(activeJob, user?.accountId, snapshot?.delivery);
+  const response = myTurn
+    ? handoffResponse(runningStep)
+    : undefined;
+
+  const missionPollingPlan = getMissionPollingPlan({
+    isFocused,
+    appState,
+    jobStatus: activeJob?.status,
+    stepCode: currentStepCode,
+    isQrModalOpen: Boolean(scan),
+    hasRecentQrVerified: Boolean(recentQrVerified && activeJob && recentQrVerified.jobId === activeJob.jobId),
+    hasPendingResponseButton: Boolean(response),
+  });
+
+  useEffect(() => {
     const jobId = activeJob?.jobId;
-    if (!jobId || !['QUEUED', 'ACCEPTED', 'RUNNING'].includes(activeJob.status)) return;
+    if (!jobId || !missionPollingPlan.active) {
+      wasMissionPollingRef.current = false;
+      return;
+    }
+
     let stopped = false;
     let timer: ReturnType<typeof setTimeout>;
+    if (!wasMissionPollingRef.current) {
+      wasMissionPollingRef.current = true;
+      void refreshSelectedJob(jobId).catch(() => {});
+    }
+
     const schedule = () => {
       timer = setTimeout(async () => {
         if (stopped || selectedJobId.current !== jobId || scopeRef.current !== scope) return;
@@ -782,21 +899,54 @@ export const MissionScreen: React.FC = () => {
           if (!stopped) setJobError('Đang kết nối lại trạng thái nhiệm vụ.');
         }
         if (!stopped) schedule();
-      }, 3000);
+      }, missionPollingPlan.intervalMs);
     };
     schedule();
     return () => { stopped = true; clearTimeout(timer); };
-  }, [activeJob?.jobId, activeJob?.status, refreshSelectedJob, scope]);
+  }, [
+    activeJob?.jobId,
+    missionPollingPlan.active,
+    missionPollingPlan.intervalMs,
+    refreshSelectedJob,
+    scope,
+  ]);
 
-  const currentStep = activeJob?.steps?.find(step => step.jobStepId === activeJob.selectedJobStepId);
-  const runningStep = selectedRunningStep(activeJob);
-  const phase = deliveryPhase(runningStep);
-  const assignedAccount = expectedDeliveryAccount(activeJob, phase, snapshot?.delivery);
-  const myTurn = !assignedAccount || !user?.accountId || assignedAccount === user.accountId.toLowerCase();
-  const qrContext = scanContext(activeJob, user?.accountId, snapshot?.delivery);
-  const response = myTurn
-    ? handoffResponse(runningStep)
-    : undefined;
+  const handleQrVerifiedRedirect = useCallback(
+    (verifiedScan: DeliveryScanContext) => {
+      setScan(null);
+      setRecentQrVerified({
+        jobId: verifiedScan.jobId,
+        purpose: verifiedScan.purpose,
+        at: Date.now(),
+      });
+      void refreshSelectedJob(verifiedScan.jobId).catch(() => {});
+      scrollToHandoffControls();
+    },
+    [refreshSelectedJob, scrollToHandoffControls]
+  );
+
+  useEffect(() => {
+    if (!recentQrVerified) return;
+    if (
+      !activeJob ||
+      activeJob.jobId !== recentQrVerified.jobId ||
+      activeJob.status !== 'RUNNING' ||
+      currentStepCode === 'MOVE_RECEIVER' ||
+      (currentStepCode === 'AUTH_RECEIVER' && recentQrVerified.purpose === 'DELIVERY_SENDER')
+    ) {
+      setRecentQrVerified(null);
+    }
+  }, [recentQrVerified, activeJob, currentStepCode]);
+
+  useEffect(() => {
+    if (
+      recentQrVerified &&
+      activeJob?.jobId === recentQrVerified.jobId &&
+      response
+    ) {
+      scrollToHandoffControls();
+    }
+  }, [recentQrVerified, activeJob?.jobId, response?.responseType, runningStep?.jobStepId, scrollToHandoffControls]);
 
   const verifyDeliveryQr = async (context: DeliveryScanContext, raw: string) => {
     const proof = robotDeliveryProof(raw, context);
@@ -944,18 +1094,13 @@ export const MissionScreen: React.FC = () => {
       void followJob(job.jobId);
       Alert.alert(
         'Đã tạo nhiệm vụ giao hàng thành công! 🎉',
-        `Nhiệm vụ: ${itemName || 'Giao hàng y tế'}\n\nLộ trình: ${fromRoom} → ${toRoom}\n\nBạn có thể mở mã QR ngay để sẵn sàng đưa màn hình trước Camera của Robot quét mở khóa Servo.`,
+        `Nhiệm vụ: ${itemName || 'Giao hàng y tế'}\n\nLộ trình: ${fromRoom} → ${toRoom}\n\nRobot đang di chuyển đến điểm lấy hàng. Khi robot đến nơi và kích hoạt bước xác thực, bạn hãy mở mã QR để quét mở khóa Servo.`,
         [
           { text: 'Đóng', style: 'cancel' },
           {
-            text: '⚡ Mở mã QR cho Robot ngay',
+            text: 'Theo dõi nhiệm vụ',
             onPress: () => {
-              setScan({
-                jobId: job.jobId,
-                stepId: '',
-                purpose: 'DELIVERY_SENDER',
-                accountId: user?.accountId || '',
-              });
+              void followJob(job.jobId);
             },
           },
         ]
@@ -1134,26 +1279,46 @@ export const MissionScreen: React.FC = () => {
   };
 
   const responseLabel = response?.responseType === 'PAYLOAD_CONFIRMED'
-    ? phase === 'sender' ? 'Đã đặt đủ hàng vào thùng' : 'Đã lấy đủ hàng khỏi thùng'
-    : response?.responseType === 'DOOR_CLOSED' ? 'Đã đóng nắp, tay đã rời cơ cấu khóa'
+    ? phase === 'sender' ? 'Xác nhận đã bỏ hàng vào thùng' : 'Xác nhận đã lấy / giao hàng'
+    : response?.responseType === 'DOOR_CLOSED' ? 'Đã đóng nắp — Đóng khóa Servo'
     : 'Đã kiểm tra thùng khóa chắc';
   const canRespond = !!response && !!runningStep && !jobError && respondedStepId !== runningStep.jobStepId;
+  const isVerifiedForActiveJob = Boolean(
+    activeJob && recentQrVerified && recentQrVerified.jobId === activeJob.jobId
+  );
+
   return (
     <KeyboardAvoidingView style={styles.root} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <StaffHeader />
-      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+      <ScrollView
+        ref={scrollViewRef}
+        contentContainerStyle={styles.content}
+        keyboardShouldPersistTaps="handled"
+      >
         <Text style={styles.eyebrow}>GIAO NHẬN HÀNG</Text>
         <Text style={styles.title}>Nhiệm vụ của bạn</Text>
         <Text style={styles.muted}>Theo dõi robot, quét mã tại điểm gửi và điểm nhận, xác nhận từng bước bàn giao.</Text>
 
-        <View style={styles.card}>
+        <View
+          style={styles.card}
+          onLayout={(event) => {
+            handoffCardYRef.current = event.nativeEvent.layout.y;
+          }}
+        >
           <View style={styles.row}>
             <Text style={styles.heading}>Theo dõi giao nhận</Text>
-            <TouchableOpacity style={styles.smallButton} disabled={isLoadingJobs} onPress={() => { void loadRecentJobsAndDetail(selectedJobId.current || undefined); }}>
+            <TouchableOpacity
+              style={styles.smallButton}
+              disabled={isLoadingJobs}
+              onPress={() => {
+                void loadRecentJobsAndDetail(selectedJobId.current || undefined);
+              }}
+            >
               {isLoadingJobs ? <ActivityIndicator color={Colors.primary} /> : <RefreshCw size={18} color={Colors.primary} />}
               <Text style={styles.link}>Làm mới</Text>
             </TouchableOpacity>
           </View>
+
           {/* Danh sách nhiệm vụ giao nhận của tài khoản */}
           <View style={styles.deliveryJobList}>
             {recentJobs.length === 0 ? (
@@ -1292,13 +1457,29 @@ export const MissionScreen: React.FC = () => {
                     : currentStep?.stepCodeSnapshot === 'AUTH_SENDER'
                     ? '🟢 Robot đã đến Điểm lấy hàng A! Hãy bấm nút "Hiện mã QR" bên dưới để đưa cho Robot quét mở ngăn tủ.'
                     : currentStep?.stepCodeSnapshot === 'UNLOCK_SENDER'
-                    ? 'Robot đang mở khóa Servo ngăn tủ chứa hàng...'
+                    ? '🔓 Quét QR thành công! Robot đang mở khóa Servo ngăn tủ để bạn đặt hàng vào...'
                     : currentStep?.stepCodeSnapshot === 'PAYLOAD_SENDER'
-                    ? 'Hãy đặt hàng vào thùng và bấm xác nhận bên dưới.'
+                    ? '📦 Hãy đặt đủ hàng vào thùng rồi bấm nút "Xác nhận đã bỏ hàng vào thùng" bên dưới.'
+                    : currentStep?.stepCodeSnapshot === 'CLOSE_SENDER'
+                    ? '🔒 Hãy đóng nắp ngăn tủ, để tay ra khỏi cơ cấu khóa rồi bấm nút bên dưới để Robot đóng Servo.'
+                    : currentStep?.stepCodeSnapshot === 'LOCK_SENDER'
+                    ? '⚙️ Robot đang điều khiển đóng & khóa Servo ngăn tủ (A)...'
+                    : currentStep?.stepCodeSnapshot === 'VERIFY_SENDER'
+                    ? '✅ Hãy kiểm tra nắp tủ đã khóa chắc chắn và bấm xác nhận bên dưới.'
                     : currentStep?.stepCodeSnapshot === 'MOVE_RECEIVER'
                     ? 'Robot đang vận chuyển hàng đến Điểm giao hàng B...'
                     : currentStep?.stepCodeSnapshot === 'AUTH_RECEIVER'
                     ? '🟢 Robot đã đến Điểm B! Người nhận bấm nút bên dưới để hiện mã QR cho Robot quét mở tủ lấy hàng.'
+                    : currentStep?.stepCodeSnapshot === 'UNLOCK_RECEIVER'
+                    ? '🔓 Quét QR thành công! Robot đang mở khóa Servo ngăn tủ để bạn lấy hàng...'
+                    : currentStep?.stepCodeSnapshot === 'PAYLOAD_RECEIVER'
+                    ? '📦 Hãy lấy hàng khỏi thùng rồi bấm nút "Xác nhận đã lấy / giao hàng" bên dưới.'
+                    : currentStep?.stepCodeSnapshot === 'CLOSE_RECEIVER'
+                    ? '🔒 Hãy đóng nắp ngăn tủ, để tay ra khỏi cơ cấu khóa rồi bấm nút bên dưới để Robot đóng Servo.'
+                    : currentStep?.stepCodeSnapshot === 'LOCK_RECEIVER'
+                    ? '⚙️ Robot đang điều khiển đóng & khóa Servo ngăn tủ (B)...'
+                    : currentStep?.stepCodeSnapshot === 'VERIFY_RECEIVER'
+                    ? '✅ Hãy kiểm tra nắp tủ đã khóa chắc chắn và bấm xác nhận hoàn tất giao nhận.'
                     : 'Theo dõi chỉ dẫn hiển thị trên màn hình.'}
                 </Text>
               </View>
@@ -1317,49 +1498,114 @@ export const MissionScreen: React.FC = () => {
             <DeliveryCancelAction key={`${scope}:${activeJob.jobId}`} snapshot={{ job: activeJob, delivery: snapshot?.delivery }}
               accountId={user?.accountId || ''} refresh={refreshSelectedJob} unavailable={!!jobError || isSendingStepResponse} />
 
-            {/* Nút vào QR để robot quét nhanh */}
-            <TouchableOpacity
-              style={[
-                styles.button,
-                styles.quickQrButton,
-                qrContext && styles.qrButtonActive,
-              ]}
-              onPress={() => {
-                setScan({
-                  jobId: activeJob.jobId,
-                  stepId: currentStep?.jobStepId || '',
-                  purpose: phase === 'receiver' ? 'DELIVERY_RECEIVER' : 'DELIVERY_SENDER',
-                  accountId: user?.accountId || '',
-                });
+            <View
+              onLayout={(event) => {
+                handoffActionOffsetYRef.current = event.nativeEvent.layout.y;
               }}
-              activeOpacity={0.8}
+              style={styles.handoffControlAnchor}
             >
-              <Zap size={20} color="#fff" />
-              <Text style={styles.quickQrButtonText}>
-                {qrContext
-                  ? '⚡ HIỆN MÃ QR CHO ROBOT QUÉT (MỞ SERVO)'
-                  : '⚡ MỞ MÃ QR CHO ROBOT QUÉT NGAY'}
-              </Text>
-            </TouchableOpacity>
-            {response && <View style={styles.actions}>
-              {response.responseType === 'PAYLOAD_CONFIRMED' && Array.isArray(response.data?.items) &&
-                response.data.items.map((item: any, index: number) => <Text key={index} style={styles.small}>{item.item_name || item.item_code || 'Hàng được giao'} · {item.quantity} {item.unit || ''}</Text>)}
-              <TouchableOpacity
-                style={[
-                  styles.button,
-                  styles.confirmActionButton,
-                  (!canRespond || isSendingStepResponse) && styles.disabled,
-                ]}
-                disabled={!canRespond || isSendingStepResponse}
-                onPress={() => { void handleRespondStep(); }}
-                activeOpacity={0.8}
-              >
-                {isSendingStepResponse ? <ActivityIndicator color="#fff" /> : <PackageCheck size={20} color="#fff" />}
-                <Text style={styles.confirmActionButtonText}>
-                  {respondedStepId === runningStep?.jobStepId ? 'Đã gửi, chờ cập nhật' : responseLabel}
+              {isVerifiedForActiveJob && (
+                <View style={styles.qrVerifiedBanner}>
+                  <CheckCircle2 size={18} color="#16A34A" />
+                  <View style={styles.flex}>
+                    <Text style={styles.qrVerifiedBannerTitle}>
+                      {recentQrVerified?.purpose === 'DELIVERY_SENDER'
+                        ? 'Đã quét QR nhận hàng thành công'
+                        : 'Đã quét QR giao hàng thành công'}
+                    </Text>
+                    <Text style={styles.qrVerifiedBannerSub}>
+                      {response
+                        ? 'Hãy bấm nút xác nhận và đóng Servo bên dưới.'
+                        : 'Robot đang mở khóa Servo, nút xác nhận sẽ hiển thị ngay bên dưới...'}
+                    </Text>
+                  </View>
+                </View>
+              )}
+
+              {qrContext && (
+                <TouchableOpacity
+                  style={[
+                    styles.button,
+                    styles.quickQrButton,
+                    styles.qrButtonActive,
+                  ]}
+                  onPress={() => {
+                    setScan(qrContext);
+                  }}
+                  activeOpacity={0.8}
+                >
+                  <Zap size={20} color="#fff" />
+                  <Text style={styles.quickQrButtonText}>
+                    ⚡ HIỆN MÃ QR CHO ROBOT QUÉT (MỞ SERVO)
+                  </Text>
+                </TouchableOpacity>
+              )}
+
+              {!qrContext && !response && (
+                <TouchableOpacity
+                  style={[
+                    styles.button,
+                    styles.quickQrButton,
+                  ]}
+                  onPress={() => {
+                    const running = runningStep;
+                    const stepAssignedAccount = expectedDeliveryAccount(activeJob, phase, snapshot?.delivery);
+                    const currentAccountId = user?.accountId?.toLowerCase();
+                    if (!running || running.stepTypeSnapshot !== 'AUTHENTICATE') {
+                      Alert.alert(
+                        'Chưa tới bước quét mã',
+                        'Robot hiện đang di chuyển hoặc chưa sẵn sàng ở bước quét mã xác thực. Vui lòng theo dõi tiến trình di chuyển của robot.'
+                      );
+                    } else if (stepAssignedAccount && currentAccountId && stepAssignedAccount !== currentAccountId) {
+                      Alert.alert(
+                        'Tài khoản không được phân công',
+                        `Chặng này dành cho ${phase === 'receiver' ? 'Người nhận' : 'Người gửi'} được chỉ định. Tài khoản hiện tại không có quyền xác thực mở Servo.`
+                      );
+                    } else {
+                      Alert.alert(
+                        'Chưa sẵn sàng xác thực',
+                        'Bước xác thực mã QR cho nhiệm vụ này hiện chưa sẵn sàng.'
+                      );
+                    }
+                  }}
+                  activeOpacity={0.8}
+                >
+                  <Zap size={20} color="#fff" />
+                  <Text style={styles.quickQrButtonText}>
+                    CHỜ ROBOT ĐẾN BƯỚC QUÉT MÃ QR
+                  </Text>
+                </TouchableOpacity>
+              )}
+
+              {response && <View style={[styles.actions, styles.handoffActionHighlight]}>
+                <Text style={styles.handoffActionCaption}>
+                  {response.responseType === 'PAYLOAD_CONFIRMED'
+                    ? (phase === 'sender'
+                      ? 'Bước tiếp theo: Đặt hàng vào thùng và xác nhận'
+                      : 'Bước tiếp theo: Lấy hàng khỏi thùng và xác nhận giao')
+                    : response.responseType === 'DOOR_CLOSED'
+                    ? 'Bước tiếp theo: Đóng nắp thùng để Robot khóa Servo'
+                    : 'Bước tiếp theo: Kiểm tra khóa Servo ngăn hàng'}
                 </Text>
-              </TouchableOpacity>
-            </View>}
+                {response.responseType === 'PAYLOAD_CONFIRMED' && Array.isArray(response.data?.items) &&
+                  response.data.items.map((item: any, index: number) => <Text key={index} style={styles.small}>{item.item_name || item.item_code || 'Hàng được giao'} · {item.quantity} {item.unit || ''}</Text>)}
+                <TouchableOpacity
+                  style={[
+                    styles.button,
+                    styles.confirmActionButton,
+                    (!canRespond || isSendingStepResponse) && styles.disabled,
+                  ]}
+                  disabled={!canRespond || isSendingStepResponse}
+                  onPress={() => { void handleRespondStep(); }}
+                  activeOpacity={0.8}
+                >
+                  {isSendingStepResponse ? <ActivityIndicator color="#fff" /> : <PackageCheck size={20} color="#fff" />}
+                  <Text style={styles.confirmActionButtonText}>
+                    {respondedStepId === runningStep?.jobStepId ? 'Đã gửi, chờ cập nhật' : responseLabel}
+                  </Text>
+                </TouchableOpacity>
+              </View>}
+            </View>
             <Text style={styles.small}>Xác thực QR và phản hồi cơ cấu mở khóa là hai bước riêng. Hãy thực hiện theo hướng dẫn đang hiển thị.</Text>
           </> : <Text style={styles.muted}>Chọn nhiệm vụ hoặc nhập Job ID để xem bước giao nhận.</Text>}
         </View>
@@ -1805,12 +2051,16 @@ export const MissionScreen: React.FC = () => {
           jobId={scan.jobId}
           jobCode={activeJob?.jobCode || scan.jobId}
           purpose={scan.purpose}
+          stepId={scan.stepId}
+          assignedAccountId={scan.accountId}
+          jobSnapshot={activeJob}
           onClose={() => {
             setScan(null);
             if (activeJob?.jobId) {
               void refreshSelectedJob(activeJob.jobId);
             }
           }}
+          onQrVerified={() => handleQrVerifiedRedirect(scan)}
           onVerify={raw => verifyDeliveryQr(scan, raw)}
         />
       )}
@@ -2149,7 +2399,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
-    backgroundColor: Colors.hero,
+    backgroundColor: Colors.actionSurface,
     minHeight: 52,
     borderRadius: 16,
     paddingHorizontal: 18,
@@ -2320,7 +2570,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
-    backgroundColor: Colors.hero,
+    backgroundColor: Colors.actionSurface,
     minHeight: 48,
     paddingHorizontal: 16,
     borderRadius: 14,
@@ -2410,7 +2660,7 @@ const styles = StyleSheet.create({
   },
   qrButtonActive: { backgroundColor: '#0284C7' },
   quickQrButton: {
-    backgroundColor: Colors.hero,
+    backgroundColor: Colors.actionSurface,
     minHeight: 52,
     borderRadius: 16,
     ...Shadows.button,
@@ -2431,6 +2681,42 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontWeight: '700',
     fontSize: 14,
+  },
+  handoffControlAnchor: {
+    gap: 10,
+  },
+  qrVerifiedBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: '#ECFDF5',
+    borderWidth: 1.5,
+    borderColor: '#6EE7B7',
+    borderRadius: 12,
+    padding: 12,
+  },
+  qrVerifiedBannerTitle: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#047857',
+  },
+  qrVerifiedBannerSub: {
+    fontSize: 12,
+    color: '#065F46',
+    marginTop: 2,
+    lineHeight: 17,
+  },
+  handoffActionHighlight: {
+    backgroundColor: '#F0FDF4',
+    borderWidth: 1.5,
+    borderColor: '#86EFAC',
+    borderRadius: 14,
+    padding: 12,
+  },
+  handoffActionCaption: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#166534',
   },
   selectDisabled: {
     borderColor: '#FCA5A5',
@@ -2589,7 +2875,7 @@ const styles = StyleSheet.create({
     width: 28,
     height: 28,
     borderRadius: 14,
-    backgroundColor: Colors.hero,
+    backgroundColor: Colors.actionSurface,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -2682,7 +2968,7 @@ const styles = StyleSheet.create({
     ...Shadows.sm,
   },
   taskChipActive: {
-    backgroundColor: Colors.hero,
+    backgroundColor: Colors.actionSurface,
     borderColor: Colors.hero,
   },
   taskChipText: {
@@ -2762,7 +3048,7 @@ const styles = StyleSheet.create({
     width: 28,
     height: 28,
     borderRadius: 14,
-    backgroundColor: Colors.hero,
+    backgroundColor: Colors.actionSurface,
     alignItems: 'center',
     justifyContent: 'center',
     marginTop: 2,
@@ -2857,7 +3143,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   segmentBtnActive: {
-    backgroundColor: Colors.hero,
+    backgroundColor: Colors.actionSurface,
     ...Shadows.sm,
   },
   segmentBtnText: {
@@ -2924,7 +3210,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
-    backgroundColor: Colors.hero,
+    backgroundColor: Colors.actionSurface,
     minHeight: 54,
     borderRadius: 16,
     marginTop: 8,

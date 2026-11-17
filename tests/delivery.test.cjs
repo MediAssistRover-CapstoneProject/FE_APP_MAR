@@ -163,3 +163,64 @@ test('transport error remains an unknown result; retry reads pending intent befo
   latest.job.status = 'RECOVERY_REQUIRED';
   assert.match(cancellation.cancellationMessage(latest), /Chưa xác nhận robot đã dừng an toàn/);
 });
+
+test('D1: scanContext strictly differentiates sender and receiver assignments and rejects unassigned accounts', () => {
+  const receiverActor = '66666666-6666-4666-8666-666666666666';
+  const receiverStepId = '77777777-7777-4777-8777-777777777777';
+  const receiverStep = {
+    jobStepId: receiverStepId,
+    stepCodeSnapshot: 'AUTH_RECEIVER',
+    stepTypeSnapshot: 'AUTHENTICATE',
+    status: 'RUNNING',
+    resolvedInputsJson: { method: 'QR_CODE', purpose: 'DELIVERY_RECEIVER' },
+  };
+  const deliveryJob = {
+    jobId,
+    status: 'RUNNING',
+    selectedJobStepId: receiverStepId,
+    schemaVersion: 3,
+    beOrchestrated: true,
+    serviceRequestId: requestId,
+    inputJson: {
+      expected_sender_account_id: actor,
+      expected_receiver_account_id: receiverActor,
+    },
+    steps: [receiverStep],
+  };
+
+  // Sender trying to access receiver step must fail
+  assert.equal(h.scanContext(deliveryJob, actor), undefined);
+
+  // Receiver accessing receiver step must succeed with DELIVERY_RECEIVER
+  assert.deepEqual(h.scanContext(deliveryJob, receiverActor), {
+    jobId,
+    stepId: receiverStepId,
+    purpose: 'DELIVERY_RECEIVER',
+    accountId: receiverActor,
+  });
+
+  // Third party account must fail
+  assert.equal(h.scanContext(deliveryJob, other), undefined);
+
+  // Empty or invalid stepId must fail
+  assert.equal(h.scanContext({ ...deliveryJob, selectedJobStepId: '' }, receiverActor), undefined);
+});
+
+test('D2: cancelled or interrupted job fails closed for running steps, preventing unsafe compartment responses', () => {
+  const runningJob = job();
+  assert.ok(h.selectedRunningStep(runningJob));
+
+  // Job cancelled immediately by BE 4d2b29a
+  const cancelledJob = { ...runningJob, status: 'CANCELLED' };
+  assert.equal(h.selectedRunningStep(cancelledJob), undefined);
+  assert.equal(h.handoffResponse(h.selectedRunningStep(cancelledJob)), undefined);
+
+  // Job interrupted by SOS/emergency
+  const interruptedJob = { ...runningJob, cancelRequestedAt: '2026-11-15T00:00:00Z' };
+  assert.equal(h.selectedRunningStep(interruptedJob), undefined);
+
+  // Cancellation message explains coordinator / physical safety requirement
+  const cancelledSnapshot = { job: cancelledJob, delivery: { request: { serviceRequestId: requestId, requestType: 'DELIVERY' } } };
+  assert.match(cancellation.cancellationMessage(cancelledSnapshot), /Nếu còn hàng trong thùng, liên hệ người điều phối để thu hồi/);
+});
+

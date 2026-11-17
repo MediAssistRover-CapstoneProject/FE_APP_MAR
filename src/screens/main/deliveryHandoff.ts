@@ -82,6 +82,36 @@ export function verificationMatches(result: AuthVerificationResponse, context: D
     result.actorAccountId?.toLowerCase() === context.accountId.toLowerCase();
 }
 
+/**
+ * Kiểm tra bước xác thực QR (`AUTH_SENDER` / `AUTH_RECEIVER`) đã hoàn tất thành công trên BE chưa.
+ * Fail-closed: từ chối nếu nhiệm vụ đã hủy, thất bại, gián đoạn hoặc bước chưa `SUCCEEDED`.
+ */
+export function isAuthStepCompleted(
+  job?: JobResponse | null,
+  authStepId?: string,
+  expectedPurpose?: AuthVerificationPurpose,
+): boolean {
+  if (!job || !authStepId || job.status !== 'RUNNING' || job.cancelRequestedAt) {
+    return false;
+  }
+  const allSteps =
+    job.steps && job.steps.length > 0
+      ? job.steps
+      : job.tasks?.flatMap(task => task.steps || []) || [];
+  const authStep = allSteps.find(step => step.jobStepId === authStepId);
+  if (!authStep || authStep.interruptionRequestedAt) {
+    return false;
+  }
+  if (
+    expectedPurpose &&
+    authStep.resolvedInputsJson?.purpose != null &&
+    authStep.resolvedInputsJson.purpose !== expectedPurpose
+  ) {
+    return false;
+  }
+  return authStep.status === 'SUCCEEDED';
+}
+
 export function handoffResponse(step?: JobStepResponse): JobStepResponsePayload | undefined {
   const phase = deliveryPhase(step);
   if (!step || !phase || step.status !== 'RUNNING' || step.interruptionRequestedAt) return;

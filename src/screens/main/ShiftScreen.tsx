@@ -17,6 +17,7 @@ import { Calendar, CheckCircle, Clock, LogIn, LogOut, RefreshCw, XCircle } from 
 import { StaffHeader } from '../../components/common/StaffHeader';
 import { staffApi } from '../../api/modules/staff.api';
 import { ShiftResponse } from '../../api/types';
+import { useStaffProfileStore } from '../../store/useStaffProfileStore';
 import { Colors, Shadows, BorderRadius, Spacing } from '../../constants/theme';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -150,8 +151,14 @@ function ShiftCard({ shift, onCheckIn, onCheckOut, loadingId }: ShiftCardProps) 
             <ActivityIndicator size="small" color="#fff" />
           ) : (
             <>
-              <LogIn size={16} color="#fff" />
-              <Text style={styles.actionBtnText}>VÀO CA (CHECK-IN)</Text>
+              <LogIn size={16} color={checkInEnabled ? '#fff' : '#64748B'} />
+              <Text
+                style={[styles.actionBtnText, !checkInEnabled && styles.actionBtnTextDisabled]}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+              >
+                Check-in
+              </Text>
             </>
           )}
         </TouchableOpacity>
@@ -166,9 +173,16 @@ function ShiftCard({ shift, onCheckIn, onCheckOut, loadingId }: ShiftCardProps) 
             <ActivityIndicator size="small" color={Colors.textPrimary} />
           ) : (
             <>
-              <LogOut size={16} color={checkOutEnabled ? Colors.textPrimary : Colors.textMuted} />
-              <Text style={[styles.actionBtnText, { color: checkOutEnabled ? Colors.textPrimary : Colors.textMuted }]}>
-                HẾT CA (CHECK-OUT)
+              <LogOut size={16} color={checkOutEnabled ? Colors.textPrimary : '#64748B'} />
+              <Text
+                style={[
+                  styles.actionBtnText,
+                  { color: checkOutEnabled ? Colors.textPrimary : '#64748B' },
+                ]}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+              >
+                Check-out
               </Text>
             </>
           )}
@@ -232,6 +246,8 @@ export function ShiftScreen() {
     setLoadingId(shiftId);
     try {
       await staffApi.checkIn(shiftId);
+      useStaffProfileStore.getState().invalidate();
+      void useStaffProfileStore.getState().ensureLoaded(true);
       Alert.alert('✅ Check-in thành công', 'Bạn đã check-in ca trực thành công!', [{ text: 'OK' }]);
       await loadShifts(true);
     } catch (err: any) {
@@ -255,6 +271,8 @@ export function ShiftScreen() {
             setLoadingId(shiftId);
             try {
               await staffApi.checkOut(shiftId);
+              useStaffProfileStore.getState().invalidate();
+              void useStaffProfileStore.getState().ensureLoaded(true);
               Alert.alert('✅ Check-out thành công', 'Bạn đã check-out ca trực thành công!', [{ text: 'OK' }]);
               await loadShifts(true);
             } catch (err: any) {
@@ -476,12 +494,13 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 8,
+    gap: 6,
     height: 48,
+    paddingHorizontal: 12,
     borderRadius: 14,
   },
   checkInBtn: {
-    backgroundColor: Colors.hero,
+    backgroundColor: Colors.actionSurface,
     ...Shadows.button,
   },
   checkOutBtn: {
@@ -492,13 +511,16 @@ const styles = StyleSheet.create({
   actionBtnDisabled: {
     backgroundColor: '#E4E4E7',
     borderWidth: 0,
-    opacity: 0.6,
+    opacity: 0.7,
   },
   actionBtnText: {
     color: '#fff',
-    fontSize: 12,
+    fontSize: 13,
     fontWeight: '700',
-    letterSpacing: 0.3,
+    letterSpacing: 0.2,
+  },
+  actionBtnTextDisabled: {
+    color: '#64748B',
   },
 
   // Help text
@@ -555,7 +577,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    backgroundColor: Colors.hero,
+    backgroundColor: Colors.actionSurface,
     paddingHorizontal: 20,
     paddingVertical: 10,
     borderRadius: 12,

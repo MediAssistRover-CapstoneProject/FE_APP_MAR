@@ -11,9 +11,8 @@ import {
 import { Colors, Spacing, BorderRadius, Shadows } from '../../constants/theme';
 import { LogOut, ArrowLeft, User, Briefcase, Clock, MapPin, X, RefreshCw, Lock } from 'lucide-react-native';
 import { useAuthStore } from '../../store/useAuthStore';
+import { useStaffProfileStore } from '../../store/useStaffProfileStore';
 import { useNavigation } from '@react-navigation/native';
-import { staffApi } from '../../api/modules/staff.api';
-import { StaffMeResponse, ShiftResponse } from '../../api/types';
 
 interface StaffHeaderProps {
   /** Tên nhân viên tùy chọn (mặc định lấy từ authStore hoặc staffApi) */
@@ -34,33 +33,19 @@ export const StaffHeader: React.FC<StaffHeaderProps> = ({
 }) => {
   const navigation = useNavigation<any>();
   const { user, logout } = useAuthStore();
-  const [staffData, setStaffData] = useState<StaffMeResponse | null>(null);
-  const [shifts, setShifts] = useState<ShiftResponse[]>([]);
+  const staffData = useStaffProfileStore((s) => s.staffMe);
+  const shifts = useStaffProfileStore((s) => s.shifts);
+  const ensureProfileLoaded = useStaffProfileStore((s) => s.ensureLoaded);
+  const isLoadingProfile = useStaffProfileStore((s) => s.isLoading);
   const [showProfileModal, setShowProfileModal] = useState(false);
-  const [isLoadingProfile, setIsLoadingProfile] = useState(false);
 
-  const fetchStaffProfile = async () => {
-    try {
-      setIsLoadingProfile(true);
-      const res = await staffApi.getStaffMe();
-      if (res) {
-        setStaffData(res);
-        if (res.account) {
-          useAuthStore.setState({ user: res.account });
-        }
-      }
-      const shiftResult = await staffApi.getAllStaffShifts();
-      setShifts(shiftResult);
-    } catch {
-      // Giữ dữ liệu hiện tại nếu offline hoặc lỗi mạng nhẹ
-    } finally {
-      setIsLoadingProfile(false);
-    }
+  const fetchStaffProfile = (force = false) => {
+    void ensureProfileLoaded(force).catch(() => {});
   };
 
   useEffect(() => {
-    fetchStaffProfile();
-  }, []);
+    fetchStaffProfile(false);
+  }, [user?.accountId]);
 
   const displayName =
     staffName || staffData?.account?.fullName || user?.fullName || 'Nhân viên';
@@ -157,7 +142,7 @@ export const StaffHeader: React.FC<StaffHeaderProps> = ({
                 <Text style={styles.profileModalTitle}>Hồ sơ nhân viên & Ca trực</Text>
               </View>
               <TouchableOpacity
-                onPress={fetchStaffProfile}
+                onPress={() => fetchStaffProfile(true)}
                 hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
               >
                 {isLoadingProfile ? (
@@ -324,7 +309,7 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: Colors.hero,
+    backgroundColor: Colors.actionSurface,
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: Spacing.sm,
@@ -569,7 +554,7 @@ const styles = StyleSheet.create({
   sheetCloseButton: {
     height: 50,
     borderRadius: 16,
-    backgroundColor: Colors.hero,
+    backgroundColor: Colors.actionSurface,
     alignItems: 'center',
     justifyContent: 'center',
     marginTop: Spacing.xs,

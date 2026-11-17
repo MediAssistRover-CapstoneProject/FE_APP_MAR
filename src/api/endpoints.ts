@@ -21,6 +21,7 @@ export const ENDPOINTS = {
     SHIFT_CHECK_IN: (shiftId: string) => `/staff/shifts/${shiftId}/check-in`,
     SHIFT_CHECK_OUT: (shiftId: string) => `/staff/shifts/${shiftId}/check-out`,
     ON_DUTY: '/staff/on-duty',
+    NOTIFICATION_EVENTS: '/staff/notifications/events',
   },
 
   // 3. Robot, Định vị & Điều khiển (Staff Operations)

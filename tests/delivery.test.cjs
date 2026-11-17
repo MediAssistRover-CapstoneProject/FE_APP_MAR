@@ -224,3 +224,137 @@ test('D2: cancelled or interrupted job fails closed for running steps, preventin
   assert.match(cancellation.cancellationMessage(cancelledSnapshot), /Nếu còn hàng trong thùng, liên hệ người điều phối để thu hồi/);
 });
 
+test('D3: DELIVERY_CREATED notification shows only to assigned expectedReceiverAccountId with matching recipients, dedupes alertId, opens via dataJson.jobId, and excludes coworkers/sender/drafts/failures', () => {
+  const notifMod = load('deliveryNotifications', { './deliveryHandoff': h });
+  const senderId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const receiverId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+  const coworkerSameRoomId = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+  const validJobId = '11111111-1111-4111-8111-111111111111';
+  const reqId = '22222222-2222-4222-8222-222222222222';
+  const alertId1 = '99999999-9999-4999-8999-999999999991';
+  const alertId2 = '99999999-9999-4999-8999-999999999992';
+
+  const queuedJob = {
+    jobId: validJobId,
+    serviceRequestId: reqId,
+    status: 'QUEUED',
+    inputJson: { expected_receiver_account_id: receiverId },
+  };
+  const validDelivery = {
+    request: { serviceRequestId: reqId, requestType: 'DELIVERY', status: 'QUEUED' },
+    pickupRoomId: 'room-a',
+    deliveryRoomId: 'room-b',
+    expectedSenderAccountId: senderId,
+    expectedReceiverAccountId: receiverId,
+    items: [{ itemName: 'Kháng sinh Ampicillin' }],
+  };
+  const jobsById = { [validJobId]: queuedJob };
+  const deliveriesByRequestId = { [reqId]: validDelivery };
+  const roomsById = {
+    'room-a': { roomId: 'room-a', roomName: 'Kho Dược' },
+    'room-b': { roomId: 'room-b', roomName: 'Phòng Nội 1' },
+  };
+
+  // Receiver account gets alert with own recipient entry -> sees notification (deduped by alertId!)
+  const receiverAlerts = [
+    {
+      alertId: alertId1,
+      serviceRequestId: reqId,
+      notificationType: 'DELIVERY_CREATED',
+      status: 'OPEN',
+      message: 'Có đơn giao hàng mới dành cho bạn.',
+      dataJson: { jobId: validJobId },
+      createdAt: '2026-11-17T10:00:00Z',
+      recipients: [{ accountId: receiverId, channel: 'WEB', deliveryStatus: 'DELIVERED' }],
+    },
+    // Duplicate alertId must collapse
+    {
+      alertId: alertId1,
+      serviceRequestId: reqId,
+      notificationType: 'DELIVERY_CREATED',
+      status: 'OPEN',
+      message: 'Có đơn giao hàng mới dành cho bạn.',
+      dataJson: { jobId: validJobId },
+      createdAt: '2026-11-17T10:00:00Z',
+      recipients: [{ accountId: receiverId, channel: 'WEB', deliveryStatus: 'DELIVERED' }],
+    },
+  ];
+
+  const receiverResult = notifMod.verifyAndDedupeDeliveryAlerts({
+    alerts: receiverAlerts,
+    currentAccountId: receiverId,
+    jobsById,
+    deliveriesByRequestId,
+    roomsById,
+  });
+  assert.equal(receiverResult.length, 1);
+  assert.equal(receiverResult[0].alertId, alertId1);
+  assert.equal(receiverResult[0].jobId, validJobId);
+  assert.equal(receiverResult[0].title, 'Kháng sinh Ampicillin');
+  assert.equal(receiverResult[0].routeSummary, 'Kho Dược → Phòng Nội 1');
+
+  // Staff #2: Sender (even though in same ServiceRequest scope, BE returns recipients: []) MUST NOT see notification
+  const senderViewAlerts = [{ ...receiverAlerts[0], recipients: [] }];
+  assert.equal(
+    notifMod.verifyAndDedupeDeliveryAlerts({
+      alerts: senderViewAlerts,
+      currentAccountId: senderId,
+      jobsById,
+      deliveriesByRequestId,
+    }).length,
+    0
+  );
+
+  // Staff #2b: Coworker on duty in same destination room (even if recipients were falsely present, expectedReceiverAccountId != coworker!) MUST NOT see notification
+  assert.equal(
+    notifMod.verifyAndDedupeDeliveryAlerts({
+      alerts: [{ ...receiverAlerts[0], recipients: [{ accountId: coworkerSameRoomId }] }],
+      currentAccountId: coworkerSameRoomId,
+      jobsById,
+      deliveriesByRequestId,
+    }).length,
+    0
+  );
+
+  // Draft, failed request, cancelled job, or missing job detail fail closed (0 notifications)
+  const draftReqId = '33333333-3333-4333-8333-333333333333';
+  const draftJobId = '44444444-4444-4444-8444-444444444444';
+  assert.equal(
+    notifMod.verifyAndDedupeDeliveryAlerts({
+      alerts: [{ ...receiverAlerts[0], alertId: alertId2, serviceRequestId: draftReqId, dataJson: { jobId: draftJobId } }],
+      currentAccountId: receiverId,
+      jobsById: { [draftJobId]: { ...queuedJob, jobId: draftJobId, serviceRequestId: draftReqId } },
+      deliveriesByRequestId: {
+        [draftReqId]: { ...validDelivery, request: { serviceRequestId: draftReqId, requestType: 'DELIVERY', status: 'DRAFT' } },
+      },
+    }).length,
+    0
+  );
+  assert.equal(
+    notifMod.verifyAndDedupeDeliveryAlerts({
+      alerts: [{ ...receiverAlerts[0], alertId: alertId2 }],
+      currentAccountId: receiverId,
+      jobsById: { [validJobId]: { ...queuedJob, status: 'CANCELLED' } },
+      deliveriesByRequestId,
+    }).length,
+    0
+  );
+  assert.equal(
+    notifMod.verifyAndDedupeDeliveryAlerts({
+      alerts: [{ ...receiverAlerts[0], alertId: alertId2 }],
+      currentAccountId: receiverId,
+      jobsById: {},
+      deliveriesByRequestId,
+    }).length,
+    0
+  );
+
+  // Verify MissionScreen wiring uses exact UI copy, focus/AppState refresh, alertApi.getDeliveryCreatedAlerts, and followJob(notif.jobId)
+  const missionSrc = fs.readFileSync(path.resolve(__dirname, '../src/screens/main/MissionScreen.tsx'), 'utf8');
+  assert.match(missionSrc, /Bạn có đơn giao hàng cần theo dõi/);
+  assert.match(missionSrc, /getDeliveryCreatedAlerts/);
+  assert.match(missionSrc, /alertRecipientsIncludesAccount/);
+  assert.match(missionSrc, /verifyAndDedupeDeliveryAlerts/);
+  assert.match(missionSrc, /followJob\(notif\.jobId\)/);
+  assert.match(missionSrc, /getDeliveryNotificationPollingPlan/);
+});

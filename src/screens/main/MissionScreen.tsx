@@ -17,11 +17,15 @@ import {
 import { useIsFocused } from '@react-navigation/native';
 import { Colors, Spacing, BorderRadius, Typography, Shadows } from '../../constants/theme';
 import { StaffHeader } from '../../components/common/StaffHeader';
+import { alertApi } from '../../api/modules/alert.api';
 import { deliveryApi, type AuthVerificationPurpose, type DeliveryResponse } from '../../api/modules/delivery.api';
 import { dispatchApi } from '../../api/modules/dispatch.api';
 import { facilityApi } from '../../api/modules/facility.api';
 import { staffApi } from '../../api/modules/staff.api';
-import { getMissionPollingPlan } from '../../api/pollingPolicy';
+import {
+  getDeliveryNotificationPollingPlan,
+  getMissionPollingPlan,
+} from '../../api/pollingPolicy';
 import {
   EndpointResponse,
   JobResponse,
@@ -53,6 +57,7 @@ import {
   QrCode,
   Unlock,
   Package,
+  Bell,
   ShieldCheck,
   AlertCircle,
   UserCheck,
@@ -83,6 +88,12 @@ import {
 } from './deliveryHandoff';
 import { robotDeliveryProof } from './robotDeliveryProof';
 import { loadDeliveryAttempt, saveDeliveryAttempt } from './deliveryAttemptStorage';
+import {
+  alertRecipientsIncludesAccount,
+  extractJobIdFromAlert,
+  verifyAndDedupeDeliveryAlerts,
+  type VerifiedDeliveryNotification,
+} from './deliveryNotifications';
 
 interface JobSnapshot {
   job: JobResponse;
@@ -262,6 +273,7 @@ export const MissionScreen: React.FC = () => {
 
   const [recentJobs, setRecentJobs] = useState<JobResponse[]>([]);
   const [deliveriesMap, setDeliveriesMap] = useState<Record<string, DeliveryResponse>>({});
+  const [deliveryNotifications, setDeliveryNotifications] = useState<VerifiedDeliveryNotification[]>([]);
   const [snapshot, setSnapshot] = useState<JobSnapshot | null>(null);
   const [manualJobIdInput, setManualJobIdInput] = useState('');
   const [isLoadingJobs, setIsLoadingJobs] = useState(false);
@@ -287,8 +299,11 @@ export const MissionScreen: React.FC = () => {
   const handoffActionOffsetYRef = useRef<number>(0);
   const deliveriesMapRef = useRef<Record<string, DeliveryResponse>>({});
   const recentJobsRef = useRef<JobResponse[]>([]);
+  const verifiedJobsMapRef = useRef<Record<string, JobResponse>>({});
   const snapshotRef = useRef<JobSnapshot | null>(null);
   const wasMissionPollingRef = useRef(false);
+  const notificationInFlightRef = useRef(false);
+  const notificationSeqRef = useRef(0);
   const prevIsFocusedRef = useRef(isFocused);
   const prevAppStateRef = useRef<AppStateStatus>(appState);
 
@@ -811,11 +826,141 @@ export const MissionScreen: React.FC = () => {
     }
   }, [followJob]);
 
+  const roomsById = useMemo(() => {
+    const map: Record<string, RoomDto> = {};
+    for (const r of rooms) map[r.roomId] = r;
+    return map;
+  }, [rooms]);
+
+  const endpointsById = useMemo(() => {
+    const map: Record<string, EndpointResponse> = {};
+    for (const ep of allEndpoints) map[ep.endpointId] = ep;
+    return map;
+  }, [allEndpoints]);
+
+  const loadDeliveryNotifications = useCallback(async () => {
+    const requestScope = scopeRef.current;
+    const actorId = (currentSenderAccount?.accountId || user?.accountId || '').trim().toLowerCase();
+    if (!actorId || !UUID_PATTERN.test(actorId)) {
+      setDeliveryNotifications([]);
+      return;
+    }
+    if (notificationInFlightRef.current) return;
+    notificationInFlightRef.current = true;
+    const seq = ++notificationSeqRef.current;
+
+    try {
+      const rawAlerts = await alertApi.getDeliveryCreatedAlerts(30);
+      if (scopeRef.current !== requestScope || notificationSeqRef.current !== seq) return;
+
+      const candidateAlerts = (rawAlerts || []).filter(
+        (alert) =>
+          String(alert.notificationType || '').toUpperCase().trim() === 'DELIVERY_CREATED' &&
+          String(alert.status || '').toUpperCase().trim() !== 'CLOSED' &&
+          alertRecipientsIncludesAccount(alert, actorId)
+      );
+
+      if (candidateAlerts.length === 0) {
+        setDeliveryNotifications([]);
+        return;
+      }
+
+      const candidateJobIds = Array.from(
+        new Set(
+          candidateAlerts
+            .map((a) => extractJobIdFromAlert(a))
+            .filter((id): id is string => Boolean(id))
+        )
+      );
+
+      const jobsById: Record<string, JobResponse> = {};
+      for (const j of recentJobsRef.current) {
+        if (j?.jobId) jobsById[j.jobId.toLowerCase()] = j;
+      }
+      if (snapshotRef.current?.job?.jobId) {
+        jobsById[snapshotRef.current.job.jobId.toLowerCase()] = snapshotRef.current.job;
+      }
+      for (const [k, v] of Object.entries(verifiedJobsMapRef.current)) {
+        if (v?.jobId && !jobsById[k.toLowerCase()]) {
+          jobsById[k.toLowerCase()] = v;
+        }
+      }
+
+      if (candidateJobIds.length > 0) {
+        const jobResults = await Promise.allSettled(
+          candidateJobIds.map((id) => dispatchApi.getJobDetail(id))
+        );
+        if (scopeRef.current !== requestScope || notificationSeqRef.current !== seq) return;
+        jobResults.forEach((res, idx) => {
+          const jId = candidateJobIds[idx].toLowerCase();
+          if (res.status === 'fulfilled' && res.value) {
+            jobsById[jId] = res.value;
+            verifiedJobsMapRef.current[jId] = res.value;
+          } else {
+            // Fail-closed: nếu BE từ chối / không đọc được job mới nhất thì loại khỏi cache xác minh
+            delete jobsById[jId];
+            delete verifiedJobsMapRef.current[jId];
+          }
+        });
+      }
+
+      const mergedDeliveries: Record<string, DeliveryResponse> = { ...deliveriesMapRef.current };
+      const neededReqIds = Array.from(
+        new Set(
+          candidateAlerts
+            .map((alert) => {
+              const jobId = extractJobIdFromAlert(alert);
+              const job = jobId ? jobsById[jobId.toLowerCase()] : undefined;
+              return (job?.serviceRequestId || alert.serviceRequestId || '').trim();
+            })
+            .filter((reqId) => reqId.length > 0 && !mergedDeliveries[reqId])
+        )
+      );
+
+      if (neededReqIds.length > 0) {
+        const delivResults = await Promise.allSettled(
+          neededReqIds.map((reqId) => deliveryApi.getDeliveryById(reqId))
+        );
+        if (scopeRef.current !== requestScope || notificationSeqRef.current !== seq) return;
+        const freshDeliveries: Record<string, DeliveryResponse> = {};
+        delivResults.forEach((res, idx) => {
+          if (res.status === 'fulfilled' && res.value) {
+            const reqId = neededReqIds[idx];
+            mergedDeliveries[reqId] = res.value;
+            freshDeliveries[reqId] = res.value;
+          }
+        });
+        if (Object.keys(freshDeliveries).length > 0) {
+          deliveriesMapRef.current = { ...deliveriesMapRef.current, ...freshDeliveries };
+          setDeliveriesMap((prev) => ({ ...prev, ...freshDeliveries }));
+        }
+      }
+
+      const verified = verifyAndDedupeDeliveryAlerts({
+        alerts: candidateAlerts,
+        currentAccountId: actorId,
+        jobsById,
+        deliveriesByRequestId: mergedDeliveries,
+        roomsById,
+        endpointsById,
+      });
+
+      setDeliveryNotifications(verified);
+    } catch {
+      // Giữ danh sách hiện tại nếu lỗi mạng tạm thời; không tự tạo thông báo giả
+    } finally {
+      notificationInFlightRef.current = false;
+    }
+  }, [currentSenderAccount?.accountId, user?.accountId, roomsById, endpointsById]);
+
   useEffect(() => {
     selectedJobId.current = null;
     attemptRef.current = null;
     deliveriesMapRef.current = {};
+    verifiedJobsMapRef.current = {};
+    notificationInFlightRef.current = false;
     setDeliveriesMap({});
+    setDeliveryNotifications([]);
     setAttemptReady(false);
     submitInFlight.current = false;
     stepInFlight.current = false;
@@ -842,8 +987,10 @@ export const MissionScreen: React.FC = () => {
       if (scopeRef.current === scope) setJobError(error?.message || 'Không đọc được yêu cầu đang chờ.');
     });
     void loadRecentJobsAndDetail();
-  }, [scope, user?.accountId, loadRecentJobsAndDetail]);
+    void loadDeliveryNotifications();
+  }, [scope, user?.accountId, loadRecentJobsAndDetail, loadDeliveryNotifications]);
 
+  // Kiểm tra lại thông báo giao hàng & danh sách nhiệm vụ khi mở lại tab Nhiệm vụ hoặc app quay lại foreground
   useEffect(() => {
     const becameFocused = !prevIsFocusedRef.current && isFocused;
     const becameForeground = prevAppStateRef.current !== 'active' && appState === 'active';
@@ -851,9 +998,19 @@ export const MissionScreen: React.FC = () => {
     prevAppStateRef.current = appState;
 
     if (isFocused && appState === 'active' && (becameFocused || becameForeground)) {
+      void loadDeliveryNotifications();
       void loadRecentJobsAndDetail(selectedJobId.current || undefined);
     }
-  }, [isFocused, appState, loadRecentJobsAndDetail]);
+  }, [isFocused, appState, loadDeliveryNotifications, loadRecentJobsAndDetail]);
+
+  const notificationPollingPlan = getDeliveryNotificationPollingPlan({ isFocused, appState });
+  useEffect(() => {
+    if (!notificationPollingPlan.active) return;
+    const timer = setInterval(() => {
+      void loadDeliveryNotifications();
+    }, notificationPollingPlan.intervalMs);
+    return () => clearInterval(timer);
+  }, [notificationPollingPlan.active, notificationPollingPlan.intervalMs, loadDeliveryNotifications]);
 
   const currentStep = activeJob?.steps?.find(step => step.jobStepId === activeJob.selectedJobStepId);
   const currentStepCode = currentStep?.stepCodeSnapshot;
@@ -1312,6 +1469,7 @@ export const MissionScreen: React.FC = () => {
               disabled={isLoadingJobs}
               onPress={() => {
                 void loadRecentJobsAndDetail(selectedJobId.current || undefined);
+                void loadDeliveryNotifications();
               }}
             >
               {isLoadingJobs ? <ActivityIndicator color={Colors.primary} /> : <RefreshCw size={18} color={Colors.primary} />}
@@ -1319,6 +1477,42 @@ export const MissionScreen: React.FC = () => {
             </TouchableOpacity>
           </View>
 
+          {deliveryNotifications.length > 0 && (
+            <View style={styles.deliveryNoticeSection}>
+              <View style={styles.deliveryNoticeHeader}>
+                <Bell size={16} color="#0369A1" />
+                <Text style={styles.deliveryNoticeHeaderText}>
+                  Bạn có đơn giao hàng cần theo dõi ({deliveryNotifications.length})
+                </Text>
+              </View>
+              {deliveryNotifications.map((notif) => (
+                <TouchableOpacity
+                  key={notif.alertId}
+                  style={styles.deliveryNoticeCard}
+                  onPress={() => {
+                    void followJob(notif.jobId);
+                  }}
+                  activeOpacity={0.82}
+                >
+                  <View style={styles.deliveryNoticeBody}>
+                    <Text style={styles.deliveryNoticeTitle} numberOfLines={1}>
+                      {notif.title}
+                    </Text>
+                    <Text style={styles.deliveryNoticeRoute} numberOfLines={1}>
+                      {notif.routeSummary}
+                    </Text>
+                    <Text style={styles.deliveryNoticeMsg} numberOfLines={2}>
+                      {notif.message}
+                    </Text>
+                  </View>
+                  <View style={styles.deliveryNoticeAction}>
+                    <Text style={styles.deliveryNoticeActionText}>Theo dõi</Text>
+                    <ArrowRight size={14} color="#FFFFFF" />
+                  </View>
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
           {/* Danh sách nhiệm vụ giao nhận của tài khoản */}
           <View style={styles.deliveryJobList}>
             {recentJobs.length === 0 ? (
@@ -2767,6 +2961,68 @@ const styles = StyleSheet.create({
   },
 
   // Danh sách nhiệm vụ giao nhận
+  deliveryNoticeSection: {
+    backgroundColor: '#F0F9FF',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#BAE6FD',
+    padding: 12,
+    gap: 8,
+    marginTop: 4,
+  },
+  deliveryNoticeHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+  },
+  deliveryNoticeHeaderText: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#0369A1',
+    flex: 1,
+  },
+  deliveryNoticeCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#E0F2FE',
+    padding: 12,
+  },
+  deliveryNoticeBody: {
+    flex: 1,
+    gap: 2,
+  },
+  deliveryNoticeTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: Colors.textPrimary,
+  },
+  deliveryNoticeRoute: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#0369A1',
+  },
+  deliveryNoticeMsg: {
+    fontSize: 12,
+    color: Colors.textSecondary,
+  },
+  deliveryNoticeAction: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: Colors.actionSurface,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 10,
+  },
+  deliveryNoticeActionText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
   deliveryJobList: {
     gap: 10,
     marginTop: 6,

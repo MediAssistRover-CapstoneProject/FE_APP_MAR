@@ -25,6 +25,7 @@ export const ALERT_BACKGROUND_PAGE_SIZE = 20;
 
 export const MISSION_FAST_POLL_MS = 1500;
 export const MISSION_NORMAL_POLL_MS = 3500;
+export const MISSION_NOTIFICATION_POLL_MS = 8000;
 export const QR_JOB_POLL_MS = 1500;
 export const QR_WAITING_POLL_MS = 4000;
 export const MQTT_PREVIEW_POLL_MS = 2500;
@@ -152,3 +153,19 @@ export function getMissionPollingPlan(input: {
   };
 }
 
+/**
+ * Chu kỳ kiểm tra thông báo đơn giao hàng (DELIVERY_CREATED) trong tab Nhiệm vụ:
+ * - Chỉ poll nhẹ khi đang mở tab Nhiệm vụ và app ở foreground.
+ */
+export function getDeliveryNotificationPollingPlan(input: {
+  isFocused: boolean;
+  appState: AppLifecycleState;
+}): MissionPollingPlan {
+  if (input.appState !== 'active' || !input.isFocused) {
+    return { active: false, intervalMs: 0 };
+  }
+  return {
+    active: true,
+    intervalMs: MISSION_NOTIFICATION_POLL_MS,
+  };
+}

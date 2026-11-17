@@ -154,3 +154,36 @@ test('MissionScreen pauses behind QR modal/off-tab, speeds up 1.5s during UNLOCK
   );
 });
 
+test('All screens/modals implement focus gating, JPEG tab gating, and shared staff profile store', () => {
+  const read = (rel) => fs.readFileSync(path.resolve(__dirname, '..', rel), 'utf8');
+
+  const monitorSrc = read('src/components/map/BackendRobotMonitorModal.tsx');
+  assert.match(monitorSrc, /cameraTab !== 'mqtt_preview'/);
+
+  const alertSrc = read('src/screens/main/AlertScreen.tsx');
+  assert.match(alertSrc, /useIsFocused/);
+  assert.match(alertSrc, /getAlertPollingPlan/);
+  assert.doesNotMatch(alertSrc, /getAllIncidents\(\)|getAllAlerts\(\)/);
+
+  const missionSrc = read('src/screens/main/MissionScreen.tsx');
+  assert.match(missionSrc, /deliveriesMapRef/);
+  assert.match(missionSrc, /getMissionPollingPlan/);
+  assert.match(missionSrc, /getDeliveryNotificationPollingPlan/);
+  assert.match(missionSrc, /useStaffProfileStore/);
+
+  assert.deepEqual(
+    policy.getDeliveryNotificationPollingPlan({ isFocused: false, appState: 'active' }),
+    { active: false, intervalMs: 0 }
+  );
+  assert.deepEqual(
+    policy.getDeliveryNotificationPollingPlan({ isFocused: true, appState: 'background' }),
+    { active: false, intervalMs: 0 }
+  );
+  assert.equal(
+    policy.getDeliveryNotificationPollingPlan({ isFocused: true, appState: 'active' }).active,
+    true
+  );
+
+  const headerSrc = read('src/components/common/StaffHeader.tsx');
+  assert.match(headerSrc, /useStaffProfileStore/);
+});

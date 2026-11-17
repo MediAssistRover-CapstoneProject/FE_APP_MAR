@@ -25,6 +25,21 @@ export const alertApi = {
     return apiClient.get<PageResponse<AlertResponse>>(`${ENDPOINTS.ALERTS.LIST}?${query}`);
   },
 
+  /**
+   * 1b. Lấy thông báo giao hàng mới (DELIVERY_CREATED) qua /api/v1/alerts?type=DELIVERY_CREATED.
+   * Ghi chú: Swagger có SSE GET /api/v1/staff/notifications/events (chỉ ROLE_STAFF, text/event-stream),
+   * nhưng React Native không có EventSource chuẩn trên Hermes; dùng /api/v1/alerts kết hợp
+   * kiểm tra chặt recipients + expectedReceiverAccountId an toàn và ổn định đa nền tảng.
+   */
+  async getDeliveryCreatedAlerts(size = 30): Promise<AlertResponse[]> {
+    const page = await this.getAlerts({
+      type: 'DELIVERY_CREATED',
+      page: 0,
+      size,
+    });
+    return page?.content || [];
+  },
+
   async getAllAlerts(params: Omit<AlertQueryParams, 'page' | 'size'> = {}): Promise<AlertResponse[]> {
     const first = await this.getAlerts({ ...params, page: 0, size: 100 });
     const alerts = [...(first.content || [])];

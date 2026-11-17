@@ -1,6 +1,11 @@
 import { apiClient } from '../client';
 import { ENDPOINTS } from '../endpoints';
-import { IncidentResponse, ResolutionPayload, PageResponse } from '../types';
+import {
+  IncidentResponse,
+  ResolutionPayload,
+  PageResponse,
+  SosResponseRouteResponse,
+} from '../types';
 
 /**
  * Staff Incidents API Module
@@ -54,6 +59,16 @@ export const incidentApi = {
   // 4. Bắt đầu xử lý / Cử đội cấp cứu & điều phối robot đến hiện trường (Start)
   async startIncident(id: string): Promise<IncidentResponse> {
     return apiClient.post<IncidentResponse>(ENDPOINTS.INCIDENTS.START(id));
+  },
+
+  // 4b. Xác nhận SOS thật sau cuộc gọi ASSIST (Confirm -> IN_PROGRESS)
+  async confirmIncident(id: string): Promise<IncidentResponse> {
+    return apiClient.post<IncidentResponse>(ENDPOINTS.INCIDENTS.CONFIRM(id));
+  },
+
+  // 4c. Lấy tuyến đi bộ từ phòng trực SOS đến vị trí sự cố (A* trên lưới BE, đơn vị cm)
+  async getSosResponseRoute(id: string): Promise<SosResponseRouteResponse> {
+    return apiClient.get<SosResponseRouteResponse>(ENDPOINTS.INCIDENTS.RESPONSE_ROUTE(id));
   },
 
   // 5. Giải quyết xong sự cố tai nạn (Resolve)

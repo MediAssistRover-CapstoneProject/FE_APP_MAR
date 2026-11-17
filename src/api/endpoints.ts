@@ -101,9 +101,11 @@ export const ENDPOINTS = {
     DETAIL: (id: string) => `/emergency-incidents/${id}`,
     ACKNOWLEDGE: (id: string) => `/emergency-incidents/${id}/acknowledge`,
     START: (id: string) => `/emergency-incidents/${id}/start`,
+    CONFIRM: (id: string) => `/emergency-incidents/${id}/confirm`,
     RESOLVE: (id: string) => `/emergency-incidents/${id}/resolve`,
     FALSE_ALARM: (id: string) => `/emergency-incidents/${id}/false-alarm`,
     CLOSE: (id: string) => `/emergency-incidents/${id}/close`,
+    RESPONSE_ROUTE: (id: string) => `/emergency-incidents/${id}/response-route`,
   },
 
   // 8. Workflows

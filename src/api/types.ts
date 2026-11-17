@@ -302,6 +302,13 @@ export interface AlertQueryParams {
   size?: number;
 }
 
+export type SosRoutingStatus =
+  | 'ASSIGNED'
+  | 'NO_MONITORING_ROOM'
+  | 'ROOM_UNAVAILABLE'
+  | 'NO_ACTIVE_SHIFT'
+  | 'AMBIGUOUS_SHIFT'
+  | string;
 
 export interface IncidentResponse {
   incidentId: string;
@@ -309,7 +316,10 @@ export interface IncidentResponse {
   mapId?: string;
   endpointId?: string;
   acknowledgedByAccountId?: string;
+  confirmedByAccountId?: string;
   resolvedByAccountId?: string;
+  sosResponderAccountId?: string;
+  sosRoutingStatus?: SosRoutingStatus;
   incidentType?: string;
   severity: 'WARNING' | 'CRITICAL';
   status: 'OPEN' | 'ACKNOWLEDGED' | 'IN_PROGRESS' | 'RESOLVED' | 'CLOSED' | 'FALSE_ALARM';
@@ -318,9 +328,58 @@ export interface IncidentResponse {
   yM?: number;
   occurredAt?: string;
   acknowledgedAt?: string;
+  confirmedAt?: string;
   resolvedAt?: string;
   closedAt?: string;
+  sourceEvidenceRef?: string;
+  resolutionNote?: string;
+  resolutionEvidence?: unknown;
   rowVersion?: number;
+}
+
+export interface SosResponseRoutePoint {
+  xCm?: number;
+  yCm?: number;
+  /** Swagger live hiện map nhầm schema Point sang { x, y } của MapPresentation */
+  x?: number;
+  y?: number;
+}
+
+export interface SosResponseRouteEndpoint extends SosResponseRoutePoint {
+  endpointId?: string;
+  endpointCode?: string;
+  endpointName?: string;
+  roomName?: string;
+  label?: string;
+  kind?: string;
+}
+
+export type SosResponseRouteStatus =
+  | 'AVAILABLE'
+  | 'OK'
+  | 'READY'
+  | 'FOUND'
+  | 'ROUTE_AVAILABLE'
+  | 'NO_COORDINATES'
+  | 'MISSING_COORDINATES'
+  | 'MAP_MISMATCH'
+  | 'UNWALKABLE'
+  | 'NO_PATH'
+  | 'NO_MONITORING_ROOM'
+  | 'UNAVAILABLE'
+  | string;
+
+export interface SosResponseRouteResponse {
+  incidentId?: string;
+  status: SosResponseRouteStatus;
+  reason?: string | null;
+  mapId?: string | null;
+  mapAssetHash?: string | null;
+  unit?: string | null;
+  origin?: SosResponseRouteEndpoint | null;
+  destination?: SosResponseRouteEndpoint | null;
+  points?: SosResponseRoutePoint[] | null;
+  distanceCm?: number | null;
 }
 
 export interface ResolutionPayload {

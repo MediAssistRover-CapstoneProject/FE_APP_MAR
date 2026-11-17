@@ -22,6 +22,7 @@ import { Layers, Lock } from 'lucide-react-native';
 import { API_CONFIG } from '../../api/config';
 import { EndpointResponse, MapPresentationPublishedResponse, MapResponse, ZoneDto } from '../../api/types';
 import { normalizeRobotPose } from './robotPose';
+import { SosRenderableRoute } from './sosResponseRoute';
 import {
   analyzeSlamMapGeometry,
   decodePngGrayscale,
@@ -56,6 +57,7 @@ interface BackendHospitalMapProps {
   robotPose?: MapRobotPose | null;
   isPoseLive?: boolean;
   plannedPath?: MapPlanPoint[] | null;
+  sosRoute?: SosRenderableRoute | null;
 }
 
 interface MapPoint {
@@ -114,6 +116,7 @@ export const BackendHospitalMap: React.FC<BackendHospitalMapProps> = ({
   robotPose,
   isPoseLive = false,
   plannedPath,
+  sosRoute,
 }) => {
   const [isLoadingImage, setIsLoadingImage] = useState(true);
   const [imageFailed, setImageFailed] = useState(false);
@@ -222,6 +225,19 @@ export const BackendHospitalMap: React.FC<BackendHospitalMapProps> = ({
     return pose;
   }, [map.mapId, robotPose]);
 
+  const validSosRoute = useMemo(() => {
+    if (!sosRoute) return null;
+    if (sosRoute.mapId && sosRoute.mapId !== map.mapId) return null;
+    if (
+      !Number.isFinite(sosRoute.origin?.x) ||
+      !Number.isFinite(sosRoute.origin?.y) ||
+      !Number.isFinite(sosRoute.destination?.x) ||
+      !Number.isFinite(sosRoute.destination?.y)
+    ) {
+      return null;
+    }
+    return sosRoute;
+  }, [map.mapId, sosRoute]);
 
   const presentationFeatures = presentation?.document?.features || [];
   const hasPresentation = presentationFeatures.length > 0;
@@ -369,6 +385,15 @@ export const BackendHospitalMap: React.FC<BackendHospitalMapProps> = ({
     if (validRobotPose) {
       expandWithPoint({ x: validRobotPose.xM, y: validRobotPose.yM });
     }
+    if (validSosRoute) {
+      expandWithPoint({ x: validSosRoute.origin.x, y: validSosRoute.origin.y });
+      expandWithPoint({ x: validSosRoute.destination.x, y: validSosRoute.destination.y });
+      validSosRoute.points.forEach((pt) => {
+        if (Number.isFinite(pt.x) && Number.isFinite(pt.y)) {
+          expandWithPoint({ x: pt.x, y: pt.y });
+        }
+      });
+    }
 
     if (!Number.isFinite(xMin) || !Number.isFinite(xMax)) {
       xMin = -pixelWidth * 0.45;
@@ -433,6 +458,7 @@ export const BackendHospitalMap: React.FC<BackendHospitalMapProps> = ({
     presentation,
     presentationFeatures,
     validRobotPose,
+    validSosRoute,
     visibleEndpoints,
     visibleZones,
   ]);
@@ -828,6 +854,133 @@ export const BackendHospitalMap: React.FC<BackendHospitalMapProps> = ({
             );
           })()}
 
+          {/* 2b. Lớp tuyến đi bộ hỗ trợ SOS (tách biệt hẳn với đường dẫn Nav2 của Robot) */}
+          {validSosRoute && (() => {
+            const routePixelPoints = validSosRoute.points.map((pt) =>
+              geometry.toViewPixel({ x: pt.x, y: pt.y })
+            );
+            const routePolyText = routePixelPoints.map((p) => `${p.x},${p.y}`).join(' ');
+            const originPx = geometry.toViewPixel({
+              x: validSosRoute.origin.x,
+              y: validSosRoute.origin.y,
+            });
+            const destPx = geometry.toViewPixel({
+              x: validSosRoute.destination.x,
+              y: validSosRoute.destination.y,
+            });
+            const markerR = Math.max(3.6, viewWidth / 62);
+            const labelFont = Math.max(4.4, viewWidth / 44);
+            const originText = validSosRoute.origin.label || 'Phòng trực SOS';
+            const destText = validSosRoute.destination.label || 'Vị trí SOS đã ghi nhận';
+            const originPillW = Math.max(originText.length * labelFont * 0.56 + 7, 36);
+            const destPillW = Math.max(destText.length * labelFont * 0.56 + 7, 44);
+            const pillH = labelFont + 3.2;
+
+            return (
+              <G>
+                {routePixelPoints.length >= 2 && (
+                  <>
+                    <Polyline
+                      points={routePolyText}
+                      fill="none"
+                      stroke="rgba(255, 255, 255, 0.94)"
+                      strokeWidth={Math.max(4.2, viewWidth / 58)}
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                    <Polyline
+                      points={routePolyText}
+                      fill="none"
+                      stroke="#EA580C"
+                      strokeWidth={Math.max(2.1, viewWidth / 105)}
+                      strokeDasharray="4.2,2.4"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </>
+                )}
+
+                {/* Điểm xuất phát: Phòng trực SOS */}
+                <Circle
+                  cx={originPx.x}
+                  cy={originPx.y}
+                  r={markerR * 1.5}
+                  fill="rgba(5, 150, 105, 0.2)"
+                />
+                <Circle
+                  cx={originPx.x}
+                  cy={originPx.y}
+                  r={markerR}
+                  fill="#059669"
+                  stroke="#FFFFFF"
+                  strokeWidth={Math.max(1.0, viewWidth / 190)}
+                />
+                <Rect
+                  x={originPx.x - originPillW / 2}
+                  y={originPx.y - markerR - pillH - 2}
+                  width={originPillW}
+                  height={pillH}
+                  rx={pillH / 2}
+                  fill="rgba(6, 95, 70, 0.92)"
+                  stroke="#A7F3D0"
+                  strokeWidth={0.5}
+                />
+                <SvgText
+                  x={originPx.x}
+                  y={originPx.y - markerR - pillH * 0.5 + labelFont * 0.34 - 2}
+                  textAnchor="middle"
+                  fontSize={labelFont}
+                  fontWeight="800"
+                  fill="#FFFFFF"
+                >
+                  {originText}
+                </SvgText>
+
+                {/* Điểm đích: Vị trí SOS đã ghi nhận */}
+                <Circle
+                  cx={destPx.x}
+                  cy={destPx.y}
+                  r={markerR * 1.85}
+                  fill="rgba(220, 38, 38, 0.24)"
+                />
+                <Circle
+                  cx={destPx.x}
+                  cy={destPx.y}
+                  r={markerR * 1.1}
+                  fill="#DC2626"
+                  stroke="#FFFFFF"
+                  strokeWidth={Math.max(1.1, viewWidth / 180)}
+                />
+                <Circle
+                  cx={destPx.x}
+                  cy={destPx.y}
+                  r={markerR * 0.38}
+                  fill="#FFFFFF"
+                />
+                <Rect
+                  x={destPx.x - destPillW / 2}
+                  y={destPx.y + markerR * 1.35 + 1.5}
+                  width={destPillW}
+                  height={pillH}
+                  rx={pillH / 2}
+                  fill="rgba(153, 27, 27, 0.94)"
+                  stroke="#FECACA"
+                  strokeWidth={0.5}
+                />
+                <SvgText
+                  x={destPx.x}
+                  y={destPx.y + markerR * 1.35 + pillH * 0.5 + labelFont * 0.34 + 1.5}
+                  textAnchor="middle"
+                  fontSize={labelFont}
+                  fontWeight="800"
+                  fill="#FFFFFF"
+                >
+                  {destText}
+                </SvgText>
+              </G>
+            );
+          })()}
+
           {/* 3. Vùng chạm ẩn của các điểm dừng (Endpoints) */}
           {visibleEndpoints.map((endpoint) => {
             const point = geometry.toViewPixel({
@@ -998,6 +1151,22 @@ export const BackendHospitalMap: React.FC<BackendHospitalMapProps> = ({
             <View style={[styles.legendDot, { backgroundColor: '#EF4444' }]} />
             <Text style={styles.legendLabel}>Exclusion Zone</Text>
           </View>
+          {validSosRoute && (
+            <>
+              <View style={styles.legendItem}>
+                <View style={[styles.legendDot, { backgroundColor: '#EA580C' }]} />
+                <Text style={styles.legendLabel}>Tuyến đi bộ SOS</Text>
+              </View>
+              <View style={styles.legendItem}>
+                <View style={[styles.legendDot, { backgroundColor: '#059669' }]} />
+                <Text style={styles.legendLabel}>Phòng trực SOS</Text>
+              </View>
+              <View style={styles.legendItem}>
+                <View style={[styles.legendDot, { backgroundColor: '#DC2626' }]} />
+                <Text style={styles.legendLabel}>Vị trí SOS</Text>
+              </View>
+            </>
+          )}
           <View style={styles.legendItem}>
             <View
               style={[

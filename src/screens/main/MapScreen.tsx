@@ -14,7 +14,7 @@ import {
   AppStateStatus,
   Platform,
 } from 'react-native';
-import { useIsFocused } from '@react-navigation/native';
+import { RouteProp, useIsFocused, useRoute } from '@react-navigation/native';
 import { Colors, Spacing, BorderRadius, Shadows, Typography } from '../../constants/theme';
 import { StaffHeader } from '../../components/common/StaffHeader';
 import { robotApi, RobotPoseDto, RobotSnapshotResponse } from '../../api/modules/robot.api';
@@ -29,6 +29,8 @@ import { deliveryApi } from '../../api/modules/delivery.api';
 import { scheduleApi } from '../../api/modules/schedule.api';
 import { facilityApi } from '../../api/modules/facility.api';
 import { dispatchApi } from '../../api/modules/dispatch.api';
+import { incidentApi } from '../../api/modules/incident.api';
+import { apiClient } from '../../api/client';
 import {
   RobotDto,
   RobotBatteryResponse,
@@ -47,7 +49,19 @@ import { SOSCallModal } from '../../components/sos/SOSCallModal';
 import { SOSStreamModal } from '../../components/sos/SOSStreamModal';
 import { BackendHospitalMap } from '../../components/map/BackendHospitalMap';
 import { BackendRobotMonitorModal } from '../../components/map/BackendRobotMonitorModal';
+import {
+  defaultReasonForRouteStatus,
+  evaluateSosRouteAgainstMap,
+  formatDistanceFromCm,
+  parseSosResponseRoute,
+  resolveActiveMapAssetHash,
+  SosRouteRequestGuard,
+  SosRouteViewState,
+} from '../../components/map/sosResponseRoute';
+import { buildSosScopeKey } from './sosDecision';
+import { MainTabParamList } from '../../types/navigation';
 import { useAuthStore } from '../../store/useAuthStore';
+import { useSosContextStore } from '../../store/useSosContextStore';
 import {
   LogOut,
   Settings,
@@ -156,6 +170,7 @@ const getJobDisplayInfo = (job: JobResponse, epList: EndpointResponse[]) => {
 };
 
 export const MapScreen: React.FC = () => {
+  const route = useRoute<RouteProp<MainTabParamList, 'Home'>>();
   const isFocused = useIsFocused();
   const [appState, setAppState] = useState<AppStateStatus>(
     (AppState.currentState as AppStateStatus) || 'active'
@@ -209,6 +224,51 @@ export const MapScreen: React.FC = () => {
   const [cancellingJobId, setCancellingJobId] = useState<string | null>(null);
   const [selectedEndpointId, setSelectedEndpointId] = useState<string | null>(null);
   const authToken = useAuthStore((state) => state.token);
+  const currentUser = useAuthStore((state) => state.user);
+  const currentAccountKey = currentUser?.accountId || currentUser?.username;
+  const currentServerUrl = apiClient.getBaseUrl();
+
+  // Trạng thái tuyến đi bộ hỗ trợ SOS (từ phòng trực SOS -> vị trí SOS đã ghi nhận)
+  const [focusedSosIncidentId, setFocusedSosIncidentId] = useState<string | null>(null);
+  const [sosRouteState, setSosRouteState] = useState<SosRouteViewState>({ kind: 'IDLE' });
+  const [sosRouteReloadTick, setSosRouteReloadTick] = useState(0);
+  const sosRequestGuardRef = useRef(new SosRouteRequestGuard());
+
+  const activeMapRef = useRef<MapResponse | null>(null);
+  const availableMapsRef = useRef<MapResponse[]>([]);
+  const mapPresentationRef = useRef<MapPresentationPublishedResponse | null>(null);
+  const mapImageMetadataRef = useRef<Record<string, any> | null>(null);
+  const accountKeyRef = useRef<string | undefined>(currentAccountKey);
+  const serverUrlRef = useRef<string>(currentServerUrl);
+  useEffect(() => {
+    activeMapRef.current = activeMap;
+  }, [activeMap]);
+  useEffect(() => {
+    availableMapsRef.current = availableMaps;
+  }, [availableMaps]);
+  useEffect(() => {
+    mapPresentationRef.current = mapPresentation;
+  }, [mapPresentation]);
+  useEffect(() => {
+    mapImageMetadataRef.current = mapImageMetadata;
+  }, [mapImageMetadata]);
+  useEffect(() => {
+    accountKeyRef.current = currentAccountKey;
+  }, [currentAccountKey]);
+  useEffect(() => {
+    serverUrlRef.current = currentServerUrl;
+  }, [currentServerUrl]);
+
+  const focusedSosScopeKey = focusedSosIncidentId
+    ? buildSosScopeKey({
+        serverUrl: currentServerUrl,
+        accountId: currentAccountKey,
+        incidentId: focusedSosIncidentId,
+      })
+    : '';
+  const sosRouteInvalidationCounter = useSosContextStore((state) =>
+    focusedSosScopeKey ? state.routeInvalidationCounterByScope[focusedSosScopeKey] || 0 : 0
+  );
 
   const handleSelectBackendEndpoint = useCallback((endpoint: EndpointResponse) => {
     setSelectedEndpointId(endpoint.endpointId);
@@ -531,6 +591,202 @@ export const MapScreen: React.FC = () => {
     };
   }, [activeMap]);
 
+  const loadSosRouteForIncident = useCallback(async (incidentId: string) => {
+    const serverAtStart = apiClient.getBaseUrl();
+    const accountAtStart = accountKeyRef.current;
+    const scopeKey = buildSosScopeKey({
+      serverUrl: serverAtStart,
+      accountId: accountAtStart,
+      incidentId,
+    });
+    const invalidationAtStart =
+      useSosContextStore.getState().routeInvalidationCounterByScope[scopeKey] || 0;
+
+    const token = sosRequestGuardRef.current.begin({
+      serverUrl: serverAtStart,
+      accountId: accountAtStart,
+      incidentId,
+    });
+
+    const isStillValid = () => {
+      if (
+        !sosRequestGuardRef.current.isCurrent(token, {
+          serverUrl: apiClient.getBaseUrl(),
+          accountId: accountKeyRef.current,
+          incidentId,
+        })
+      ) {
+        return false;
+      }
+      const latestInv =
+        useSosContextStore.getState().routeInvalidationCounterByScope[scopeKey] || 0;
+      return latestInv === invalidationAtStart;
+    };
+
+    setSosRouteState({ kind: 'LOADING', incidentId });
+
+    try {
+      const response = await incidentApi.getSosResponseRoute(incidentId);
+      if (!isStillValid()) return;
+
+      const parsed = parseSosResponseRoute(incidentId, response);
+      if (!parsed.route) {
+        setSosRouteState({
+          kind: 'UNAVAILABLE',
+          incidentId,
+          rawStatus: parsed.status,
+          reason: parsed.reason || defaultReasonForRouteStatus(parsed.status),
+          mapId: parsed.mapId ?? null,
+        });
+        return;
+      }
+
+      const targetMapId = parsed.route.mapId || activeMapRef.current?.mapId || '';
+      let targetMap: MapResponse | null =
+        (targetMapId
+          ? availableMapsRef.current.find((m) => m.mapId === targetMapId) ||
+            (activeMapRef.current?.mapId === targetMapId ? activeMapRef.current : null)
+          : activeMapRef.current) || null;
+
+      if (!targetMap && targetMapId) {
+        const [detail, allMaps] = await Promise.all([
+          facilityApi.getMapDetail(targetMapId).catch(() => null),
+          facilityApi.getAllMaps().catch(() => []),
+        ]);
+        if (!isStillValid()) return;
+        if (allMaps.length > 0) {
+          setAvailableMaps(allMaps);
+        }
+        targetMap = detail || allMaps.find((m) => m.mapId === targetMapId) || null;
+      }
+
+      if (!targetMap) {
+        setSosRouteState({
+          kind: 'UNAVAILABLE',
+          incidentId,
+          rawStatus: 'MAP_NOT_FOUND',
+          reason: 'Không tìm thấy bản đồ tương ứng với tuyến SOS trên máy chủ.',
+          mapId: targetMapId || null,
+        });
+        return;
+      }
+
+      let candidateMeta =
+        activeMapRef.current?.mapId === targetMap.mapId ? mapImageMetadataRef.current : null;
+      let candidatePres =
+        activeMapRef.current?.mapId === targetMap.mapId ? mapPresentationRef.current : null;
+
+      if (
+        !candidatePres ||
+        (candidatePres.source?.mapId && candidatePres.source.mapId !== targetMap.mapId)
+      ) {
+        const [meta, pres] = await Promise.all([
+          facilityApi.getMapImageMetadata(targetMap.mapId).catch(() => null),
+          facilityApi.getMapPublishedPresentation(targetMap.mapId).catch(() => null),
+        ]);
+        if (!isStillValid()) return;
+        candidateMeta = meta;
+        candidatePres = pres;
+      }
+
+      const expectedHash = (parsed.route.mapAssetHash || '').trim();
+      const actualHash = resolveActiveMapAssetHash(targetMap, candidatePres);
+
+      if (expectedHash && expectedHash !== actualHash) {
+        const [refreshedDetail, refreshedMaps, refreshedMeta, refreshedPres] = await Promise.all([
+          facilityApi.getMapDetail(targetMap.mapId).catch(() => null),
+          facilityApi.getAllMaps().catch(() => []),
+          facilityApi.getMapImageMetadata(targetMap.mapId).catch(() => null),
+          facilityApi.getMapPublishedPresentation(targetMap.mapId).catch(() => null),
+        ]);
+        if (!isStillValid()) return;
+
+        if (refreshedMaps.length > 0) {
+          setAvailableMaps(refreshedMaps);
+        }
+        const finalMap =
+          refreshedDetail ||
+          refreshedMaps.find((m) => m.mapId === targetMap!.mapId) ||
+          targetMap;
+
+        setActiveMap(finalMap);
+        setMapImageMetadata(refreshedMeta);
+        setMapPresentation(refreshedPres);
+
+        const postRefreshState = evaluateSosRouteAgainstMap({
+          incidentId,
+          response,
+          activeMap: finalMap,
+          presentation: refreshedPres,
+        });
+        setSosRouteState(postRefreshState);
+        return;
+      }
+
+      if (activeMapRef.current?.mapId !== targetMap.mapId) {
+        setActiveMap(targetMap);
+        setMapImageMetadata(candidateMeta);
+        setMapPresentation(candidatePres);
+      }
+
+      setSosRouteState({
+        kind: 'AVAILABLE',
+        incidentId,
+        route: parsed.route,
+        rawStatus: parsed.status,
+        reason: parsed.reason,
+      });
+    } catch (err: any) {
+      if (!isStillValid()) return;
+      setSosRouteState({
+        kind: 'ERROR',
+        incidentId,
+        message: err?.message || 'Không thể tải tuyến đường đến SOS từ máy chủ.',
+      });
+    }
+  }, []);
+
+  // Xóa tuyến & hủy request cũ khi đổi tài khoản hoặc server
+  const lastAuthScopeRef = useRef<string>(`${currentServerUrl}::${currentAccountKey || ''}`);
+  useEffect(() => {
+    const nextScope = `${currentServerUrl}::${currentAccountKey || ''}`;
+    if (lastAuthScopeRef.current !== nextScope) {
+      lastAuthScopeRef.current = nextScope;
+      sosRequestGuardRef.current.invalidate();
+      setFocusedSosIncidentId(null);
+      setSosRouteState({ kind: 'IDLE' });
+    }
+  }, [currentServerUrl, currentAccountKey]);
+
+  // Xóa tuyến ngay nếu sự cố bị đánh dấu Báo nhầm (FALSE_ALARM)
+  useEffect(() => {
+    if (sosRouteInvalidationCounter > 0 && focusedSosIncidentId) {
+      sosRequestGuardRef.current.invalidate();
+      setFocusedSosIncidentId(null);
+      setSosRouteState({ kind: 'IDLE' });
+    }
+  }, [sosRouteInvalidationCounter, focusedSosIncidentId]);
+
+  // Nhận điều hướng từ nút "Xem đường đến SOS" bên AlertScreen
+  useEffect(() => {
+    const incId = route.params?.focusSosIncidentId;
+    if (incId) {
+      setFocusedSosIncidentId(incId);
+      setSosRouteReloadTick((t) => t + 1);
+    }
+  }, [route.params?.focusSosIncidentId, route.params?.sosRequestNonce]);
+
+  useEffect(() => {
+    if (!focusedSosIncidentId) return;
+    void loadSosRouteForIncident(focusedSosIncidentId);
+  }, [focusedSosIncidentId, sosRouteReloadTick, loadSosRouteForIncident]);
+
+  const handleCloseSosRoute = useCallback(() => {
+    sosRequestGuardRef.current.invalidate();
+    setFocusedSosIncidentId(null);
+    setSosRouteState({ kind: 'IDLE' });
+  }, []);
+
   const fetchDeliveryQueue = useCallback(async () => {
     setIsLoadingQueue(true);
     try {
@@ -698,6 +954,15 @@ export const MapScreen: React.FC = () => {
   const activeRobotJob = jobs.find((job) => job.status === 'RUNNING')
     || jobs.find((job) => job.status === 'QUEUED')
     || null;
+  const activeMapResolvedHash = resolveActiveMapAssetHash(activeMap, mapPresentation);
+  const renderableSosRoute =
+    sosRouteState.kind === 'AVAILABLE' &&
+    activeMap &&
+    (!sosRouteState.route.mapId || sosRouteState.route.mapId === activeMap.mapId) &&
+    (!sosRouteState.route.mapAssetHash ||
+      sosRouteState.route.mapAssetHash === activeMapResolvedHash)
+      ? sosRouteState.route
+      : null;
 
   return (
     <View style={styles.container}>
@@ -840,6 +1105,92 @@ export const MapScreen: React.FC = () => {
             </View>
           </View>
 
+          {/* Tuyến đi bộ hỗ trợ SOS (độc lập với điều phối robot) */}
+          {sosRouteState.kind !== 'IDLE' && (
+            <View
+              style={[
+                styles.sosRouteCard,
+                sosRouteState.kind === 'AVAILABLE'
+                  ? styles.sosRouteCardAvailable
+                  : sosRouteState.kind === 'ERROR'
+                  ? styles.sosRouteCardError
+                  : styles.sosRouteCardWarning,
+              ]}
+            >
+              {sosRouteState.kind === 'LOADING' ? (
+                <View style={styles.sosRouteLoadingRow}>
+                  <ActivityIndicator size="small" color="#EA580C" />
+                  <Text style={styles.sosRouteTitle}>Đang tải tuyến đi bộ đến SOS...</Text>
+                </View>
+              ) : sosRouteState.kind === 'AVAILABLE' ? (
+                <>
+                  <View style={styles.sosRouteHeaderRow}>
+                    <Text style={styles.sosRouteTitle}>
+                      🆘 Tuyến đi bộ hỗ trợ SOS · {formatDistanceFromCm(sosRouteState.route.distanceCm)}
+                    </Text>
+                    <TouchableOpacity onPress={handleCloseSosRoute}>
+                      <X size={16} color="#64748B" />
+                    </TouchableOpacity>
+                  </View>
+                  <Text style={styles.sosRouteMeta}>
+                    Từ: {sosRouteState.route.origin.label} → Đến: {sosRouteState.route.destination.label}
+                  </Text>
+                  {activeMap && sosRouteState.route.mapId && sosRouteState.route.mapId !== activeMap.mapId ? (
+                    <Text style={styles.sosRouteWarnNote}>
+                      Bạn đang xem bản đồ khác. Bấm Tải lại để quay về bản đồ chứa sự cố SOS.
+                    </Text>
+                  ) : null}
+                  <View style={styles.sosRouteActions}>
+                    <TouchableOpacity
+                      style={styles.sosRouteRetryBtn}
+                      onPress={() => setSosRouteReloadTick((t) => t + 1)}
+                    >
+                      <RefreshCw size={12} color="#C2410C" />
+                      <Text style={styles.sosRouteRetryText}>Tải lại tuyến</Text>
+                    </TouchableOpacity>
+                  </View>
+                </>
+              ) : (
+                <>
+                  <View style={styles.sosRouteHeaderRow}>
+                    <Text
+                      style={[
+                        styles.sosRouteTitle,
+                        sosRouteState.kind === 'ERROR' ? { color: '#991B1B' } : { color: '#92400E' },
+                      ]}
+                    >
+                      {sosRouteState.kind === 'ERROR'
+                        ? 'Lỗi tải tuyến đường SOS'
+                        : sosRouteState.kind === 'HASH_MISMATCH'
+                        ? 'Phiên bản ảnh bản đồ không khớp'
+                        : `Chưa có tuyến đi bộ (${sosRouteState.rawStatus})`}
+                    </Text>
+                    <TouchableOpacity onPress={handleCloseSosRoute}>
+                      <X size={16} color="#64748B" />
+                    </TouchableOpacity>
+                  </View>
+                  <Text style={styles.sosRouteMeta}>
+                    {sosRouteState.kind === 'ERROR' || sosRouteState.kind === 'HASH_MISMATCH'
+                      ? sosRouteState.message
+                      : sosRouteState.reason}
+                  </Text>
+                  <Text style={styles.sosRouteSubHint}>
+                    Sự cố vẫn giữ nguyên trạng thái Đang xử lý (IN_PROGRESS). Không tự vẽ đường thẳng thay thế.
+                  </Text>
+                  <View style={styles.sosRouteActions}>
+                    <TouchableOpacity
+                      style={styles.sosRouteRetryBtn}
+                      onPress={() => setSosRouteReloadTick((t) => t + 1)}
+                    >
+                      <RefreshCw size={12} color="#B45309" />
+                      <Text style={styles.sosRouteRetryText}>Thử tải lại</Text>
+                    </TouchableOpacity>
+                  </View>
+                </>
+              )}
+            </View>
+          )}
+
           {/* Map Viewer */}
           <View style={styles.mapInnerContainer}>
             {activeMap ? (
@@ -855,6 +1206,7 @@ export const MapScreen: React.FC = () => {
                 robotPose={robotPose}
                 isPoseLive={isPoseLive}
                 plannedPath={robotSnapshot?.navigationPlan?.points || null}
+                sosRoute={renderableSosRoute}
               />
             ) : isLoadingFacility ? (
               <View style={styles.backendMapState}>
@@ -2925,6 +3277,78 @@ const styles = StyleSheet.create({
   zoneDescText: {
     fontSize: 11,
     color: Colors.textMuted,
+  },
+  sosRouteCard: {
+    borderRadius: 14,
+    padding: 12,
+    marginBottom: 10,
+    borderWidth: 1,
+    gap: 4,
+  },
+  sosRouteCardAvailable: {
+    backgroundColor: '#FFF7ED',
+    borderColor: '#FDBA74',
+  },
+  sosRouteCardWarning: {
+    backgroundColor: '#FFFBEB',
+    borderColor: '#FDE68A',
+  },
+  sosRouteCardError: {
+    backgroundColor: '#FEF2F2',
+    borderColor: '#FCA5A5',
+  },
+  sosRouteLoadingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  sosRouteHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  sosRouteTitle: {
+    flex: 1,
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#9A3412',
+  },
+  sosRouteMeta: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#334155',
+    lineHeight: 17,
+  },
+  sosRouteWarnNote: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#B45309',
+  },
+  sosRouteSubHint: {
+    fontSize: 11,
+    color: '#64748B',
+    lineHeight: 15,
+  },
+  sosRouteActions: {
+    flexDirection: 'row',
+    marginTop: 4,
+  },
+  sosRouteRetryBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#FED7AA',
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+  },
+  sosRouteRetryText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#C2410C',
   },
 });
 

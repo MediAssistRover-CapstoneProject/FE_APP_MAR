@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React from 'react';
 import {
   View,
   Text,
@@ -8,23 +8,27 @@ import {
   ScrollView,
   Dimensions,
   ActivityIndicator,
-  Alert,
 } from 'react-native';
 import {
   X,
   AlertTriangle,
-  Check,
-  ShieldAlert,
   ArrowLeft,
   AlertOctagon,
   CheckCircle2,
   Video,
+  Navigation,
+  XCircle,
 } from 'lucide-react-native';
 import { Colors, Spacing, BorderRadius, Shadows } from '../../constants/theme';
-import { incidentApi } from '../../api/modules/incident.api';
-import { alertApi } from '../../api/modules/alert.api';
-import { AlertResponse } from '../../api/types';
+import { AlertResponse, IncidentResponse } from '../../api/types';
 import { useAuthStore } from '../../store/useAuthStore';
+import {
+  classifyEmergencyAlertKind,
+  EmergencyAlertKind,
+  SosCompletedCallRecord,
+  SosCompletionPermission,
+  SosDecisionPermission,
+} from '../../screens/main/sosDecision';
 
 const { width: SCREEN_W } = Dimensions.get('window');
 const VIDEO_H = SCREEN_W * 0.58;
@@ -34,8 +38,20 @@ interface FallDetectionModalProps {
   onClose: () => void;
   onAcknowledge?: () => void;
   onStartCall?: () => void;
+  onStartCameraView?: () => void;
   alertItem?: AlertResponse | null;
+  incident?: IncidentResponse | null;
   incidentId?: string;
+  alertKind?: EmergencyAlertKind;
+  completedCameraView?: SosCompletedCallRecord | null;
+  decisionPermission?: SosDecisionPermission | null;
+  completionPermission?: SosCompletionPermission | null;
+  isSubmittingDecision?: boolean;
+  onConfirmIncident?: () => void;
+  onRequestFalseAlarm?: () => void;
+  onRequestCompleteSos?: () => void;
+  onRetryCloseSos?: () => void;
+  onOpenMapRoute?: () => void;
   location?: string;
   robotName?: string;
 }
@@ -53,18 +69,36 @@ export const FallDetectionModal: React.FC<FallDetectionModalProps> = ({
   onClose,
   onAcknowledge,
   onStartCall,
+  onStartCameraView,
   alertItem,
+  incident,
   incidentId,
+  alertKind,
+  completedCameraView,
+  decisionPermission,
+  completionPermission,
+  isSubmittingDecision = false,
+  onConfirmIncident,
+  onRequestFalseAlarm,
+  onRequestCompleteSos,
+  onRetryCloseSos,
+  onOpenMapRoute,
   location = 'Chưa có vị trí từ Backend',
   robotName = 'Robot chưa xác định',
 }) => {
   const { user } = useAuthStore();
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [incidentStatus, setIncidentStatus] = useState<
-    'OPEN' | 'IN_PROGRESS' | 'RESOLVED' | 'FALSE_ALARM'
-  >('OPEN');
 
-  const resolvedIncidentId = alertItem?.incidentId || incidentId;
+  const resolvedKind = alertKind || classifyEmergencyAlertKind(alertItem, incident);
+  const isGestureSos = resolvedKind === 'AUTO_GESTURE_SOS';
+  const resolvedIncidentId = incident?.incidentId || alertItem?.incidentId || incidentId;
+  const incidentStatus: 'OPEN' | 'ACKNOWLEDGED' | 'IN_PROGRESS' | 'RESOLVED' | 'CLOSED' | 'FALSE_ALARM' =
+    (incident?.status as any) ||
+    (alertItem?.status === 'RESOLVED' || alertItem?.status === 'CLOSED'
+      ? (alertItem.status as any)
+      : alertItem?.status === 'ACKNOWLEDGED'
+      ? 'ACKNOWLEDGED'
+      : 'OPEN');
+
   const dataJson = alertItem?.dataJson || {};
   const metrics = dataJson?.metrics || {};
   const confidencePct =
@@ -73,24 +107,18 @@ export const FallDetectionModal: React.FC<FallDetectionModalProps> = ({
       : typeof metrics?.confidence === 'number'
       ? `${(metrics.confidence * 100).toFixed(1)}%`
       : null;
-  const algorithmName = dataJson?.algorithm || metrics?.algorithm || 'lower_body_rules_v1';
-  const detectionMode = metrics?.detection_mode || 'lower_body';
-  const reasonCode = metrics?.reason || 'RAPID_SUPPORT_LOSS_AND_PERSISTENT_LEG_COLLAPSE';
+  const algorithmName =
+    dataJson?.algorithm ||
+    metrics?.algorithm ||
+    (isGestureSos ? 'gesture_sos_v1' : 'lower_body_rules_v1');
+  const detectionMode = metrics?.detection_mode || (isGestureSos ? 'gesture_sos' : 'lower_body');
+  const reasonCode =
+    metrics?.reason ||
+    (isGestureSos ? 'GESTURE_SOS_DETECTED' : 'RAPID_SUPPORT_LOSS_AND_PERSISTENT_LEG_COLLAPSE');
   const displayRobot = dataJson?.robot_code
     ? `Robot ${dataJson.robot_code}`
     : robotName;
   const displayLocation = dataJson?.map_name || location;
-
-  useEffect(() => {
-    if (!visible) return;
-    if (alertItem?.status === 'RESOLVED' || alertItem?.status === 'CLOSED') {
-      setIncidentStatus('RESOLVED');
-    } else if (alertItem?.status === 'ACKNOWLEDGED') {
-      setIncidentStatus('IN_PROGRESS');
-    } else {
-      setIncidentStatus('OPEN');
-    }
-  }, [visible, alertItem?.alertId, alertItem?.status]);
 
   const eventTimeStr = alertItem?.createdAt
     ? new Date(alertItem.createdAt).toLocaleTimeString('vi-VN', {
@@ -104,14 +132,16 @@ export const FallDetectionModal: React.FC<FallDetectionModalProps> = ({
     {
       id: 1,
       icon: '📷',
-      title: `AI Vision (${algorithmName}) phát hiện nghi té ngã${confidencePct ? ` — độ tin cậy ${confidencePct}` : ' — đã xác thực bởi AI'}`,
+      title: isGestureSos
+        ? `AI Vision (${algorithmName}) phát hiện tín hiệu SOS tự động${confidencePct ? ` — độ tin cậy ${confidencePct}` : ''}`
+        : `AI Vision (${algorithmName}) phát hiện nghi té ngã${confidencePct ? ` — độ tin cậy ${confidencePct}` : ' — đã xác thực bởi AI'}`,
       time: eventTimeStr,
       statusDot: '#EF4444',
     },
     {
       id: 2,
-      icon: '🦿',
-      title: `Chế độ: ${detectionMode} · Lý do: ${reasonCode}`,
+      icon: '🔎',
+      title: `Chế độ: ${detectionMode} · Mã sự kiện: ${reasonCode}`,
       time: eventTimeStr,
       statusDot: '#F59E0B',
     },
@@ -120,89 +150,33 @@ export const FallDetectionModal: React.FC<FallDetectionModalProps> = ({
       icon: '📄',
       title:
         alertItem?.message ||
-        `CẢNH BÁO AI: ${displayRobot} tại '${displayLocation}' phát hiện người có dấu hiệu té ngã.`,
+        (isGestureSos
+          ? `CẢNH BÁO AI: ${displayRobot} tại '${displayLocation}' phát hiện cử chỉ cầu cứu SOS.`
+          : `CẢNH BÁO AI: ${displayRobot} tại '${displayLocation}' phát hiện người có dấu hiệu té ngã.`),
       time: eventTimeStr,
       statusDot: '#10B981',
     },
     {
       id: 4,
-      icon: '🚑',
-      title: 'Backend đã tạo DetectionEvent, EmergencyIncident & Alert gửi tới nhân viên trực',
+      icon: '🛡️',
+      title: 'Staff cần bấm "Xem camera robot" -> "Kết thúc xem" trước khi Xác nhận sự cố hoặc Báo nhầm',
       time: eventTimeStr,
       statusDot: '#10B981',
     },
   ];
 
-  // 1. Gọi API tiếp nhận & điều phối cấp cứu
-  const handleAcknowledge = async () => {
-    setIsSubmitting(true);
-    try {
-      if (alertItem?.alertId && alertItem.status === 'OPEN') {
-        await alertApi.acknowledgeAlert(alertItem.alertId);
-      }
-      if (resolvedIncidentId) {
-        await incidentApi.acknowledgeIncident(resolvedIncidentId);
-        await incidentApi.startIncident(resolvedIncidentId);
-      }
-      setIncidentStatus('IN_PROGRESS');
-      if (onAcknowledge) onAcknowledge();
-      Alert.alert(
-        'Đã tiếp nhận cảnh báo',
-        'Đã xác nhận tiếp nhận cảnh báo té ngã và chuyển trạng thái sự cố sang Đang xử lý!'
-      );
-    } catch (err: any) {
-      console.log('Phản hồi server sự cố:', err);
-      Alert.alert(
-        'Không thể tiếp nhận',
-        err?.message || 'Không thể gửi phản hồi tiếp nhận lên máy chủ. Vui lòng thử lại.'
-      );
-    } finally {
-      setIsSubmitting(false);
+  const handleTriggerCameraView = () => {
+    onClose();
+    if (onStartCameraView) {
+      onStartCameraView();
+    } else {
+      onStartCall?.();
     }
   };
 
-  // 2. Gọi API đánh dấu báo động giả
-  const handleFalseAlarm = async () => {
-    setIsSubmitting(true);
-    try {
-      if (resolvedIncidentId) {
-        await incidentApi.markFalseAlarm(
-          resolvedIncidentId,
-          'Báo động giả, đã kiểm tra thực tế qua AI Camera'
-        );
-      }
-      setIncidentStatus('FALSE_ALARM');
-      if (onAcknowledge) onAcknowledge();
-      Alert.alert('Báo động giả', 'Đã cập nhật trạng thái báo động giả lên hệ thống!');
-    } catch (err: any) {
-      Alert.alert('Lỗi cập nhật', err?.message || 'Không thể cập nhật trạng thái báo động giả.');
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
-  // 3. Gọi API giải quyết xong sự cố
-  const handleResolve = async () => {
-    setIsSubmitting(true);
-    try {
-      if (resolvedIncidentId) {
-        await incidentApi.resolveIncident(
-          resolvedIncidentId,
-          'Đã sơ cứu kịp thời và đưa nạn nhân vào phòng y tế an toàn'
-        );
-      }
-      if (alertItem?.alertId) {
-        await alertApi.resolveAlert(alertItem.alertId);
-      }
-      setIncidentStatus('RESOLVED');
-      if (onAcknowledge) onAcknowledge();
-      Alert.alert('Hoàn tất giải quyết', 'Đã cập nhật báo cáo xử lý sự cố thành công!');
-    } catch (err: any) {
-      Alert.alert('Lỗi giải quyết', err?.message || 'Không thể cập nhật báo cáo xử lý sự cố.');
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
+  const isClosedOrFalseAlarm =
+    incidentStatus === 'CLOSED' || incidentStatus === 'FALSE_ALARM';
+  const isResolvedPendingClose = incidentStatus === 'RESOLVED';
 
   return (
     <Modal visible={visible} animationType="slide" transparent={false}>
@@ -234,16 +208,22 @@ export const FallDetectionModal: React.FC<FallDetectionModalProps> = ({
               <View style={styles.drillTag}>
                 <View style={styles.drillDot} />
                 <Text style={styles.drillTagText}>
-                  {incidentStatus === 'OPEN'
-                    ? 'CẢNH BÁO TÉ NGÃ MỚI (SUSPECTED_FALL)'
-                    : incidentStatus === 'IN_PROGRESS'
-                    ? 'ĐANG XỬ LÝ CỨU HỘ'
-                    : incidentStatus === 'RESOLVED'
+                  {incidentStatus === 'IN_PROGRESS'
+                    ? 'ĐANG XỬ LÝ SỰ CỐ (IN_PROGRESS)'
+                    : incidentStatus === 'RESOLVED' || incidentStatus === 'CLOSED'
                     ? 'ĐÃ XỬ LÝ XONG'
-                    : 'BÁO ĐỘNG GIẢ'}
+                    : incidentStatus === 'FALSE_ALARM'
+                    ? 'BÁO NHẦM (FALSE_ALARM)'
+                    : isGestureSos
+                    ? 'CẢNH BÁO SOS TỰ ĐỘNG (GESTURE_SOS)'
+                    : 'CẢNH BÁO TÉ NGÃ MỚI (SUSPECTED_FALL)'}
                 </Text>
               </View>
-              <Text style={styles.urgentTitle}>Phát hiện người có dấu hiệu té ngã</Text>
+              <Text style={styles.urgentTitle}>
+                {isGestureSos
+                  ? 'Phát hiện tín hiệu SOS tự động từ camera AI'
+                  : 'Phát hiện người có dấu hiệu té ngã'}
+              </Text>
               <Text style={styles.urgentSub}>{displayLocation} · {displayRobot}</Text>
             </View>
             <View style={styles.urgentTimerBox}>
@@ -270,7 +250,10 @@ export const FallDetectionModal: React.FC<FallDetectionModalProps> = ({
             <View style={styles.videoBox}>
               <View style={styles.boundingBox}>
                 <View style={styles.boundingTag}>
-                  <Text style={styles.boundingTagText}>TÉ NGÃ{confidencePct ? ` · ${confidencePct}` : ' · AI VISION'}</Text>
+                  <Text style={styles.boundingTagText}>
+                    {isGestureSos ? 'GESTURE SOS' : 'TÉ NGÃ'}
+                    {confidencePct ? ` · ${confidencePct}` : ' · AI VISION'}
+                  </Text>
                 </View>
 
                 <View style={styles.fallenPersonSilhouette}>
@@ -303,80 +286,153 @@ export const FallDetectionModal: React.FC<FallDetectionModalProps> = ({
             </View>
           </View>
 
-          {/* ===== BỘ NÚT ĐIỀU HÀNH XỬ LÝ SỰ CỐ TAI NẠN ===== */}
+          {/* ===== BỘ NÚT ĐIỀU HÀNH XỬ LÝ SỰ CỐ TỰ ĐỘNG (CHỈ XEM CAMERA -> XÁC NHẬN -> KẾT THÚC -> ĐÓNG) ===== */}
           <View style={styles.actionButtonGroup}>
-            {/* Nút Gọi trực tiếp Robot (Camera LiveKit + Đàm thoại 2 chiều) */}
-            <TouchableOpacity
-              style={styles.directCallBtn}
-              onPress={() => {
-                onClose();
-                onStartCall?.();
-              }}
-              activeOpacity={0.85}
-            >
-              <Video size={18} color="#FFFFFF" />
-              <Text style={styles.directCallBtnText}>
-                📹 Gọi trực tiếp Robot (Camera LiveKit + Mic/Loa)
-              </Text>
-            </TouchableOpacity>
+            {!isClosedOrFalseAlarm && !isResolvedPendingClose && (
+              <TouchableOpacity
+                style={styles.directCallBtn}
+                onPress={handleTriggerCameraView}
+                activeOpacity={0.85}
+              >
+                <Video size={18} color="#FFFFFF" />
+                <Text style={styles.directCallBtnText}>
+                  {completedCameraView || incidentStatus === 'IN_PROGRESS'
+                    ? 'Xem lại camera robot'
+                    : 'Xem camera robot'}
+                </Text>
+              </TouchableOpacity>
+            )}
 
-            <TouchableOpacity
-              style={[
-                styles.acknowledgeBtn,
-                incidentStatus === 'IN_PROGRESS' && styles.acknowledgeBtnDone,
-                incidentStatus === 'RESOLVED' && { backgroundColor: '#166534' },
-                incidentStatus === 'FALSE_ALARM' && { backgroundColor: '#64748B' },
-              ]}
-              onPress={handleAcknowledge}
-              disabled={incidentStatus !== 'OPEN' || isSubmitting}
-              activeOpacity={0.85}
-            >
-              {isSubmitting ? (
-                <ActivityIndicator size="small" color="#FFFFFF" />
-              ) : incidentStatus === 'IN_PROGRESS' ? (
-                <>
-                  <Check size={20} color="#FFFFFF" strokeWidth={3} />
-                  <Text style={styles.acknowledgeBtnText}>Đã tiếp nhận · Đội cứu hộ đang đến</Text>
-                </>
-              ) : incidentStatus === 'RESOLVED' ? (
-                <>
-                  <Check size={20} color="#FFFFFF" strokeWidth={3} />
-                  <Text style={styles.acknowledgeBtnText}>Sự cố đã giải quyết xong ✓</Text>
-                </>
-              ) : incidentStatus === 'FALSE_ALARM' ? (
-                <>
-                  <AlertOctagon size={20} color="#FFFFFF" />
-                  <Text style={styles.acknowledgeBtnText}>Đã đóng (Báo động giả)</Text>
-                </>
+            {isClosedOrFalseAlarm ? (
+              <View style={styles.acknowledgeBtn}>
+                <AlertOctagon size={20} color="#FFFFFF" />
+                <Text style={styles.acknowledgeBtnText}>
+                  {incidentStatus === 'FALSE_ALARM'
+                    ? 'Đã đóng (Báo nhầm)'
+                    : 'Đã đóng hoàn tất (CLOSED)'}
+                </Text>
+              </View>
+            ) : isResolvedPendingClose ? (
+              <>
+                <View style={{ backgroundColor: '#ECFDF5', borderRadius: 12, padding: 12, borderWidth: 1, borderColor: '#86EFAC' }}>
+                  <Text style={{ fontSize: 12, color: '#065F46', fontWeight: '700' }}>
+                    Đã giải quyết sự cố (RESOLVED) · Đang chờ đóng hoàn tất (CLOSED)
+                  </Text>
+                  {incident?.resolutionNote ? (
+                    <Text style={{ fontSize: 11, color: '#047857', marginTop: 4 }}>
+                      Ghi chú: {incident.resolutionNote}
+                    </Text>
+                  ) : null}
+                </View>
+
+                {completionPermission?.allowed ? (
+                  <TouchableOpacity
+                    style={[styles.resolveBtn, isSubmittingDecision && { opacity: 0.6 }]}
+                    onPress={() => onRetryCloseSos?.()}
+                    disabled={isSubmittingDecision}
+                    activeOpacity={0.85}
+                  >
+                    {isSubmittingDecision ? (
+                      <ActivityIndicator size="small" color="#FFFFFF" />
+                    ) : (
+                      <>
+                        <CheckCircle2 size={16} color="#FFFFFF" />
+                        <Text style={styles.resolveBtnText}>Xác nhận kết thúc SOS (Thử đóng lại)</Text>
+                      </>
+                    )}
+                  </TouchableOpacity>
+                ) : (
+                  <Text style={{ fontSize: 12, color: Colors.textSecondary, fontWeight: '600' }}>
+                    {completionPermission?.reason ||
+                      'Chỉ ADMIN hoặc nhân viên được phân công xử lý SOS mới có quyền đóng sự cố.'}
+                  </Text>
+                )}
+              </>
+            ) : incidentStatus === 'IN_PROGRESS' ? (
+              <>
+                {onOpenMapRoute && (
+                  <TouchableOpacity
+                    style={[styles.acknowledgeBtn, { backgroundColor: '#0284C7' }]}
+                    onPress={() => {
+                      onClose();
+                      onOpenMapRoute();
+                    }}
+                    activeOpacity={0.85}
+                  >
+                    <Navigation size={18} color="#FFFFFF" />
+                    <Text style={styles.acknowledgeBtnText}>Xem đường đến SOS</Text>
+                  </TouchableOpacity>
+                )}
+
+                {completionPermission?.allowed ? (
+                  <TouchableOpacity
+                    style={[styles.resolveBtn, isSubmittingDecision && { opacity: 0.6 }]}
+                    onPress={() => {
+                      onClose();
+                      onRequestCompleteSos?.();
+                    }}
+                    disabled={isSubmittingDecision}
+                    activeOpacity={0.85}
+                  >
+                    {isSubmittingDecision ? (
+                      <ActivityIndicator size="small" color="#FFFFFF" />
+                    ) : (
+                      <>
+                        <CheckCircle2 size={16} color="#FFFFFF" />
+                        <Text style={styles.resolveBtnText}>Xác nhận kết thúc SOS</Text>
+                      </>
+                    )}
+                  </TouchableOpacity>
+                ) : (
+                  <Text style={{ fontSize: 12, color: Colors.textSecondary, fontWeight: '600' }}>
+                    {completionPermission?.reason ||
+                      'Chỉ ADMIN hoặc nhân viên được phân công xử lý SOS mới có quyền kết thúc sự cố.'}
+                  </Text>
+                )}
+              </>
+            ) : completedCameraView ? (
+              decisionPermission?.allowed ? (
+                <View style={styles.subActionRow}>
+                  <TouchableOpacity
+                    style={[styles.acknowledgeBtn, { flex: 1.25 }]}
+                    onPress={() => onConfirmIncident?.()}
+                    disabled={isSubmittingDecision}
+                    activeOpacity={0.85}
+                  >
+                    {isSubmittingDecision ? (
+                      <ActivityIndicator size="small" color="#FFFFFF" />
+                    ) : (
+                      <>
+                        <CheckCircle2 size={16} color="#FFFFFF" />
+                        <Text style={styles.acknowledgeBtnText}>Xác nhận sự cố</Text>
+                      </>
+                    )}
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={[styles.falseAlarmBtn, { flex: 0.9 }]}
+                    onPress={() => {
+                      onClose();
+                      onRequestFalseAlarm?.();
+                    }}
+                    disabled={isSubmittingDecision}
+                    activeOpacity={0.8}
+                  >
+                    <XCircle size={16} color={Colors.danger} />
+                    <Text style={styles.falseAlarmBtnText}>Báo nhầm</Text>
+                  </TouchableOpacity>
+                </View>
               ) : (
-                <>
-                  <ShieldAlert size={20} color="#FFFFFF" />
-                  <Text style={styles.acknowledgeBtnText}>Xác nhận & Điều phối cấp cứu</Text>
-                </>
-              )}
-            </TouchableOpacity>
-
-            {incidentStatus === 'IN_PROGRESS' && (
-              <View style={styles.subActionRow}>
-                <TouchableOpacity
-                  style={styles.falseAlarmBtn}
-                  onPress={handleFalseAlarm}
-                  disabled={isSubmitting}
-                  activeOpacity={0.8}
-                >
-                  <AlertOctagon size={16} color={Colors.danger} />
-                  <Text style={styles.falseAlarmBtnText}>Báo động giả</Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={styles.resolveBtn}
-                  onPress={handleResolve}
-                  disabled={isSubmitting}
-                  activeOpacity={0.8}
-                >
-                  <CheckCircle2 size={16} color="#FFFFFF" />
-                  <Text style={styles.resolveBtnText}>Đã xử lý xong</Text>
-                </TouchableOpacity>
+                <Text style={{ fontSize: 12, color: Colors.textSecondary, fontWeight: '600' }}>
+                  {decisionPermission?.reason ||
+                    'Chỉ ADMIN hoặc nhân viên được phân công xử lý SOS mới có quyền xác nhận sự cố.'}
+                </Text>
+              )
+            ) : (
+              <View style={{ backgroundColor: '#EFF6FF', borderRadius: 12, padding: 12, borderWidth: 1, borderColor: '#BFDBFE' }}>
+                <Text style={{ fontSize: 12, color: '#1E3A8A', fontWeight: '600', lineHeight: 18 }}>
+                  Bấm &quot;Xem camera robot&quot; (chỉ nhận hình ảnh, không có âm thanh), sau đó bấm &quot;Kết thúc xem&quot; để mở lựa chọn Xác nhận sự cố hoặc Báo nhầm.
+                </Text>
               </View>
             )}
           </View>
@@ -699,12 +755,12 @@ const styles = StyleSheet.create({
     ...Shadows.button,
   },
   acknowledgeBtnDone: {
-    backgroundColor: Colors.hero,
+    backgroundColor: Colors.actionSurface,
   },
   directCallBtn: {
     height: 52,
     borderRadius: 16,
-    backgroundColor: Colors.hero,
+    backgroundColor: Colors.actionSurface,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',

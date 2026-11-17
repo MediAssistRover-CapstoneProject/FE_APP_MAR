@@ -1,7 +1,7 @@
 import { NavigatorScreenParams } from '@react-navigation/native';
 
 export type MainTabParamList = {
-  Home: undefined;
+  Home: { focusSosIncidentId?: string; sosRequestNonce?: number } | undefined;
   Explore: undefined;
   Favorites: undefined;
   Errors: undefined;

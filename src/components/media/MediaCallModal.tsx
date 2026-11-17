@@ -31,6 +31,7 @@ import {
   Monitor,
   Phone,
   PhoneOff,
+  RefreshCw,
   Video,
   Volume2,
   VolumeX,
@@ -51,6 +52,17 @@ const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get('window');
 
 // ─── Props ───────────────────────────────────────────────────────────────────
 
+export interface MediaSessionEndPayload {
+  source: 'UI_END_BUTTON' | 'WEBVIEW_STATUS' | 'MODAL_CLOSE';
+  sessionId?: string;
+  incidentId?: string;
+  robotId?: string;
+  uiStatus?: string;
+  endReason?: string;
+  error?: string;
+  backendSession?: MediaSessionResponse | null;
+}
+
 interface MediaCallModalProps {
   visible: boolean;
   onClose: () => void;
@@ -68,8 +80,16 @@ interface MediaCallModalProps {
   livekitUrl?: string;
   /** LiveKit join token được cấp sẵn từ BE */
   livekitToken?: string;
-  /** Callback khi phiên kết thúc */
-  onSessionEnd?: () => void;
+  /** Lỗi trước khi vào WebView (ví dụ 409/403/mất kết nối thiết bị) */
+  externalError?: string | null;
+  /** Thử kết nối lại camera khi có lỗi / chưa có khung hình */
+  onRetryCamera?: () => Promise<void> | void;
+  /** Đang thực hiện thử lại kết nối camera */
+  isRetrying?: boolean;
+  /** Nhãn tùy chỉnh cho nút kết thúc ở thanh điều khiển */
+  endButtonLabel?: string;
+  /** Callback khi phiên kết thúc (đính kèm metadata đã khử lặp) */
+  onSessionEnd?: (payload?: MediaSessionEndPayload) => void;
 }
 
 // ─── Status types from WebView ───────────────────────────────────────────────
@@ -83,7 +103,10 @@ export type CallStatus =
   | 'ROOM_CONNECTED'
   | 'CONNECTED'
   | 'CAMERA_LOST'
+  | 'DISCONNECTED'
   | 'TIMEOUT'
+  | 'EXPIRED'
+  | 'FAILED'
   | 'ENDED'
   | 'ERROR';
 
@@ -105,8 +128,14 @@ export function statusLabel(s: CallStatus): string {
       return '🟢 Trực tiếp';
     case 'CAMERA_LOST':
       return '⚠️ Mất tín hiệu camera';
+    case 'DISCONNECTED':
+      return '⚠️ Mất kết nối phòng gọi';
     case 'TIMEOUT':
       return '⚠️ Hết thời gian chờ camera';
+    case 'EXPIRED':
+      return '⚠️ Phiên đã hết hạn';
+    case 'FAILED':
+      return '❌ Phiên thất bại';
     case 'ENDED':
       return 'Phiên đã kết thúc';
     case 'ERROR':
@@ -123,9 +152,12 @@ export function statusColor(s: CallStatus): string {
     case 'ROOM_CONNECTED':
       return '#38BDF8';
     case 'CAMERA_LOST':
+    case 'DISCONNECTED':
     case 'TIMEOUT':
+    case 'EXPIRED':
       return '#F59E0B';
     case 'ERROR':
+    case 'FAILED':
       return '#EF4444';
     case 'ENDED':
       return '#64748B';
@@ -147,7 +179,9 @@ export function buildMediaCallHtml(params: {
   existingSessionId?: string;
 }): string {
   const { baseUrl, token, livekitUrl, livekitToken, robotId, mode, incidentId, existingSessionId } = params;
-  // LiveKit Client kết nối trực tiếp phòng đàm thoại.
+  const isViewOnly = mode !== 'ASSIST';
+  // LiveKit Client kết nối trực tiếp phòng media.
+  // Chế độ MONITOR (isViewOnly === true): không tạo <audio>, autoSubscribe = false, chỉ subscribe track Video từ đúng robot-<robotId>.
   // Ưu tiên dùng livekitUrl và livekitToken từ BE cấp riêng cho phiên mà không cần nhúng Staff JWT vào WebView.
   return `
 <!DOCTYPE html>
@@ -200,8 +234,8 @@ export function buildMediaCallHtml(params: {
     <div class="spinner"></div>
     <div id="status-text">Đang khởi tạo...</div>
   </div>
-  <video id="remote-video" autoplay playsinline webkit-playsinline></video>
-  <audio id="remote-audio" autoplay playsinline webkit-playsinline></audio>
+  <video id="remote-video" autoplay muted playsinline webkit-playsinline></video>
+  ${isViewOnly ? '' : '<audio id="remote-audio" autoplay playsinline webkit-playsinline></audio>'}
 </div>
 
 <script src="https://mediassistrover.duckdns.org/vendor/livekit-client.umd.min.js"></script>
@@ -222,11 +256,12 @@ export function buildMediaCallHtml(params: {
   const DIRECT_TOKEN = '${livekitToken || ''}';
   const ROBOT_ID = '${robotId || ''}';
   const MODE = '${mode}';
+  const IS_VIEW_ONLY = ${isViewOnly ? 'true' : 'false'};
   const INCIDENT_ID = '${incidentId || ''}';
   const EXISTING_SESSION = '${existingSessionId || ''}';
 
   const videoEl = document.getElementById('remote-video');
-  const audioEl = document.getElementById('remote-audio');
+  const audioEl = IS_VIEW_ONLY ? null : document.getElementById('remote-audio');
   const statusOverlay = document.getElementById('status-overlay');
   const statusText = document.getElementById('status-text');
   const liveBadge = document.getElementById('live-badge');
@@ -287,6 +322,8 @@ export function buildMediaCallHtml(params: {
   }
 
   videoEl.addEventListener('playing', onFirstFrame);
+  videoEl.addEventListener('loadeddata', onFirstFrame);
+  videoEl.addEventListener('timeupdate', onFirstFrame);
   if (videoEl.requestVideoFrameCallback) {
     function rVFC() {
       onFirstFrame();
@@ -319,11 +356,11 @@ export function buildMediaCallHtml(params: {
           }
         } else if (ROBOT_ID) {
           sendToApp('status', { status: 'CREATING_SESSION' });
-          setStatus('Đang kết nối camera & loa mic...', false);
-          const body = { robotId: ROBOT_ID, mode: MODE };
+          setStatus(IS_VIEW_ONLY ? 'Đang kết nối camera chỉ xem...' : 'Đang kết nối camera & loa mic...', false);
+          const body = { robotId: ROBOT_ID, mode: IS_VIEW_ONLY ? 'MONITOR' : 'ASSIST' };
           if (INCIDENT_ID) body.incidentId = INCIDENT_ID;
           session = await apiCall('POST', '/media-sessions', body);
-          if (session.state === 'RINGING') {
+          if (!IS_VIEW_ONLY && session.state === 'RINGING') {
             sendToApp('status', { status: 'ACCEPTING' });
             session = await apiCall('POST', '/media-sessions/' + session.sessionId + '/accept', {});
           }
@@ -354,15 +391,69 @@ export function buildMediaCallHtml(params: {
         videoCaptureDefaults: { resolution: LivekitClient.VideoPresets.h720.resolution }
       });
 
+      function isTargetRobotParticipant(participant) {
+        if (!participant || !participant.identity) return false;
+        if (ROBOT_ID) {
+          return participant.identity === ('robot-' + ROBOT_ID);
+        }
+        return participant.identity.startsWith('robot-');
+      }
+
+      function isVideoPublication(pub) {
+        return Boolean(pub && (pub.kind === LivekitClient.Track.Kind.Video || pub.kind === 'video'));
+      }
+
+      function enforceViewOnlyPublication(pub, participant) {
+        if (!IS_VIEW_ONLY || !pub) return;
+        if (!isTargetRobotParticipant(participant)) {
+          if (typeof pub.setSubscribed === 'function') {
+            try { pub.setSubscribed(false); } catch(e) {}
+          }
+          return;
+        }
+        if (isVideoPublication(pub)) {
+          if (!pub.isSubscribed && typeof pub.setSubscribed === 'function') {
+            try { pub.setSubscribed(true); } catch(e) {}
+          }
+        } else if (pub.isSubscribed && typeof pub.setSubscribed === 'function') {
+          try { pub.setSubscribed(false); } catch(e) {}
+        }
+      }
+
+      function syncViewOnlyVideoTracks() {
+        if (!IS_VIEW_ONLY || !room || !room.remoteParticipants) return;
+        room.remoteParticipants.forEach((participant) => {
+          if (!participant || !participant.trackPublications) return;
+          participant.trackPublications.forEach((pub) => {
+            enforceViewOnlyPublication(pub, participant);
+          });
+        });
+      }
+
+      room.on(LivekitClient.RoomEvent.TrackPublished, (pub, participant) => {
+        enforceViewOnlyPublication(pub, participant);
+      });
+
+      room.on(LivekitClient.RoomEvent.ParticipantConnected, (participant) => {
+        if (!IS_VIEW_ONLY || !participant || !participant.trackPublications) return;
+        participant.trackPublications.forEach((pub) => {
+          enforceViewOnlyPublication(pub, participant);
+        });
+      });
+
       room.on(LivekitClient.RoomEvent.TrackSubscribed, (track, pub, participant) => {
-        // Chỉ nhận camera từ participant robot-<robotId>
-        const expectedPrefix = 'robot-' + ROBOT_ID;
-        if (ROBOT_ID && participant.identity !== expectedPrefix && !participant.identity.startsWith('robot-')) {
+        // Chỉ nhận luồng từ đúng participant robot-<robotId>
+        if (!isTargetRobotParticipant(participant)) {
+          if (IS_VIEW_ONLY && pub && typeof pub.setSubscribed === 'function') {
+            try { pub.setSubscribed(false); } catch(e) {}
+          }
           return;
         }
 
         if (track.kind === LivekitClient.Track.Kind.Video) {
+          videoEl.muted = true;
           track.attach(videoEl);
+          videoEl.play().then(function() { onFirstFrame(); }).catch(function() {});
           setStatus('Đang tải khung hình camera...', false);
           if (videoTimeoutTimer) clearTimeout(videoTimeoutTimer);
           videoTimeoutTimer = setTimeout(function() {
@@ -375,12 +466,21 @@ export function buildMediaCallHtml(params: {
             }
           }, 15000);
         } else if (track.kind === LivekitClient.Track.Kind.Audio) {
-          try {
-            track.attach(audioEl);
-          } catch(e) {
-            const el = track.attach();
-            el.autoplay = true;
-            document.body.appendChild(el);
+          // Chế độ MONITOR / chỉ xem camera tuyệt đối không đăng ký nhận hay phát audio từ robot
+          if (IS_VIEW_ONLY) {
+            if (pub && typeof pub.setSubscribed === 'function') {
+              try { pub.setSubscribed(false); } catch(e) {}
+            }
+            return;
+          }
+          if (audioEl) {
+            try {
+              track.attach(audioEl);
+            } catch(e) {
+              const el = track.attach();
+              el.autoplay = true;
+              document.body.appendChild(el);
+            }
           }
         }
       });
@@ -395,23 +495,51 @@ export function buildMediaCallHtml(params: {
         }
       });
 
+      room.on(LivekitClient.RoomEvent.Reconnecting, () => {
+        hasVideoFrame = false;
+        setStatus('Đang kết nối lại camera robot...', false);
+        liveBadge.classList.remove('show');
+      });
+
+      room.on(LivekitClient.RoomEvent.Reconnected, () => {
+        setStatus('Đã kết nối lại · Đang khôi phục camera robot...', false);
+        if (IS_VIEW_ONLY) {
+          syncViewOnlyVideoTracks();
+        }
+      });
+
       room.on(LivekitClient.RoomEvent.Disconnected, (reason) => {
-        sendToApp('status', { status: 'ENDED', reason: reason });
-        setStatus('Đã ngắt kết nối', false);
+        const isDuplicate = LivekitClient.DisconnectReason && reason === LivekitClient.DisconnectReason.DUPLICATE_IDENTITY;
+        sendToApp('status', {
+          status: isDuplicate ? 'CAMERA_LOST' : 'DISCONNECTED',
+          sessionId: currentSessionId,
+          reason: isDuplicate ? 'DUPLICATE_IDENTITY' : reason,
+          error: isDuplicate ? 'Camera đang được mở trên cửa sổ Web Admin · Đang chuyển sang luồng ảnh MQTT' : undefined
+        });
+        setStatus(isDuplicate ? 'Đang chuyển sang luồng ảnh camera MQTT...' : 'Đã ngắt kết nối', false);
         liveBadge.classList.remove('show');
       });
 
       room.on(LivekitClient.RoomEvent.Connected, () => {
         sendToApp('status', { status: 'ROOM_CONNECTED' });
         setStatus('Đã vào phòng · Chờ camera robot...', false);
+        if (IS_VIEW_ONLY) {
+          syncViewOnlyVideoTracks();
+        }
       });
 
       await room.connect(joinUrl, joinToken, {
+        autoSubscribe: !IS_VIEW_ONLY,
+        maxRetries: 1,
+        peerConnectionTimeout: 10000,
+        websocketTimeout: 10000,
         rtcConfig: { iceTransportPolicy: 'all' }
       });
 
-      // Nếu là chế độ ASSIST (hỗ trợ SOS): BẬT NGAY MICRO VÀ LOA 2 CHIỀU!
-      if (MODE === 'ASSIST') {
+      if (IS_VIEW_ONLY) {
+        syncViewOnlyVideoTracks();
+      } else if (MODE === 'ASSIST') {
+        // Chỉ chế độ ASSIST mới bật mic và loa 2 chiều
         try {
           await room.localParticipant.setMicrophoneEnabled(true, {
             echoCancellation: true,
@@ -425,10 +553,10 @@ export function buildMediaCallHtml(params: {
           isMicEnabled = false;
           sendToApp('mic', { enabled: false, error: 'Chưa thể bật micro: ' + (e.message || 'Kiểm tra quyền micro') });
         }
-      }
 
-      // Khởi động phát âm thanh loa từ robot
-      await room.startAudio().catch(() => {});
+        // Khởi động phát âm thanh loa từ robot
+        await room.startAudio().catch(() => {});
+      }
 
       // Start status polling nếu có TOKEN
       if (currentSessionId && TOKEN) {
@@ -436,8 +564,20 @@ export function buildMediaCallHtml(params: {
           try {
             const s = await apiCall('GET', '/media-sessions/' + currentSessionId);
             if (s.state === 'ENDED' || s.state === 'FAILED' || s.state === 'EXPIRED') {
-              sendToApp('status', { status: 'ENDED', reason: s.endReason });
-              setStatus('Phiên đã kết thúc', false);
+              sendToApp('status', {
+                status: s.state,
+                sessionId: currentSessionId,
+                reason: s.endReason,
+                backendSession: s,
+              });
+              setStatus(
+                s.state === 'ENDED'
+                  ? 'Phiên đã kết thúc'
+                  : s.state === 'EXPIRED'
+                  ? 'Phiên đã hết hạn'
+                  : 'Phiên gặp lỗi',
+                false
+              );
               cleanup();
             }
           } catch(e) {}
@@ -457,54 +597,34 @@ export function buildMediaCallHtml(params: {
   }
 
   // Handle commands from React Native
-  window.addEventListener('message', (event) => {
+  function handleIncomingCommand(raw) {
     try {
-      const msg = JSON.parse(event.data);
+      const msg = JSON.parse(raw);
       if (msg.type === 'toggleMic') {
-        if (room && room.localParticipant) {
+        if (!IS_VIEW_ONLY && MODE === 'ASSIST' && room && room.localParticipant) {
           isMicEnabled = !isMicEnabled;
           room.localParticipant.setMicrophoneEnabled(isMicEnabled);
           sendToApp('mic', { enabled: isMicEnabled });
         }
       } else if (msg.type === 'endCall') {
+        const reason = msg.reason || (IS_VIEW_ONLY ? 'STAFF_ENDED_VIEW' : 'STAFF_ENDED');
         if (currentSessionId) {
-          apiCall('POST', '/media-sessions/' + currentSessionId + '/end', { reason: 'STAFF_ENDED' })
+          apiCall('POST', '/media-sessions/' + currentSessionId + '/end', { reason })
             .catch(() => {});
         }
         cleanup();
-        sendToApp('status', { status: 'ENDED', reason: 'STAFF_ENDED' });
+        sendToApp('status', { status: 'ENDED', sessionId: currentSessionId, reason });
       } else if (msg.type === 'toggleAudio') {
-        if (audioEl) {
+        if (!IS_VIEW_ONLY && MODE === 'ASSIST' && audioEl) {
           audioEl.muted = !audioEl.muted;
           sendToApp('audio', { muted: audioEl.muted });
         }
       }
     } catch(e) {}
-  });
+  }
 
-  // Also listen for document message (Android WebView compatibility)
-  document.addEventListener('message', (event) => {
-    try {
-      const msg = JSON.parse(event.data);
-      if (msg.type === 'toggleMic' && room && room.localParticipant) {
-        isMicEnabled = !isMicEnabled;
-        room.localParticipant.setMicrophoneEnabled(isMicEnabled);
-        sendToApp('mic', { enabled: isMicEnabled });
-      } else if (msg.type === 'endCall') {
-        if (currentSessionId) {
-          apiCall('POST', '/media-sessions/' + currentSessionId + '/end', { reason: 'STAFF_ENDED' })
-            .catch(() => {});
-        }
-        cleanup();
-        sendToApp('status', { status: 'ENDED', reason: 'STAFF_ENDED' });
-      } else if (msg.type === 'toggleAudio') {
-        if (audioEl) {
-          audioEl.muted = !audioEl.muted;
-          sendToApp('audio', { muted: audioEl.muted });
-        }
-      }
-    } catch(e) {}
-  });
+  window.addEventListener('message', (event) => handleIncomingCommand(event.data));
+  document.addEventListener('message', (event) => handleIncomingCommand(event.data));
 
   // Start with fallback SDK loader
   if (window.LivekitClient) {
@@ -539,6 +659,10 @@ export const MediaCallModal: React.FC<MediaCallModalProps> = ({
   existingSessionId,
   livekitUrl,
   livekitToken,
+  externalError,
+  onRetryCamera,
+  isRetrying = false,
+  endButtonLabel,
   onSessionEnd,
 }) => {
   const webViewRef = useRef<any>(null);
@@ -548,7 +672,10 @@ export const MediaCallModal: React.FC<MediaCallModalProps> = ({
   const [sessionId, setSessionId] = useState<string | null>(existingSessionId || null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [micError, setMicError] = useState<string | null>(null);
+  const [reloadNonce, setReloadNonce] = useState(0);
   const isEndingRef = useRef(false);
+  const emittedEndKeysRef = useRef<Set<string>>(new Set());
+  const sessionGenerationRef = useRef(0);
 
   // Pulse animation for live indicator
   const pulseAnim = useRef(new Animated.Value(1)).current;
@@ -566,9 +693,10 @@ export const MediaCallModal: React.FC<MediaCallModalProps> = ({
     }
   }, [callStatus, pulseAnim]);
 
-  // Reset state when modal opens
+  // Reset state when modal opens or fresh credentials arrive on retry
   useEffect(() => {
     if (visible) {
+      sessionGenerationRef.current += 1;
       setCallStatus('INIT');
       setMicEnabled(false);
       setAudioMuted(false);
@@ -576,20 +704,94 @@ export const MediaCallModal: React.FC<MediaCallModalProps> = ({
       setMicError(null);
       setSessionId(existingSessionId || null);
       isEndingRef.current = false;
+    } else {
+      sessionGenerationRef.current += 1;
     }
-  }, [visible, existingSessionId]);
+  }, [visible, existingSessionId, livekitToken]);
+
+  const emitSessionEndOnce = useCallback(
+    (payload: MediaSessionEndPayload) => {
+      const dedupeKey = payload.sessionId || sessionId || existingSessionId || 'unknown-session';
+      if (emittedEndKeysRef.current.has(dedupeKey)) {
+        return;
+      }
+      emittedEndKeysRef.current.add(dedupeKey);
+      onSessionEnd?.(payload);
+    },
+    [onSessionEnd, sessionId, existingSessionId]
+  );
 
   const handleMessage = useCallback((event: WebViewMessageEvent) => {
     try {
       const msg = JSON.parse(event.nativeEvent.data);
       switch (msg.type) {
-        case 'status':
-          setCallStatus(msg.status as CallStatus);
+        case 'status': {
+          const nextStatus = msg.status as CallStatus;
+          const resolvedSessionId = (msg.sessionId || sessionId || existingSessionId) || undefined;
+          setCallStatus(nextStatus);
           if (msg.error) setErrorMsg(msg.error);
-          if (msg.status === 'ENDED') {
-            onSessionEnd?.();
+
+          if (nextStatus === 'ENDED' && !isEndingRef.current) {
+            emitSessionEndOnce({
+              source: 'WEBVIEW_STATUS',
+              sessionId: resolvedSessionId,
+              incidentId,
+              robotId,
+              uiStatus: 'ENDED',
+              endReason: msg.reason,
+              error: msg.error,
+              backendSession: msg.backendSession || null,
+            });
+          } else if (nextStatus === 'DISCONNECTED' && !isEndingRef.current) {
+            // Đối soát với BE xem LiveKit Disconnected là kết thúc thật (ENDED) hay mất mạng/hết hạn
+            if (resolvedSessionId) {
+              const genAtStart = sessionGenerationRef.current;
+              mediaSessionApi
+                .getSession(resolvedSessionId)
+                .then((srv) => {
+                  if (genAtStart !== sessionGenerationRef.current) return;
+                  if (srv.state === 'ENDED') {
+                    setCallStatus('ENDED');
+                    emitSessionEndOnce({
+                      source: 'WEBVIEW_STATUS',
+                      sessionId: resolvedSessionId,
+                      incidentId,
+                      robotId,
+                      uiStatus: 'ENDED',
+                      endReason: srv.endReason || msg.reason,
+                      backendSession: srv,
+                    });
+                  } else if (srv.state === 'EXPIRED' || srv.state === 'FAILED') {
+                    const sessionLabel = mode === 'ASSIST' ? 'Phiên đàm thoại' : 'Phiên xem camera';
+                    setCallStatus(srv.state);
+                    setErrorMsg(
+                      srv.state === 'EXPIRED'
+                        ? `${sessionLabel} đã hết hạn.`
+                        : `${sessionLabel} gặp lỗi kết nối.`
+                    );
+                  } else {
+                    setCallStatus('ERROR');
+                    setErrorMsg('Mất kết nối WebRTC tạm thời, phiên vẫn chưa kết thúc.');
+                  }
+                })
+                .catch(() => {
+                  if (genAtStart !== sessionGenerationRef.current) return;
+                  setCallStatus('ERROR');
+                  setErrorMsg(
+                    mode === 'ASSIST'
+                      ? 'Mất kết nối cuộc gọi, chưa xác nhận được kết thúc từ máy chủ.'
+                      : 'Mất kết nối xem camera, chưa xác nhận được kết thúc từ máy chủ.'
+                  );
+                });
+            } else {
+              setCallStatus('ERROR');
+              setErrorMsg(
+                mode === 'ASSIST' ? 'Mất kết nối cuộc gọi.' : 'Mất kết nối xem camera robot.'
+              );
+            }
           }
           break;
+        }
         case 'mic':
           setMicEnabled(!!msg.enabled);
           if (msg.error) {
@@ -608,7 +810,7 @@ export const MediaCallModal: React.FC<MediaCallModalProps> = ({
     } catch {
       // ignore parse errors
     }
-  }, [onSessionEnd]);
+  }, [sessionId, existingSessionId, incidentId, robotId, emitSessionEndOnce]);
 
   const sendCommand = useCallback((cmd: object) => {
     const js = `window.dispatchEvent(new MessageEvent('message', { data: '${JSON.stringify(cmd).replace(/'/g, "\\'")}' })); true;`;
@@ -627,29 +829,99 @@ export const MediaCallModal: React.FC<MediaCallModalProps> = ({
     if (isEndingRef.current) return;
     isEndingRef.current = true;
 
-    sendCommand({ type: 'endCall' });
-
     const targetSessionId = sessionId || existingSessionId;
+    const endReason = mode === 'ASSIST' ? 'STAFF_ENDED' : 'STAFF_ENDED_VIEW';
+
+    let backendSession: MediaSessionResponse | null = null;
+    let endErrorMessage: string | null = null;
     if (targetSessionId) {
       try {
-        await mediaSessionApi.endSession(targetSessionId, 'STAFF_ENDED');
+        backendSession = await mediaSessionApi.endSession(targetSessionId, endReason);
       } catch (err: any) {
+        endErrorMessage = err?.message || null;
         console.log('Error ending media session on server:', err);
+        backendSession = await mediaSessionApi.getSession(targetSessionId).catch(() => null);
       }
+
+      const srvState = backendSession?.state;
+      const isConfirmedTerminal =
+        srvState === 'ENDED' || srvState === 'EXPIRED' || srvState === 'FAILED';
+      if (!isConfirmedTerminal) {
+        isEndingRef.current = false;
+        const label = mode === 'ASSIST' ? 'Kết thúc cuộc gọi' : 'Kết thúc xem';
+        Alert.alert(
+          'Chưa kết thúc được phiên trên máy chủ',
+          endErrorMessage ||
+            (srvState
+              ? `Phiên media vẫn đang ở trạng thái ${srvState}. Vui lòng bấm "${label}" để thử lại.`
+              : `Không thể xác nhận đã kết thúc phiên với máy chủ. Vui lòng thử bấm "${label}" lại.`)
+        );
+        return;
+      }
+
+      sendCommand({ type: 'endCall', reason: endReason });
+
+      emitSessionEndOnce({
+        source: 'UI_END_BUTTON',
+        sessionId: targetSessionId,
+        incidentId,
+        robotId,
+        uiStatus: srvState || 'ENDED',
+        endReason: backendSession?.endReason || endReason,
+        error: endErrorMessage || undefined,
+        backendSession,
+      });
+      onClose();
+      return;
     }
 
-    onSessionEnd?.();
+    sendCommand({ type: 'endCall', reason: endReason });
+    emitSessionEndOnce({
+      source: 'UI_END_BUTTON',
+      incidentId,
+      robotId,
+      uiStatus: 'ENDED',
+      endReason,
+      backendSession: null,
+    });
     onClose();
-  }, [sessionId, existingSessionId, sendCommand, onSessionEnd, onClose]);
+  }, [mode, sessionId, existingSessionId, incidentId, robotId, sendCommand, emitSessionEndOnce, onClose]);
+
+  const handleDismissOnly = useCallback(() => {
+    if (!isEndingRef.current && callStatus !== 'ENDED') {
+      onSessionEnd?.({
+        source: 'MODAL_CLOSE',
+        sessionId: (sessionId || existingSessionId) || undefined,
+        incidentId,
+        robotId,
+        uiStatus: callStatus,
+        error: externalError || errorMsg || undefined,
+      });
+    }
+    onClose();
+  }, [callStatus, sessionId, existingSessionId, incidentId, robotId, externalError, errorMsg, onSessionEnd, onClose]);
+
+  const handleRetryCamera = useCallback(async () => {
+    if (isRetrying) return;
+    setCallStatus('INIT');
+    setErrorMsg(null);
+    setReloadNonce((prev) => prev + 1);
+    if (onRetryCamera) {
+      await onRetryCamera();
+    }
+  }, [isRetrying, onRetryCamera]);
 
   const handleEndCall = useCallback(() => {
+    const isAssistMode = mode === 'ASSIST';
     Alert.alert(
-      'Kết thúc cuộc gọi',
-      'Bạn có chắc muốn kết thúc cuộc gọi đàm thoại với robot?',
+      isAssistMode ? 'Kết thúc cuộc gọi' : 'Kết thúc xem camera',
+      isAssistMode
+        ? 'Bạn có chắc muốn kết thúc cuộc gọi đàm thoại với robot?'
+        : 'Bạn đã kiểm tra xong camera robot và muốn kết thúc xem để chọn Xác nhận sự cố hoặc Báo nhầm?',
       [
         { text: 'Hủy', style: 'cancel' },
         {
-          text: 'Kết thúc',
+          text: isAssistMode ? 'Kết thúc cuộc gọi' : 'Kết thúc xem',
           style: 'destructive',
           onPress: () => {
             void performEndCall();
@@ -657,15 +929,36 @@ export const MediaCallModal: React.FC<MediaCallModalProps> = ({
         },
       ]
     );
-  }, [performEndCall]);
+  }, [mode, performEndCall]);
 
   const handleClose = useCallback(() => {
     if (callStatus === 'CONNECTED' || callStatus === 'ROOM_CONNECTED' || callStatus === 'CONNECTING') {
-      handleEndCall();
+      const isAssistMode = mode === 'ASSIST';
+      Alert.alert(
+        isAssistMode ? 'Đóng cửa sổ cuộc gọi' : 'Đóng cửa sổ xem camera',
+        isAssistMode
+          ? 'Nếu chỉ đóng cửa sổ mà chưa kết thúc phiên, cuộc gọi vẫn giữ trên máy chủ.'
+          : 'Đóng cửa sổ sẽ chưa xác nhận kết thúc xem. Hãy chọn "Kết thúc xem" khi bạn muốn chuyển sang xác nhận sự cố.',
+        [
+          { text: 'Ở lại', style: 'cancel' },
+          {
+            text: 'Đóng cửa sổ',
+            onPress: handleDismissOnly,
+          },
+          {
+            text: isAssistMode ? 'Kết thúc cuộc gọi' : 'Kết thúc xem',
+            style: 'destructive',
+            onPress: () => {
+              void performEndCall();
+            },
+          },
+        ]
+      );
     } else {
-      onClose();
+      // Đóng cửa sổ khi lỗi / timeout / chưa kết thúc không phát sự kiện ENDED
+      handleDismissOnly();
     }
-  }, [callStatus, handleEndCall, onClose]);
+  }, [callStatus, mode, handleDismissOnly, performEndCall]);
 
   // Build the HTML
   const baseUrl = apiClient.getBaseUrl();
@@ -684,6 +977,24 @@ export const MediaCallModal: React.FC<MediaCallModalProps> = ({
 
   const isConnected = callStatus === 'CONNECTED';
   const isAssist = mode === 'ASSIST';
+  const isErrorState =
+    Boolean(externalError) ||
+    callStatus === 'ERROR' ||
+    callStatus === 'TIMEOUT' ||
+    callStatus === 'CAMERA_LOST' ||
+    callStatus === 'EXPIRED' ||
+    callStatus === 'FAILED';
+  const displayErrorText =
+    externalError ||
+    errorMsg ||
+    (callStatus === 'TIMEOUT'
+      ? 'Hết thời gian chờ khung hình camera robot. Vui lòng thử lại.'
+      : callStatus === 'CAMERA_LOST'
+      ? 'Mất tín hiệu hình ảnh từ camera robot.'
+      : callStatus === 'EXPIRED'
+      ? 'Phiên xem camera đã hết hạn.'
+      : 'Không thể kết nối camera robot.');
+  const resolvedEndLabel = endButtonLabel || (isAssist ? 'Kết thúc cuộc gọi' : 'Kết thúc xem');
 
   return (
     <Modal visible={visible} animationType="slide" onRequestClose={handleClose}>
@@ -700,32 +1011,33 @@ export const MediaCallModal: React.FC<MediaCallModalProps> = ({
 
           <View style={styles.headerCenter}>
             <View style={styles.headerTitleRow}>
-              {isConnected && (
+              {isConnected && !externalError && (
                 <Animated.View style={[styles.liveDot, { opacity: pulseAnim }]} />
               )}
               <Text style={styles.headerTitle} numberOfLines={1}>
                 {robotName || 'Camera Robot'}
               </Text>
             </View>
-            <Text style={[styles.headerStatus, { color: statusColor(callStatus) }]}>
-              {statusLabel(callStatus)}
+            <Text style={[styles.headerStatus, { color: externalError ? '#EF4444' : statusColor(callStatus) }]}>
+              {externalError ? '❌ Camera chưa khả dụng' : statusLabel(callStatus)}
             </Text>
           </View>
 
-          <View style={styles.modeBadge}>
+          <View style={[styles.modeBadge, !isAssist && { backgroundColor: '#0284C7' }]}>
             {isAssist ? (
               <Phone size={12} color="#fff" />
             ) : (
               <Monitor size={12} color="#fff" />
             )}
-            <Text style={styles.modeBadgeText}>{mode}</Text>
+            <Text style={styles.modeBadgeText}>{isAssist ? 'ASSIST' : 'CHỈ XEM'}</Text>
           </View>
         </View>
 
         {/* WebView */}
         <View style={styles.webviewContainer}>
-          {visible && (
+          {visible && !externalError && (
             <WebView
+              key={`${existingSessionId || robotId || 'cam'}-${mode}-${reloadNonce}`}
               ref={webViewRef}
               source={{ html: htmlContent, baseUrl: 'https://mediassistrover.duckdns.org' }}
               style={styles.webview}
@@ -734,7 +1046,7 @@ export const MediaCallModal: React.FC<MediaCallModalProps> = ({
               domStorageEnabled
               mediaPlaybackRequiresUserAction={false}
               allowsInlineMediaPlayback
-              mediaCapturePermissionGrantType="grant"
+              mediaCapturePermissionGrantType={isAssist ? 'grant' : 'deny'}
               onMessage={handleMessage}
               onError={(e: any) => {
                 setCallStatus('ERROR');
@@ -743,44 +1055,65 @@ export const MediaCallModal: React.FC<MediaCallModalProps> = ({
             />
           )}
 
-          {/* Loading overlay when not connected */}
-          {!isConnected && callStatus !== 'ENDED' && callStatus !== 'ERROR' && (
+          {/* Loading overlay when connecting */}
+          {!isConnected && !isErrorState && callStatus !== 'ENDED' && (
             <View style={styles.loadingOverlay}>
               <ActivityIndicator size="large" color="#fff" />
               <Text style={styles.loadingText}>{statusLabel(callStatus)}</Text>
             </View>
           )}
 
-          {/* Error overlay */}
-          {callStatus === 'ERROR' && (
+          {/* Error overlay with Retry button */}
+          {isErrorState && (
             <View style={styles.errorOverlay}>
               <WifiOff size={48} color="#EF4444" />
-              <Text style={styles.errorTitle}>Kết nối thất bại</Text>
-              <Text style={styles.errorMsg}>{errorMsg || 'Không thể kết nối camera robot'}</Text>
-              <TouchableOpacity style={styles.retryBtn} onPress={onClose}>
-                <Text style={styles.retryBtnText}>Đóng</Text>
-              </TouchableOpacity>
+              <Text style={styles.errorTitle}>
+                {isAssist ? 'Kết nối cuộc gọi thất bại' : 'Camera robot chưa khả dụng'}
+              </Text>
+              <Text style={styles.errorMsg}>{displayErrorText}</Text>
+              <View style={styles.errorBtnRow}>
+                <TouchableOpacity
+                  style={styles.retryPrimaryBtn}
+                  onPress={() => void handleRetryCamera()}
+                  disabled={isRetrying}
+                >
+                  {isRetrying ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : (
+                    <>
+                      <RefreshCw size={16} color="#fff" />
+                      <Text style={styles.retryBtnText}>Thử lại</Text>
+                    </>
+                  )}
+                </TouchableOpacity>
+
+                <TouchableOpacity style={styles.retryBtn} onPress={handleDismissOnly}>
+                  <Text style={styles.retryBtnText}>Đóng</Text>
+                </TouchableOpacity>
+              </View>
             </View>
           )}
         </View>
 
         {/* Control bar */}
         <View style={styles.controlBar}>
-          {/* Audio toggle */}
-          <TouchableOpacity
-            style={[styles.controlBtn, audioMuted && styles.controlBtnActive]}
-            onPress={handleToggleAudio}
-            disabled={!isConnected}
-          >
-            {audioMuted ? (
-              <VolumeX size={22} color="#fff" />
-            ) : (
-              <Volume2 size={22} color="#fff" />
-            )}
-            <Text style={styles.controlLabel}>
-              {audioMuted ? 'Tắt loa' : 'Loa'}
-            </Text>
-          </TouchableOpacity>
+          {/* Audio toggle (only in ASSIST mode) */}
+          {isAssist && (
+            <TouchableOpacity
+              style={[styles.controlBtn, audioMuted && styles.controlBtnActive]}
+              onPress={handleToggleAudio}
+              disabled={!isConnected}
+            >
+              {audioMuted ? (
+                <VolumeX size={22} color="#fff" />
+              ) : (
+                <Volume2 size={22} color="#fff" />
+              )}
+              <Text style={styles.controlLabel}>
+                {audioMuted ? 'Tắt loa' : 'Loa'}
+              </Text>
+            </TouchableOpacity>
+          )}
 
           {/* Mic toggle (only in ASSIST mode) */}
           {isAssist && (
@@ -803,13 +1136,15 @@ export const MediaCallModal: React.FC<MediaCallModalProps> = ({
             </TouchableOpacity>
           )}
 
-          {/* End call */}
+          {/* End call / End view */}
           <TouchableOpacity
-            style={styles.endCallBtn}
+            style={[styles.endCallBtn, !isAssist && styles.endViewWideBtn]}
             onPress={handleEndCall}
           >
-            <PhoneOff size={22} color="#fff" />
-            <Text style={styles.controlLabel}>Kết thúc</Text>
+            <PhoneOff size={20} color="#fff" />
+            <Text style={isAssist ? styles.controlLabel : styles.endViewWideLabel}>
+              {resolvedEndLabel}
+            </Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -871,7 +1206,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    backgroundColor: Colors.primary,
+    backgroundColor: Colors.actionSurface,
     paddingHorizontal: 10,
     paddingVertical: 5,
     borderRadius: 16,
@@ -929,6 +1264,22 @@ const styles = StyleSheet.create({
     paddingHorizontal: 24,
     paddingVertical: 10,
     borderRadius: 8,
+  },
+  retryPrimaryBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: '#0284C7',
+    paddingHorizontal: 22,
+    paddingVertical: 10,
+    borderRadius: 8,
+  },
+  errorBtnRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 12,
     marginTop: 8,
   },
   retryBtnText: {
@@ -975,10 +1326,25 @@ const styles = StyleSheet.create({
   endCallBtn: {
     alignItems: 'center',
     justifyContent: 'center',
-    width: 60,
+    minWidth: 96,
     height: 60,
+    paddingHorizontal: 14,
     borderRadius: 30,
     backgroundColor: '#EF4444',
     gap: 2,
+  },
+  endViewWideBtn: {
+    width: 'auto',
+    minWidth: 180,
+    height: 48,
+    borderRadius: 24,
+    flexDirection: 'row',
+    paddingHorizontal: 24,
+    gap: 8,
+  },
+  endViewWideLabel: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '700',
   },
 });

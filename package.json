@@ -12,6 +12,7 @@
     "typecheck": "tsc --noEmit",
     "test:delivery": "node --test tests/delivery.test.cjs",
     "test:quantity": "node --test tests/quantity.test.cjs",
+    "test:sos": "node --test tests/sosFlow.test.cjs",
     "check:delivery": "npm run typecheck && npm run test:delivery && npm run test:quantity"
   },
   "dependencies": {

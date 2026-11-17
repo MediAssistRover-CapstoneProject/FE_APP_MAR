@@ -99,7 +99,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     borderRadius: BorderRadius.lg,
-    backgroundColor: Colors.primaryAction,
+    backgroundColor: Colors.actionSurface,
     gap: Spacing.sm,
     minHeight: 52,
     ...Shadows.button,

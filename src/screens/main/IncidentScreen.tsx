@@ -284,7 +284,7 @@ const styles = StyleSheet.create({
     ...Shadows.sm,
   },
   filterBtnActive: {
-    backgroundColor: Colors.hero,
+    backgroundColor: Colors.actionSurface,
     borderColor: Colors.hero,
   },
   filterBtnText: {
@@ -383,7 +383,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
-    backgroundColor: Colors.hero,
+    backgroundColor: Colors.actionSurface,
     borderRadius: BorderRadius.lg,
     minHeight: 52,
     ...Shadows.button,

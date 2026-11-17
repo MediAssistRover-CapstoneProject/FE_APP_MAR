@@ -377,7 +377,7 @@ const styles = StyleSheet.create({
     width: 44,
     height: 44,
     borderRadius: 22,
-    backgroundColor: Colors.hero,
+    backgroundColor: Colors.actionSurface,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -523,7 +523,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   itemAvatarSelected: {
-    backgroundColor: Colors.hero,
+    backgroundColor: Colors.actionSurface,
   },
   staffName: {
     fontSize: 14,

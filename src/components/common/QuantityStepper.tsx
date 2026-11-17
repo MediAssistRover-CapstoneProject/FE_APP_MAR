@@ -250,7 +250,7 @@ const styles = StyleSheet.create({
     borderColor: '#E4E4E7',
   },
   plusBtn: {
-    backgroundColor: Colors.hero,
+    backgroundColor: Colors.actionSurface,
   },
   btnDisabled: {
     opacity: 0.35,

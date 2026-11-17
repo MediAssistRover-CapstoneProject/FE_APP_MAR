@@ -102,7 +102,7 @@ const styles = StyleSheet.create({
     marginBottom: 6,
   },
   activeCircle: {
-    backgroundColor: Colors.primary,
+    backgroundColor: Colors.actionSurface,
   },
   completedCircle: {
     backgroundColor: Colors.emerald,

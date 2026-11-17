@@ -10,9 +10,11 @@
 export const Colors = {
   // Brand & Action
   hero: '#202022',
+  heroSurface: '#0B3851',
   primaryAction: '#202022',
-  navigationDock: '#202022',
-  darkRaised: '#2D2D31',
+  actionSurface: '#126B93',
+  navigationDock: '#0A293B',
+  darkRaised: '#0E5B7E',
   primary: '#202022', // Primary action button theo phong cách đen sang trọng
   primaryBrand: '#0284C7', // Màu nhấn y tế khi cần phân biệt liên kết/tuyến đường
   primaryLight: '#E0F2FE',

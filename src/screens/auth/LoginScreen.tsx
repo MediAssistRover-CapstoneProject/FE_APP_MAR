@@ -648,7 +648,7 @@ const styles = StyleSheet.create({
     width: 60,
     height: 60,
     borderRadius: 30,
-    backgroundColor: Colors.hero,
+    backgroundColor: Colors.actionSurface,
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: Spacing.sm,
@@ -816,7 +816,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
   },
   checkboxActive: {
-    backgroundColor: Colors.hero,
+    backgroundColor: Colors.actionSurface,
     borderColor: Colors.hero,
   },
   rememberText: {
@@ -832,7 +832,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: Colors.hero,
+    backgroundColor: Colors.actionSurface,
     borderRadius: 16,
     height: 52,
     gap: Spacing.xs + 2,
@@ -1040,7 +1040,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     height: 48,
     borderRadius: 14,
-    backgroundColor: Colors.hero,
+    backgroundColor: Colors.actionSurface,
     ...Shadows.button,
   },
   applyBtnText: {
@@ -1066,7 +1066,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 12,
-    backgroundColor: Colors.hero,
+    backgroundColor: Colors.actionSurface,
   },
   passwordChangeTitle: {
     textAlign: 'center',
@@ -1108,7 +1108,7 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: Colors.hero,
+    backgroundColor: Colors.actionSurface,
   },
   passwordChangeSubmitText: {
     color: '#FFFFFF',

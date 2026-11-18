@@ -228,12 +228,26 @@ export const BackendHospitalMap: React.FC<BackendHospitalMapProps> = ({
   const validSosRoute = useMemo(() => {
     if (!sosRoute) return null;
     if (sosRoute.mapId && sosRoute.mapId !== map.mapId) return null;
-    if (
-      !Number.isFinite(sosRoute.origin?.x) ||
-      !Number.isFinite(sosRoute.origin?.y) ||
-      !Number.isFinite(sosRoute.destination?.x) ||
-      !Number.isFinite(sosRoute.destination?.y)
-    ) {
+    const hasOrigin =
+      Boolean(sosRoute.origin) &&
+      Number.isFinite(sosRoute.origin?.x) &&
+      Number.isFinite(sosRoute.origin?.y);
+    const hasDestination =
+      Number.isFinite(sosRoute.destination?.x) &&
+      Number.isFinite(sosRoute.destination?.y);
+    const hasPatient =
+      Boolean(sosRoute.patientLocation) &&
+      Number.isFinite(sosRoute.patientLocation?.x) &&
+      Number.isFinite(sosRoute.patientLocation?.y);
+    const hasObservation =
+      Boolean(sosRoute.robotObservationLocation) &&
+      Number.isFinite(sosRoute.robotObservationLocation?.x) &&
+      Number.isFinite(sosRoute.robotObservationLocation?.y);
+
+    if (sosRoute.isPreviewOnly) {
+      return hasDestination || hasPatient || hasObservation ? sosRoute : null;
+    }
+    if (!hasOrigin || !hasDestination) {
       return null;
     }
     return sosRoute;
@@ -386,8 +400,49 @@ export const BackendHospitalMap: React.FC<BackendHospitalMapProps> = ({
       expandWithPoint({ x: validRobotPose.xM, y: validRobotPose.yM });
     }
     if (validSosRoute) {
-      expandWithPoint({ x: validSosRoute.origin.x, y: validSosRoute.origin.y });
-      expandWithPoint({ x: validSosRoute.destination.x, y: validSosRoute.destination.y });
+      if (
+        validSosRoute.origin &&
+        Number.isFinite(validSosRoute.origin.x) &&
+        Number.isFinite(validSosRoute.origin.y)
+      ) {
+        expandWithPoint({ x: validSosRoute.origin.x, y: validSosRoute.origin.y });
+      }
+      if (
+        Number.isFinite(validSosRoute.destination?.x) &&
+        Number.isFinite(validSosRoute.destination?.y)
+      ) {
+        expandWithPoint({ x: validSosRoute.destination.x, y: validSosRoute.destination.y });
+      }
+      if (
+        validSosRoute.patientLocation &&
+        Number.isFinite(validSosRoute.patientLocation.x) &&
+        Number.isFinite(validSosRoute.patientLocation.y)
+      ) {
+        expandWithPoint({
+          x: validSosRoute.patientLocation.x,
+          y: validSosRoute.patientLocation.y,
+        });
+      }
+      if (
+        validSosRoute.robotObservationLocation &&
+        Number.isFinite(validSosRoute.robotObservationLocation.x) &&
+        Number.isFinite(validSosRoute.robotObservationLocation.y)
+      ) {
+        expandWithPoint({
+          x: validSosRoute.robotObservationLocation.x,
+          y: validSosRoute.robotObservationLocation.y,
+        });
+      }
+      if (
+        validSosRoute.robotApproach?.position &&
+        Number.isFinite(validSosRoute.robotApproach.position.x) &&
+        Number.isFinite(validSosRoute.robotApproach.position.y)
+      ) {
+        expandWithPoint({
+          x: validSosRoute.robotApproach.position.x,
+          y: validSosRoute.robotApproach.position.y,
+        });
+      }
       validSosRoute.points.forEach((pt) => {
         if (Number.isFinite(pt.x) && Number.isFinite(pt.y)) {
           expandWithPoint({ x: pt.x, y: pt.y });
@@ -854,27 +909,82 @@ export const BackendHospitalMap: React.FC<BackendHospitalMapProps> = ({
             );
           })()}
 
-          {/* 2b. Lớp tuyến đi bộ hỗ trợ SOS (tách biệt hẳn với đường dẫn Nav2 của Robot) */}
+          {/* 2b. Lớp tuyến đi bộ hỗ trợ SOS & ghim vị trí té ngã (tách biệt hẳn với đường dẫn Nav2 của Robot) */}
           {validSosRoute && (() => {
             const routePixelPoints = validSosRoute.points.map((pt) =>
               geometry.toViewPixel({ x: pt.x, y: pt.y })
             );
             const routePolyText = routePixelPoints.map((p) => `${p.x},${p.y}`).join(' ');
-            const originPx = geometry.toViewPixel({
-              x: validSosRoute.origin.x,
-              y: validSosRoute.origin.y,
-            });
-            const destPx = geometry.toViewPixel({
-              x: validSosRoute.destination.x,
-              y: validSosRoute.destination.y,
-            });
+            const hasOrigin =
+              !validSosRoute.isPreviewOnly &&
+              Boolean(validSosRoute.origin) &&
+              Number.isFinite(validSosRoute.origin?.x) &&
+              Number.isFinite(validSosRoute.origin?.y);
+            const originPx = hasOrigin
+              ? geometry.toViewPixel({
+                  x: validSosRoute.origin!.x,
+                  y: validSosRoute.origin!.y,
+                })
+              : null;
+            const patientPx =
+              validSosRoute.patientLocation &&
+              Number.isFinite(validSosRoute.patientLocation.x) &&
+              Number.isFinite(validSosRoute.patientLocation.y)
+                ? geometry.toViewPixel({
+                    x: validSosRoute.patientLocation.x,
+                    y: validSosRoute.patientLocation.y,
+                  })
+                : null;
+            const observationPx =
+              validSosRoute.robotObservationLocation &&
+              Number.isFinite(validSosRoute.robotObservationLocation.x) &&
+              Number.isFinite(validSosRoute.robotObservationLocation.y)
+                ? geometry.toViewPixel({
+                    x: validSosRoute.robotObservationLocation.x,
+                    y: validSosRoute.robotObservationLocation.y,
+                  })
+                : null;
+            const approachPx =
+              validSosRoute.robotApproach?.position &&
+              Number.isFinite(validSosRoute.robotApproach.position.x) &&
+              Number.isFinite(validSosRoute.robotApproach.position.y)
+                ? geometry.toViewPixel({
+                    x: validSosRoute.robotApproach.position.x,
+                    y: validSosRoute.robotApproach.position.y,
+                  })
+                : null;
+            const isViewpointOnlyBasis =
+              String(validSosRoute.destinationBasis || '').toUpperCase() === 'ROBOT_VIEWPOINT';
+            const showFallbackDestination = !patientPx && (!isViewpointOnlyBasis || !observationPx);
+            const destPx =
+              showFallbackDestination &&
+              Number.isFinite(validSosRoute.destination?.x) &&
+              Number.isFinite(validSosRoute.destination?.y)
+                ? geometry.toViewPixel({
+                    x: validSosRoute.destination.x,
+                    y: validSosRoute.destination.y,
+                  })
+                : null;
+
             const markerR = Math.max(3.6, viewWidth / 62);
             const labelFont = Math.max(4.4, viewWidth / 44);
-            const originText = validSosRoute.origin.label || 'Phòng trực SOS';
-            const destText = validSosRoute.destination.label || 'Vị trí SOS đã ghi nhận';
-            const originPillW = Math.max(originText.length * labelFont * 0.56 + 7, 36);
-            const destPillW = Math.max(destText.length * labelFont * 0.56 + 7, 44);
             const pillH = labelFont + 3.2;
+            const originText = validSosRoute.origin?.label || 'Phòng trực SOS';
+            const patientText = validSosRoute.patientLocation?.label || 'Vị trí người té ngã';
+            const obsText = validSosRoute.robotObservationLocation?.label || 'Robot lúc quan sát';
+            const approachText =
+              validSosRoute.robotApproach?.endpointName ||
+              validSosRoute.robotApproach?.endpointCode ||
+              'Điểm tiếp cận';
+            const destText = isViewpointOnlyBasis
+              ? 'Vị trí robot lúc quan sát'
+              : validSosRoute.destination.label || 'Vị trí SOS đã ghi nhận';
+
+            const originPillW = Math.max(originText.length * labelFont * 0.56 + 7, 36);
+            const patientPillW = Math.max(patientText.length * labelFont * 0.56 + 7, 44);
+            const obsPillW = Math.max(obsText.length * labelFont * 0.56 + 7, 42);
+            const approachPillW = Math.max(approachText.length * labelFont * 0.56 + 7, 38);
+            const destPillW = Math.max(destText.length * labelFont * 0.56 + 7, 44);
 
             return (
               <G>
@@ -901,82 +1011,210 @@ export const BackendHospitalMap: React.FC<BackendHospitalMapProps> = ({
                 )}
 
                 {/* Điểm xuất phát: Phòng trực SOS */}
-                <Circle
-                  cx={originPx.x}
-                  cy={originPx.y}
-                  r={markerR * 1.5}
-                  fill="rgba(5, 150, 105, 0.2)"
-                />
-                <Circle
-                  cx={originPx.x}
-                  cy={originPx.y}
-                  r={markerR}
-                  fill="#059669"
-                  stroke="#FFFFFF"
-                  strokeWidth={Math.max(1.0, viewWidth / 190)}
-                />
-                <Rect
-                  x={originPx.x - originPillW / 2}
-                  y={originPx.y - markerR - pillH - 2}
-                  width={originPillW}
-                  height={pillH}
-                  rx={pillH / 2}
-                  fill="rgba(6, 95, 70, 0.92)"
-                  stroke="#A7F3D0"
-                  strokeWidth={0.5}
-                />
-                <SvgText
-                  x={originPx.x}
-                  y={originPx.y - markerR - pillH * 0.5 + labelFont * 0.34 - 2}
-                  textAnchor="middle"
-                  fontSize={labelFont}
-                  fontWeight="800"
-                  fill="#FFFFFF"
-                >
-                  {originText}
-                </SvgText>
+                {originPx && (
+                  <>
+                    <Circle
+                      cx={originPx.x}
+                      cy={originPx.y}
+                      r={markerR * 1.5}
+                      fill="rgba(5, 150, 105, 0.2)"
+                    />
+                    <Circle
+                      cx={originPx.x}
+                      cy={originPx.y}
+                      r={markerR}
+                      fill="#059669"
+                      stroke="#FFFFFF"
+                      strokeWidth={Math.max(1.0, viewWidth / 190)}
+                    />
+                    <Rect
+                      x={originPx.x - originPillW / 2}
+                      y={originPx.y - markerR - pillH - 2}
+                      width={originPillW}
+                      height={pillH}
+                      rx={pillH / 2}
+                      fill="rgba(6, 95, 70, 0.92)"
+                      stroke="#A7F3D0"
+                      strokeWidth={0.5}
+                    />
+                    <SvgText
+                      x={originPx.x}
+                      y={originPx.y - markerR - pillH * 0.5 + labelFont * 0.34 - 2}
+                      textAnchor="middle"
+                      fontSize={labelFont}
+                      fontWeight="800"
+                      fill="#FFFFFF"
+                    >
+                      {originText}
+                    </SvgText>
+                  </>
+                )}
 
-                {/* Điểm đích: Vị trí SOS đã ghi nhận */}
-                <Circle
-                  cx={destPx.x}
-                  cy={destPx.y}
-                  r={markerR * 1.85}
-                  fill="rgba(220, 38, 38, 0.24)"
-                />
-                <Circle
-                  cx={destPx.x}
-                  cy={destPx.y}
-                  r={markerR * 1.1}
-                  fill="#DC2626"
-                  stroke="#FFFFFF"
-                  strokeWidth={Math.max(1.1, viewWidth / 180)}
-                />
-                <Circle
-                  cx={destPx.x}
-                  cy={destPx.y}
-                  r={markerR * 0.38}
-                  fill="#FFFFFF"
-                />
-                <Rect
-                  x={destPx.x - destPillW / 2}
-                  y={destPx.y + markerR * 1.35 + 1.5}
-                  width={destPillW}
-                  height={pillH}
-                  rx={pillH / 2}
-                  fill="rgba(153, 27, 27, 0.94)"
-                  stroke="#FECACA"
-                  strokeWidth={0.5}
-                />
-                <SvgText
-                  x={destPx.x}
-                  y={destPx.y + markerR * 1.35 + pillH * 0.5 + labelFont * 0.34 + 1.5}
-                  textAnchor="middle"
-                  fontSize={labelFont}
-                  fontWeight="800"
-                  fill="#FFFFFF"
-                >
-                  {destText}
-                </SvgText>
+                {/* Điểm tiếp cận đề xuất cho robot (1.2m - 2.0m có tầm nhìn thẳng) */}
+                {approachPx && (
+                  <>
+                    <Circle
+                      cx={approachPx.x}
+                      cy={approachPx.y}
+                      r={markerR * 0.9}
+                      fill="#0284C7"
+                      stroke="#FFFFFF"
+                      strokeWidth={Math.max(0.9, viewWidth / 200)}
+                    />
+                    <Rect
+                      x={approachPx.x - approachPillW / 2}
+                      y={approachPx.y - markerR - pillH - 1.5}
+                      width={approachPillW}
+                      height={pillH}
+                      rx={pillH / 2}
+                      fill="rgba(3, 105, 161, 0.9)"
+                      stroke="#BAE6FD"
+                      strokeWidth={0.5}
+                    />
+                    <SvgText
+                      x={approachPx.x}
+                      y={approachPx.y - markerR - pillH * 0.5 + labelFont * 0.34 - 1.5}
+                      textAnchor="middle"
+                      fontSize={labelFont}
+                      fontWeight="700"
+                      fill="#FFFFFF"
+                    >
+                      {approachText}
+                    </SvgText>
+                  </>
+                )}
+
+                {/* Điểm robot lúc quan sát (Viewpoint) */}
+                {observationPx && (
+                  <>
+                    <Circle
+                      cx={observationPx.x}
+                      cy={observationPx.y}
+                      r={markerR * 1.5}
+                      fill="rgba(217, 119, 6, 0.22)"
+                    />
+                    <Circle
+                      cx={observationPx.x}
+                      cy={observationPx.y}
+                      r={markerR * 0.95}
+                      fill="#D97706"
+                      stroke="#FFFFFF"
+                      strokeWidth={Math.max(1.0, viewWidth / 190)}
+                    />
+                    <Rect
+                      x={observationPx.x - obsPillW / 2}
+                      y={observationPx.y - markerR - pillH - 2}
+                      width={obsPillW}
+                      height={pillH}
+                      rx={pillH / 2}
+                      fill="rgba(180, 83, 9, 0.92)"
+                      stroke="#FDE68A"
+                      strokeWidth={0.5}
+                    />
+                    <SvgText
+                      x={observationPx.x}
+                      y={observationPx.y - markerR - pillH * 0.5 + labelFont * 0.34 - 2}
+                      textAnchor="middle"
+                      fontSize={labelFont}
+                      fontWeight="800"
+                      fill="#FFFFFF"
+                    >
+                      {obsText}
+                    </SvgText>
+                  </>
+                )}
+
+                {/* Ghim người nghi té ngã (RGB-D) */}
+                {patientPx && (
+                  <>
+                    <Circle
+                      cx={patientPx.x}
+                      cy={patientPx.y}
+                      r={markerR * 1.85}
+                      fill="rgba(220, 38, 38, 0.24)"
+                    />
+                    <Circle
+                      cx={patientPx.x}
+                      cy={patientPx.y}
+                      r={markerR * 1.1}
+                      fill="#DC2626"
+                      stroke="#FFFFFF"
+                      strokeWidth={Math.max(1.1, viewWidth / 180)}
+                    />
+                    <Circle
+                      cx={patientPx.x}
+                      cy={patientPx.y}
+                      r={markerR * 0.38}
+                      fill="#FFFFFF"
+                    />
+                    <Rect
+                      x={patientPx.x - patientPillW / 2}
+                      y={patientPx.y + markerR * 1.35 + 1.5}
+                      width={patientPillW}
+                      height={pillH}
+                      rx={pillH / 2}
+                      fill="rgba(153, 27, 27, 0.94)"
+                      stroke="#FECACA"
+                      strokeWidth={0.5}
+                    />
+                    <SvgText
+                      x={patientPx.x}
+                      y={patientPx.y + markerR * 1.35 + pillH * 0.5 + labelFont * 0.34 + 1.5}
+                      textAnchor="middle"
+                      fontSize={labelFont}
+                      fontWeight="800"
+                      fill="#FFFFFF"
+                    >
+                      {patientText}
+                    </SvgText>
+                  </>
+                )}
+
+                {/* Điểm đích chung nếu không có riêng ghim người bệnh */}
+                {destPx && (
+                  <>
+                    <Circle
+                      cx={destPx.x}
+                      cy={destPx.y}
+                      r={markerR * 1.85}
+                      fill={isViewpointOnlyBasis ? 'rgba(217, 119, 6, 0.24)' : 'rgba(220, 38, 38, 0.24)'}
+                    />
+                    <Circle
+                      cx={destPx.x}
+                      cy={destPx.y}
+                      r={markerR * 1.1}
+                      fill={isViewpointOnlyBasis ? '#D97706' : '#DC2626'}
+                      stroke="#FFFFFF"
+                      strokeWidth={Math.max(1.1, viewWidth / 180)}
+                    />
+                    <Circle
+                      cx={destPx.x}
+                      cy={destPx.y}
+                      r={markerR * 0.38}
+                      fill="#FFFFFF"
+                    />
+                    <Rect
+                      x={destPx.x - destPillW / 2}
+                      y={destPx.y + markerR * 1.35 + 1.5}
+                      width={destPillW}
+                      height={pillH}
+                      rx={pillH / 2}
+                      fill={isViewpointOnlyBasis ? 'rgba(180, 83, 9, 0.94)' : 'rgba(153, 27, 27, 0.94)'}
+                      stroke={isViewpointOnlyBasis ? '#FDE68A' : '#FECACA'}
+                      strokeWidth={0.5}
+                    />
+                    <SvgText
+                      x={destPx.x}
+                      y={destPx.y + markerR * 1.35 + pillH * 0.5 + labelFont * 0.34 + 1.5}
+                      textAnchor="middle"
+                      fontSize={labelFont}
+                      fontWeight="800"
+                      fill="#FFFFFF"
+                    >
+                      {destText}
+                    </SvgText>
+                  </>
+                )}
               </G>
             );
           })()}
@@ -1153,18 +1391,33 @@ export const BackendHospitalMap: React.FC<BackendHospitalMapProps> = ({
           </View>
           {validSosRoute && (
             <>
-              <View style={styles.legendItem}>
-                <View style={[styles.legendDot, { backgroundColor: '#EA580C' }]} />
-                <Text style={styles.legendLabel}>Tuyến đi bộ SOS</Text>
-              </View>
-              <View style={styles.legendItem}>
-                <View style={[styles.legendDot, { backgroundColor: '#059669' }]} />
-                <Text style={styles.legendLabel}>Phòng trực SOS</Text>
-              </View>
-              <View style={styles.legendItem}>
-                <View style={[styles.legendDot, { backgroundColor: '#DC2626' }]} />
-                <Text style={styles.legendLabel}>Vị trí SOS</Text>
-              </View>
+              {validSosRoute.points.length >= 2 && (
+                <View style={styles.legendItem}>
+                  <View style={[styles.legendDot, { backgroundColor: '#EA580C' }]} />
+                  <Text style={styles.legendLabel}>Tuyến đi bộ SOS</Text>
+                </View>
+              )}
+              {!validSosRoute.isPreviewOnly && validSosRoute.origin && (
+                <View style={styles.legendItem}>
+                  <View style={[styles.legendDot, { backgroundColor: '#059669' }]} />
+                  <Text style={styles.legendLabel}>Phòng trực SOS</Text>
+                </View>
+              )}
+              {validSosRoute.robotObservationLocation && (
+                <View style={styles.legendItem}>
+                  <View style={[styles.legendDot, { backgroundColor: '#D97706' }]} />
+                  <Text style={styles.legendLabel}>Robot lúc quan sát</Text>
+                </View>
+              )}
+              {(validSosRoute.patientLocation ||
+                String(validSosRoute.destinationBasis || '').toUpperCase() !== 'ROBOT_VIEWPOINT') && (
+                <View style={styles.legendItem}>
+                  <View style={[styles.legendDot, { backgroundColor: '#DC2626' }]} />
+                  <Text style={styles.legendLabel}>
+                    {validSosRoute.patientLocation ? 'Vị trí người té ngã' : 'Vị trí SOS'}
+                  </Text>
+                </View>
+              )}
             </>
           )}
           <View style={styles.legendItem}>

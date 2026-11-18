@@ -52,6 +52,7 @@ import { BackendRobotMonitorModal } from '../../components/map/BackendRobotMonit
 import {
   defaultReasonForRouteStatus,
   evaluateSosRouteAgainstMap,
+  formatDestinationBasisLabel,
   formatDistanceFromCm,
   parseSosResponseRoute,
   resolveActiveMapAssetHash,
@@ -626,22 +627,33 @@ export const MapScreen: React.FC = () => {
     setSosRouteState({ kind: 'LOADING', incidentId });
 
     try {
-      const response = await incidentApi.getSosResponseRoute(incidentId);
+      let response;
+      try {
+        response = await incidentApi.getSosResponseRoute(incidentId);
+      } catch (routeErr: any) {
+        if (routeErr?.status === 422) {
+          response = await incidentApi.getIncidentLocation(incidentId);
+        } else {
+          throw routeErr;
+        }
+      }
       if (!isStillValid()) return;
 
       const parsed = parseSosResponseRoute(incidentId, response);
-      if (!parsed.route) {
+      const effectiveRoute = parsed.route || parsed.fallbackLocations || null;
+      if (!effectiveRoute) {
         setSosRouteState({
           kind: 'UNAVAILABLE',
           incidentId,
           rawStatus: parsed.status,
           reason: parsed.reason || defaultReasonForRouteStatus(parsed.status),
           mapId: parsed.mapId ?? null,
+          fallbackLocations: null,
         });
         return;
       }
 
-      const targetMapId = parsed.route.mapId || activeMapRef.current?.mapId || '';
+      const targetMapId = effectiveRoute.mapId || activeMapRef.current?.mapId || '';
       let targetMap: MapResponse | null =
         (targetMapId
           ? availableMapsRef.current.find((m) => m.mapId === targetMapId) ||
@@ -667,6 +679,7 @@ export const MapScreen: React.FC = () => {
           rawStatus: 'MAP_NOT_FOUND',
           reason: 'Không tìm thấy bản đồ tương ứng với tuyến SOS trên máy chủ.',
           mapId: targetMapId || null,
+          fallbackLocations: null,
         });
         return;
       }
@@ -689,7 +702,7 @@ export const MapScreen: React.FC = () => {
         candidatePres = pres;
       }
 
-      const expectedHash = (parsed.route.mapAssetHash || '').trim();
+      const expectedHash = (effectiveRoute.mapAssetHash || '').trim();
       const actualHash = resolveActiveMapAssetHash(targetMap, candidatePres);
 
       if (expectedHash && expectedHash !== actualHash) {
@@ -727,6 +740,18 @@ export const MapScreen: React.FC = () => {
         setActiveMap(targetMap);
         setMapImageMetadata(candidateMeta);
         setMapPresentation(candidatePres);
+      }
+
+      if (!parsed.route) {
+        setSosRouteState({
+          kind: 'UNAVAILABLE',
+          incidentId,
+          rawStatus: parsed.status,
+          reason: parsed.reason || defaultReasonForRouteStatus(parsed.status),
+          mapId: parsed.mapId ?? null,
+          fallbackLocations: parsed.fallbackLocations || null,
+        });
+        return;
       }
 
       setSosRouteState({
@@ -955,13 +980,19 @@ export const MapScreen: React.FC = () => {
     || jobs.find((job) => job.status === 'QUEUED')
     || null;
   const activeMapResolvedHash = resolveActiveMapAssetHash(activeMap, mapPresentation);
-  const renderableSosRoute =
-    sosRouteState.kind === 'AVAILABLE' &&
-    activeMap &&
-    (!sosRouteState.route.mapId || sosRouteState.route.mapId === activeMap.mapId) &&
-    (!sosRouteState.route.mapAssetHash ||
-      sosRouteState.route.mapAssetHash === activeMapResolvedHash)
+  const candidateSosRoute =
+    sosRouteState.kind === 'AVAILABLE'
       ? sosRouteState.route
+      : sosRouteState.kind === 'UNAVAILABLE'
+      ? sosRouteState.fallbackLocations || null
+      : null;
+  const renderableSosRoute =
+    candidateSosRoute &&
+    activeMap &&
+    (!candidateSosRoute.mapId || candidateSosRoute.mapId === activeMap.mapId) &&
+    (!candidateSosRoute.mapAssetHash ||
+      candidateSosRoute.mapAssetHash === activeMapResolvedHash)
+      ? candidateSosRoute
       : null;
 
   return (
@@ -1120,21 +1151,63 @@ export const MapScreen: React.FC = () => {
               {sosRouteState.kind === 'LOADING' ? (
                 <View style={styles.sosRouteLoadingRow}>
                   <ActivityIndicator size="small" color="#EA580C" />
-                  <Text style={styles.sosRouteTitle}>Đang tải tuyến đi bộ đến SOS...</Text>
+                  <Text style={styles.sosRouteTitle}>Đang tải vị trí & tuyến đi bộ SOS...</Text>
                 </View>
               ) : sosRouteState.kind === 'AVAILABLE' ? (
                 <>
                   <View style={styles.sosRouteHeaderRow}>
                     <Text style={styles.sosRouteTitle}>
-                      🆘 Tuyến đi bộ hỗ trợ SOS · {formatDistanceFromCm(sosRouteState.route.distanceCm)}
+                      {sosRouteState.route.isPreviewOnly
+                        ? '📍 Vị trí nghi té ngã đã ghi nhận (Chưa xác nhận)'
+                        : `🆘 Tuyến đi bộ hỗ trợ SOS · ${formatDistanceFromCm(sosRouteState.route.distanceCm)}`}
                     </Text>
                     <TouchableOpacity onPress={handleCloseSosRoute}>
                       <X size={16} color="#64748B" />
                     </TouchableOpacity>
                   </View>
-                  <Text style={styles.sosRouteMeta}>
-                    Từ: {sosRouteState.route.origin.label} → Đến: {sosRouteState.route.destination.label}
-                  </Text>
+                  {!sosRouteState.route.isPreviewOnly && sosRouteState.route.origin ? (
+                    <Text style={styles.sosRouteMeta}>
+                      Từ: {sosRouteState.route.origin.label} → Đến: {sosRouteState.route.destination.label}
+                    </Text>
+                  ) : null}
+                  {(sosRouteState.route.destinationBasis ||
+                    typeof sosRouteState.route.cameraRangeM === 'number' ||
+                    sosRouteState.route.destinationCapturedAt) && (
+                    <Text style={styles.sosRouteMeta}>
+                      Cơ sở chọn đích: {formatDestinationBasisLabel(sosRouteState.route.destinationBasis)}
+                      {typeof sosRouteState.route.cameraRangeM === 'number'
+                        ? ` · Độ sâu: ${sosRouteState.route.cameraRangeM.toFixed(2)} m`
+                        : ''}
+                      {sosRouteState.route.destinationCapturedAt &&
+                      !Number.isNaN(new Date(sosRouteState.route.destinationCapturedAt).getTime())
+                        ? ` · Lúc ${new Date(
+                            sosRouteState.route.destinationCapturedAt
+                          ).toLocaleTimeString('vi-VN', {
+                            hour: '2-digit',
+                            minute: '2-digit',
+                            second: '2-digit',
+                          })}`
+                        : ''}
+                    </Text>
+                  )}
+                  {sosRouteState.route.robotApproach ? (
+                    <Text style={styles.sosRouteSubHint}>
+                      Điểm tiếp cận đề xuất:{' '}
+                      {sosRouteState.route.robotApproach.endpointName ||
+                        sosRouteState.route.robotApproach.endpointCode ||
+                        'Điểm gần bệnh nhân'}
+                      {typeof sosRouteState.route.robotApproach.distanceToPatientCm === 'number'
+                        ? ` (cách ~${(
+                            sosRouteState.route.robotApproach.distanceToPatientCm / 100
+                          ).toFixed(2)} m)`
+                        : ''}
+                    </Text>
+                  ) : null}
+                  {sosRouteState.route.isPreviewOnly ? (
+                    <Text style={styles.sosRouteSubHint}>
+                      Hãy mở camera robot và bấm &quot;Xác nhận sự cố&quot; khi đang xem để BE tính đường đi bộ từ phòng trực SOS.
+                    </Text>
+                  ) : null}
                   {activeMap && sosRouteState.route.mapId && sosRouteState.route.mapId !== activeMap.mapId ? (
                     <Text style={styles.sosRouteWarnNote}>
                       Bạn đang xem bản đồ khác. Bấm Tải lại để quay về bản đồ chứa sự cố SOS.
@@ -1163,6 +1236,8 @@ export const MapScreen: React.FC = () => {
                         ? 'Lỗi tải tuyến đường SOS'
                         : sosRouteState.kind === 'HASH_MISMATCH'
                         ? 'Phiên bản ảnh bản đồ không khớp'
+                        : sosRouteState.fallbackLocations
+                        ? `Đã ghi nhận vị trí · Chưa có đường đi (${sosRouteState.rawStatus})`
                         : `Chưa có tuyến đi bộ (${sosRouteState.rawStatus})`}
                     </Text>
                     <TouchableOpacity onPress={handleCloseSosRoute}>
@@ -1174,8 +1249,17 @@ export const MapScreen: React.FC = () => {
                       ? sosRouteState.message
                       : sosRouteState.reason}
                   </Text>
+                  {sosRouteState.kind === 'UNAVAILABLE' && sosRouteState.fallbackLocations ? (
+                    <Text style={styles.sosRouteMeta}>
+                      Cơ sở vị trí:{' '}
+                      {formatDestinationBasisLabel(sosRouteState.fallbackLocations.destinationBasis)}
+                      {typeof sosRouteState.fallbackLocations.cameraRangeM === 'number'
+                        ? ` · Độ sâu: ${sosRouteState.fallbackLocations.cameraRangeM.toFixed(2)} m`
+                        : ''}
+                    </Text>
+                  ) : null}
                   <Text style={styles.sosRouteSubHint}>
-                    Sự cố vẫn giữ nguyên trạng thái Đang xử lý (IN_PROGRESS). Không tự vẽ đường thẳng thay thế.
+                    Sự cố vẫn giữ nguyên trạng thái đã ghi nhận. Không tự vẽ đường thẳng thay thế.
                   </Text>
                   <View style={styles.sosRouteActions}>
                     <TouchableOpacity

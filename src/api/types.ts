@@ -354,7 +354,16 @@ export interface SosResponseRouteEndpoint extends SosResponseRoutePoint {
   kind?: string;
 }
 
+export interface SosRobotApproach {
+  endpointId?: string;
+  endpointCode?: string;
+  endpointName?: string;
+  position?: SosResponseRoutePoint | null;
+  distanceToPatientCm?: number | null;
+}
+
 export type SosResponseRouteStatus =
+  | 'PREVIEW'
   | 'AVAILABLE'
   | 'OK'
   | 'READY'
@@ -380,6 +389,18 @@ export interface SosResponseRouteResponse {
   destination?: SosResponseRouteEndpoint | null;
   points?: SosResponseRoutePoint[] | null;
   distanceCm?: number | null;
+  destinationBasis?:
+    | 'PATIENT_RGBD'
+    | 'PATIENT_RGBD_NEARBY_WALKABLE'
+    | 'ROBOT_VIEWPOINT'
+    | 'INCIDENT_POSITION'
+    | string
+    | null;
+  destinationCapturedAt?: string | null;
+  patientLocation?: SosResponseRoutePoint | null;
+  robotObservationLocation?: SosResponseRoutePoint | null;
+  cameraRangeM?: number | null;
+  robotApproach?: SosRobotApproach | null;
 }
 
 export interface ResolutionPayload {

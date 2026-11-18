@@ -61,9 +61,14 @@ export const incidentApi = {
     return apiClient.post<IncidentResponse>(ENDPOINTS.INCIDENTS.START(id));
   },
 
-  // 4b. Xác nhận SOS thật sau cuộc gọi ASSIST (Confirm -> IN_PROGRESS)
+  // 4b. Xác nhận SOS thật / té ngã khi đang xem camera (Confirm -> IN_PROGRESS)
   async confirmIncident(id: string): Promise<IncidentResponse> {
     return apiClient.post<IncidentResponse>(ENDPOINTS.INCIDENTS.CONFIRM(id));
+  },
+
+  // 4b2. Xem trước vị trí đã lưu của sự cố nghi té ngã (RGB-D patient / robot viewpoint)
+  async getIncidentLocation(id: string): Promise<SosResponseRouteResponse> {
+    return apiClient.get<SosResponseRouteResponse>(ENDPOINTS.INCIDENTS.LOCATION(id));
   },
 
   // 4c. Lấy tuyến đi bộ từ phòng trực SOS đến vị trí sự cố (A* trên lưới BE, đơn vị cm)

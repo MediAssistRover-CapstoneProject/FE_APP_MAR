@@ -1161,3 +1161,173 @@ test('SOS completion works for both BUTTON_SOS and AUTO_FALL/GESTURE_SOS (/confi
   assert.equal(alreadyRes.outcomeKind, 'ALREADY_CLOSED');
   assert.deepEqual(alreadyCalls, []);
 });
+
+test('Fall review fixes: /location API, MONITOR acceptSession, active-camera confirm/false-alarm & error unlock, and 403/MEDIA_FALL_REVIEW_NOT_ACTIVE', async () => {
+  const endpointsMod = loadTsModule('src/api/endpoints.ts');
+  assert.equal(endpointsMod.ENDPOINTS.INCIDENTS.LOCATION('inc-99'), '/emergency-incidents/inc-99/location');
+
+  const getCalls = [];
+  const incidentApiMod = loadTsModule('src/api/modules/incident.api.ts', {
+    '../client': {
+      apiClient: {
+        get: async (url) => {
+          getCalls.push(url);
+          return { status: 'PREVIEW', mapId: 'map-1' };
+        },
+        post: async () => ({}),
+      },
+    },
+    '../endpoints': endpointsMod,
+  });
+  const locRes = await incidentApiMod.incidentApi.getIncidentLocation('inc-99');
+  assert.deepEqual(getCalls, ['/emergency-incidents/inc-99/location']);
+  assert.equal(locRes.status, 'PREVIEW');
+
+  // 403 classification explains SOS routing / assigned responder mismatch
+  const unassigned403 = sosDecision.classifyCameraMonitorOpenError(
+    { status: 403, message: 'Bạn không có quyền thực hiện thao tác này' },
+    [],
+    'robot-0e3f1083',
+    {
+      incidentId: 'inc-fall-403',
+      sosRoutingStatus: 'ESCALATED',
+      sosResponderAccountId: 'staff-assigned-2',
+    }
+  );
+  assert.match(unassigned403, /ESCALATED|phân công/i);
+
+  const otherResponder403 = sosDecision.classifyCameraMonitorOpenError(
+    { status: 403, message: 'Bạn không có quyền thực hiện thao tác này' },
+    [{ sessionId: 'sess-ring', robotId: 'robot-0e3f1083', mode: 'MONITOR', state: 'RINGING' }],
+    'robot-0e3f1083',
+    {
+      incidentId: 'inc-fall-403-2',
+      sosRoutingStatus: 'ASSIGNED',
+      sosResponderAccountId: 'staff-assigned-2',
+    }
+  );
+  assert.match(otherResponder403, /nhân viên trực SOS được phân công|ADMIN/);
+
+  // MEDIA_FALL_REVIEW_NOT_ACTIVE classification works across 409 & 422
+  for (const status of [409, 422]) {
+    const info = sosDecision.classifySosDecisionError({ status, message: 'MEDIA_FALL_REVIEW_NOT_ACTIVE' });
+    assert.equal(info.code, 'MEDIA_FALL_REVIEW_NOT_ACTIVE');
+    assert.equal(info.kind, 'VALIDATION');
+    assert.equal(info.shouldRefreshIncident, true);
+    assert.match(info.message, /Xem camera robot/);
+  }
+
+  // UI & screen wiring checks
+  const alertSrc = readWorkspaceFile('src/screens/main/AlertScreen.tsx');
+  const callSrc = readWorkspaceFile('src/components/media/MediaCallModal.tsx');
+  const fallSrc = readWorkspaceFile('src/components/sos/FallDetectionModal.tsx');
+
+  assert.equal(alertSrc.includes('acceptSession('), true);
+  assert.equal(alertSrc.includes('dataJson.media_session_id'), true);
+  assert.equal(alertSrc.includes('fetchIncidentLocationSummary'), true);
+  assert.equal(alertSrc.includes('onConfirmWhileViewing'), true);
+  assert.equal(alertSrc.includes('onFalseAlarmWhileViewing'), true);
+  assert.equal(alertSrc.includes('onOpenMapRouteWhileViewing'), true);
+  assert.equal(alertSrc.includes('MEDIA_FALL_REVIEW_NOT_ACTIVE'), true);
+
+  assert.equal(callSrc.includes('handleDismissOnly'), true);
+  assert.equal(callSrc.includes('Xác nhận sự cố'), true);
+  assert.equal(callSrc.includes('Báo nhầm'), true);
+  assert.equal(callSrc.includes('Xem đường đến SOS'), true);
+
+  assert.equal(fallSrc.includes('locationSummary'), true);
+  assert.equal(fallSrc.includes('Xem vị trí trên bản đồ'), true);
+  assert.equal(fallSrc.includes('0.18'), false);
+});
+
+test('Fall /location PREVIEW, PATIENT_RGBD vs ROBOT_VIEWPOINT, cameraRangeM, robotApproach, fallbackLocations on UNAVAILABLE, and no (0,0) coercion', () => {
+  const basisPatient = sosRoute.formatDestinationBasisLabel('PATIENT_RGBD');
+  const basisRobot = sosRoute.formatDestinationBasisLabel('ROBOT_VIEWPOINT');
+  assert.ok(basisPatient.length > 0 && basisRobot.length > 0);
+  assert.notEqual(basisPatient, basisRobot);
+
+  const previewResponse = {
+    status: 'PREVIEW',
+    mapId: 'map-1',
+    mapAssetHash: 'hash-v2',
+    unit: 'cm',
+    origin: null,
+    destination: { xCm: 250, yCm: 180, label: 'Bệnh nhân té ngã' },
+    patientLocation: { xCm: 250, yCm: 180, label: 'Bệnh nhân té ngã' },
+    robotObservationLocation: { xCm: 100, yCm: 100, label: 'Vị trí Robot quan sát' },
+    robotApproach: {
+      endpointName: 'Điểm robot tiếp cận',
+      position: { xCm: 190, yCm: 150 },
+      distanceToPatientCm: 65,
+    },
+    cameraRangeM: 1.85,
+    destinationBasis: 'PATIENT_RGBD',
+    destinationCapturedAt: '2026-11-18T10:00:00Z',
+    points: [],
+  };
+
+  const summary = sosRoute.formatFallLocationSummary(previewResponse);
+  assert.ok(summary && summary.includes('1.85'));
+  assert.equal(sosRoute.formatFallLocationSummary(null), null);
+
+  const parsedPreview = sosRoute.parseSosResponseRoute('inc-prev-1', previewResponse);
+  assert.equal(parsedPreview.status, 'PREVIEW');
+  assert.ok(parsedPreview.route);
+  assert.equal(parsedPreview.route.isPreviewOnly, true);
+  assert.equal(parsedPreview.route.origin, null);
+  assert.equal(parsedPreview.route.destination.x, 2.5);
+  assert.equal(parsedPreview.route.destination.y, 1.8);
+  assert.equal(parsedPreview.route.patientLocation.x, 2.5);
+  assert.equal(parsedPreview.route.robotObservationLocation.x, 1);
+  assert.equal(parsedPreview.route.robotApproach.position.x, 1.9);
+  assert.equal(parsedPreview.route.robotApproach.position.y, 1.5);
+  assert.equal(parsedPreview.route.robotApproach.distanceToPatientCm, 65);
+  assert.equal(parsedPreview.route.cameraRangeM, 1.85);
+  assert.equal(parsedPreview.route.destinationBasis, 'PATIENT_RGBD');
+
+  const evaluatedPreview = sosRoute.evaluateSosRouteAgainstMap({
+    incidentId: 'inc-prev-1',
+    response: previewResponse,
+    activeMap: { mapId: 'map-1', assetHash: 'hash-v2' },
+  });
+  assert.ok(evaluatedPreview.kind === 'PREVIEW' || evaluatedPreview.kind === 'AVAILABLE', `Unexpected kind: ${evaluatedPreview.kind}`);
+  assert.ok(evaluatedPreview.route);
+  assert.equal(evaluatedPreview.route.isPreviewOnly, true);
+  assert.equal(evaluatedPreview.route.origin, null);
+
+  // UNAVAILABLE (NO_PATH) still preserves valid fallbackLocations when map/hash match
+  const noPathWithFallLocations = {
+    status: 'NO_PATH',
+    reason: 'Chưa có tuyến A* tới hành lang',
+    mapId: 'map-1',
+    mapAssetHash: 'hash-v2',
+    unit: 'cm',
+    destinationBasis: 'ROBOT_VIEWPOINT',
+    patientLocation: null,
+    robotObservationLocation: { xCm: 320, yCm: 240, label: 'Robot tuần tra' },
+    points: [],
+  };
+  const evaluatedNoPath = sosRoute.evaluateSosRouteAgainstMap({
+    incidentId: 'inc-no-path-fall',
+    response: noPathWithFallLocations,
+    activeMap: { mapId: 'map-1', assetHash: 'hash-v2' },
+  });
+  assert.equal(evaluatedNoPath.kind, 'UNAVAILABLE');
+  assert.ok(evaluatedNoPath.fallbackLocations);
+  assert.equal(evaluatedNoPath.fallbackLocations.patientLocation, null);
+  assert.equal(evaluatedNoPath.fallbackLocations.robotObservationLocation.x, 3.2);
+  assert.equal(evaluatedNoPath.fallbackLocations.robotObservationLocation.y, 2.4);
+
+  // Missing/null coordinates must NEVER coerce into (0, 0)
+  const missingCoordsParsed = sosRoute.parseSosResponseRoute('inc-null-coords', {
+    status: 'NO_COORDINATES',
+    mapId: 'map-1',
+    origin: { xCm: null, yCm: null },
+    destination: { xCm: undefined, yCm: 100 },
+    patientLocation: { xCm: null, yCm: 50 },
+    robotObservationLocation: { xCm: undefined, yCm: undefined },
+    points: [{ xCm: null, yCm: 0 }],
+  });
+  assert.equal(missingCoordsParsed.route ?? null, null);
+  assert.equal(missingCoordsParsed.fallbackLocations ?? null, null);
+});

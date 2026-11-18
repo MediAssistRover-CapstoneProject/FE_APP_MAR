@@ -26,9 +26,12 @@ import {
 import {
   ArrowLeft,
   Camera,
+  CheckCircle2,
+  MapPin,
   Mic,
   MicOff,
   Monitor,
+  Navigation,
   Phone,
   PhoneOff,
   RefreshCw,
@@ -37,6 +40,7 @@ import {
   VolumeX,
   Wifi,
   WifiOff,
+  XCircle,
 } from 'lucide-react-native';
 import WebView from 'react-native-webview';
 import type { WebViewMessageEvent } from 'react-native-webview';
@@ -88,6 +92,22 @@ interface MediaCallModalProps {
   isRetrying?: boolean;
   /** Nhãn tùy chỉnh cho nút kết thúc ở thanh điều khiển */
   endButtonLabel?: string;
+  /** Trạng thái hiện tại của sự cố để hiển thị nút xác nhận ngay khi đang xem camera MONITOR */
+  incidentStatus?: string | null;
+  /** Tài khoản hiện tại có quyền xác nhận/báo nhầm hay không */
+  canConfirmIncident?: boolean;
+  /** Lý do nếu không có quyền xác nhận */
+  decisionPermissionReason?: string | null;
+  /** Đang gửi yêu cầu xác nhận/báo nhầm */
+  isSubmittingDecision?: boolean;
+  /** Tóm tắt vị trí đã lưu từ GET /emergency-incidents/{id}/location */
+  locationSummary?: string | null;
+  /** Xác nhận sự cố ngay trong lúc phiên MONITOR đang ACTIVE */
+  onConfirmWhileViewing?: () => Promise<void> | void;
+  /** Mở luồng Báo nhầm ngay từ màn hình camera MONITOR */
+  onFalseAlarmWhileViewing?: () => void;
+  /** Mở bản đồ tuyến đường đến SOS ngay sau khi xác nhận trên camera */
+  onOpenMapRouteWhileViewing?: () => void;
   /** Callback khi phiên kết thúc (đính kèm metadata đã khử lặp) */
   onSessionEnd?: (payload?: MediaSessionEndPayload) => void;
 }
@@ -663,6 +683,14 @@ export const MediaCallModal: React.FC<MediaCallModalProps> = ({
   onRetryCamera,
   isRetrying = false,
   endButtonLabel,
+  incidentStatus,
+  canConfirmIncident = false,
+  decisionPermissionReason,
+  isSubmittingDecision = false,
+  locationSummary,
+  onConfirmWhileViewing,
+  onFalseAlarmWhileViewing,
+  onOpenMapRouteWhileViewing,
   onSessionEnd,
 }) => {
   const webViewRef = useRef<any>(null);
@@ -825,6 +853,30 @@ export const MediaCallModal: React.FC<MediaCallModalProps> = ({
     sendCommand({ type: 'toggleAudio' });
   }, [sendCommand]);
 
+  const isConnected = callStatus === 'CONNECTED';
+  const isAssist = mode === 'ASSIST';
+  const isErrorState =
+    Boolean(externalError) ||
+    callStatus === 'ERROR' ||
+    callStatus === 'TIMEOUT' ||
+    callStatus === 'CAMERA_LOST' ||
+    callStatus === 'EXPIRED' ||
+    callStatus === 'FAILED';
+
+  const handleDismissOnly = useCallback(() => {
+    if (!isEndingRef.current && callStatus !== 'ENDED') {
+      onSessionEnd?.({
+        source: 'MODAL_CLOSE',
+        sessionId: (sessionId || existingSessionId) || undefined,
+        incidentId,
+        robotId,
+        uiStatus: callStatus,
+        error: externalError || errorMsg || undefined,
+      });
+    }
+    onClose();
+  }, [callStatus, sessionId, existingSessionId, incidentId, robotId, externalError, errorMsg, onSessionEnd, onClose]);
+
   const performEndCall = useCallback(async () => {
     if (isEndingRef.current) return;
     isEndingRef.current = true;
@@ -834,11 +886,13 @@ export const MediaCallModal: React.FC<MediaCallModalProps> = ({
 
     let backendSession: MediaSessionResponse | null = null;
     let endErrorMessage: string | null = null;
+    let endErrorStatus: number | undefined;
     if (targetSessionId) {
       try {
         backendSession = await mediaSessionApi.endSession(targetSessionId, endReason);
       } catch (err: any) {
         endErrorMessage = err?.message || null;
+        endErrorStatus = typeof err?.status === 'number' ? err.status : undefined;
         console.log('Error ending media session on server:', err);
         backendSession = await mediaSessionApi.getSession(targetSessionId).catch(() => null);
       }
@@ -847,6 +901,12 @@ export const MediaCallModal: React.FC<MediaCallModalProps> = ({
       const isConfirmedTerminal =
         srvState === 'ENDED' || srvState === 'EXPIRED' || srvState === 'FAILED';
       if (!isConfirmedTerminal) {
+        // Khi phiên chưa được /accept (403) hoặc màn hình đã vào trạng thái lỗi, cho phép đóng modal thoát ra ngay thay vì kẹt nút Kết thúc xem
+        if (isErrorState || endErrorStatus === 403 || endErrorStatus === 404) {
+          sendCommand({ type: 'endCall', reason: endReason });
+          handleDismissOnly();
+          return;
+        }
         isEndingRef.current = false;
         const label = mode === 'ASSIST' ? 'Kết thúc cuộc gọi' : 'Kết thúc xem';
         Alert.alert(
@@ -885,21 +945,18 @@ export const MediaCallModal: React.FC<MediaCallModalProps> = ({
       backendSession: null,
     });
     onClose();
-  }, [mode, sessionId, existingSessionId, incidentId, robotId, sendCommand, emitSessionEndOnce, onClose]);
-
-  const handleDismissOnly = useCallback(() => {
-    if (!isEndingRef.current && callStatus !== 'ENDED') {
-      onSessionEnd?.({
-        source: 'MODAL_CLOSE',
-        sessionId: (sessionId || existingSessionId) || undefined,
-        incidentId,
-        robotId,
-        uiStatus: callStatus,
-        error: externalError || errorMsg || undefined,
-      });
-    }
-    onClose();
-  }, [callStatus, sessionId, existingSessionId, incidentId, robotId, externalError, errorMsg, onSessionEnd, onClose]);
+  }, [
+    mode,
+    sessionId,
+    existingSessionId,
+    incidentId,
+    robotId,
+    isErrorState,
+    sendCommand,
+    emitSessionEndOnce,
+    handleDismissOnly,
+    onClose,
+  ]);
 
   const handleRetryCamera = useCallback(async () => {
     if (isRetrying) return;
@@ -912,12 +969,16 @@ export const MediaCallModal: React.FC<MediaCallModalProps> = ({
   }, [isRetrying, onRetryCamera]);
 
   const handleEndCall = useCallback(() => {
+    if (isErrorState) {
+      void performEndCall();
+      return;
+    }
     const isAssistMode = mode === 'ASSIST';
     Alert.alert(
       isAssistMode ? 'Kết thúc cuộc gọi' : 'Kết thúc xem camera',
       isAssistMode
         ? 'Bạn có chắc muốn kết thúc cuộc gọi đàm thoại với robot?'
-        : 'Bạn đã kiểm tra xong camera robot và muốn kết thúc xem để chọn Xác nhận sự cố hoặc Báo nhầm?',
+        : 'Bạn đã kiểm tra xong camera robot và muốn kết thúc xem?',
       [
         { text: 'Hủy', style: 'cancel' },
         {
@@ -929,7 +990,7 @@ export const MediaCallModal: React.FC<MediaCallModalProps> = ({
         },
       ]
     );
-  }, [mode, performEndCall]);
+  }, [mode, isErrorState, performEndCall]);
 
   const handleClose = useCallback(() => {
     if (callStatus === 'CONNECTED' || callStatus === 'ROOM_CONNECTED' || callStatus === 'CONNECTING') {
@@ -938,7 +999,7 @@ export const MediaCallModal: React.FC<MediaCallModalProps> = ({
         isAssistMode ? 'Đóng cửa sổ cuộc gọi' : 'Đóng cửa sổ xem camera',
         isAssistMode
           ? 'Nếu chỉ đóng cửa sổ mà chưa kết thúc phiên, cuộc gọi vẫn giữ trên máy chủ.'
-          : 'Đóng cửa sổ sẽ chưa xác nhận kết thúc xem. Hãy chọn "Kết thúc xem" khi bạn muốn chuyển sang xác nhận sự cố.',
+          : 'Đóng cửa sổ sẽ chưa kết thúc phiên xem camera trên máy chủ.',
         [
           { text: 'Ở lại', style: 'cancel' },
           {
@@ -975,15 +1036,6 @@ export const MediaCallModal: React.FC<MediaCallModalProps> = ({
     existingSessionId,
   });
 
-  const isConnected = callStatus === 'CONNECTED';
-  const isAssist = mode === 'ASSIST';
-  const isErrorState =
-    Boolean(externalError) ||
-    callStatus === 'ERROR' ||
-    callStatus === 'TIMEOUT' ||
-    callStatus === 'CAMERA_LOST' ||
-    callStatus === 'EXPIRED' ||
-    callStatus === 'FAILED';
   const displayErrorText =
     externalError ||
     errorMsg ||
@@ -1094,6 +1146,92 @@ export const MediaCallModal: React.FC<MediaCallModalProps> = ({
             </View>
           )}
         </View>
+
+        {/* Location summary bar from /location (MONITOR mode) */}
+        {!isAssist && locationSummary ? (
+          <View style={styles.locationBanner}>
+            <MapPin size={14} color="#38BDF8" />
+            <Text style={styles.locationBannerText} numberOfLines={2}>
+              {locationSummary}
+            </Text>
+          </View>
+        ) : null}
+
+        {/* Active-review verification bar while MONITOR session is active */}
+        {!isAssist && incidentId && (
+          <View style={styles.verifyBar}>
+            {incidentStatus === 'IN_PROGRESS' ? (
+              <View style={styles.verifyConfirmedRow}>
+                <View style={styles.verifyConfirmedTextWrap}>
+                  <CheckCircle2 size={16} color="#10B981" />
+                  <Text style={styles.verifyConfirmedText}>Đã xác nhận sự cố (IN_PROGRESS)</Text>
+                </View>
+                {onOpenMapRouteWhileViewing ? (
+                  <TouchableOpacity
+                    style={styles.verifyRouteBtn}
+                    onPress={onOpenMapRouteWhileViewing}
+                    activeOpacity={0.85}
+                  >
+                    <Navigation size={14} color="#fff" />
+                    <Text style={styles.verifyBtnText}>Xem đường đến SOS</Text>
+                  </TouchableOpacity>
+                ) : null}
+              </View>
+            ) : incidentStatus === 'RESOLVED' ||
+              incidentStatus === 'CLOSED' ||
+              incidentStatus === 'FALSE_ALARM' ? (
+              <Text style={styles.verifyHintText}>
+                Sự cố đã chuyển sang trạng thái {incidentStatus}.
+              </Text>
+            ) : canConfirmIncident ? (
+              <View style={styles.verifyActionContainer}>
+                {!isConnected && !isErrorState ? (
+                  <Text style={styles.verifyHintText}>
+                    Đang chờ hình ảnh trực tiếp từ camera để bật nút Xác nhận sự cố...
+                  </Text>
+                ) : null}
+                <View style={styles.verifyBtnRow}>
+                  <TouchableOpacity
+                    style={[
+                      styles.verifyConfirmBtn,
+                      (!isConnected || isSubmittingDecision || isErrorState) &&
+                        styles.verifyBtnDisabled,
+                    ]}
+                    disabled={!isConnected || isSubmittingDecision || isErrorState}
+                    onPress={() => {
+                      void onConfirmWhileViewing?.();
+                    }}
+                    activeOpacity={0.85}
+                  >
+                    {isSubmittingDecision ? (
+                      <ActivityIndicator size="small" color="#fff" />
+                    ) : (
+                      <>
+                        <CheckCircle2 size={16} color="#fff" />
+                        <Text style={styles.verifyBtnText}>Xác nhận sự cố</Text>
+                      </>
+                    )}
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={[
+                      styles.verifyFalseAlarmBtn,
+                      isSubmittingDecision && styles.verifyBtnDisabled,
+                    ]}
+                    disabled={isSubmittingDecision}
+                    onPress={() => onFalseAlarmWhileViewing?.()}
+                    activeOpacity={0.85}
+                  >
+                    <XCircle size={16} color="#FCA5A5" />
+                    <Text style={styles.verifyFalseAlarmText}>Báo nhầm</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            ) : decisionPermissionReason ? (
+              <Text style={styles.verifyHintText}>{decisionPermissionReason}</Text>
+            ) : null}
+          </View>
+        )}
 
         {/* Control bar */}
         <View style={styles.controlBar}>
@@ -1346,5 +1484,107 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 14,
     fontWeight: '700',
+  },
+  locationBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    backgroundColor: '#0F172A',
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(148, 163, 184, 0.2)',
+  },
+  locationBannerText: {
+    flex: 1,
+    color: '#E2E8F0',
+    fontSize: 12,
+    fontWeight: '600',
+    lineHeight: 16,
+  },
+  verifyBar: {
+    backgroundColor: '#172554',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(56, 189, 248, 0.25)',
+  },
+  verifyActionContainer: {
+    gap: 8,
+  },
+  verifyBtnRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  verifyConfirmBtn: {
+    flex: 1.35,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    height: 44,
+    borderRadius: 12,
+    backgroundColor: '#059669',
+    paddingHorizontal: 12,
+  },
+  verifyFalseAlarmBtn: {
+    flex: 0.9,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    height: 44,
+    borderRadius: 12,
+    backgroundColor: 'rgba(239, 68, 68, 0.18)',
+    borderWidth: 1,
+    borderColor: '#EF4444',
+    paddingHorizontal: 10,
+  },
+  verifyRouteBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    height: 38,
+    borderRadius: 10,
+    backgroundColor: '#0284C7',
+    paddingHorizontal: 12,
+  },
+  verifyBtnDisabled: {
+    opacity: 0.45,
+  },
+  verifyBtnText: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  verifyFalseAlarmText: {
+    color: '#FECACA',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  verifyConfirmedRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  verifyConfirmedTextWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    flex: 1,
+  },
+  verifyConfirmedText: {
+    color: '#A7F3D0',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  verifyHintText: {
+    color: '#CBD5E1',
+    fontSize: 12,
+    fontWeight: '600',
+    textAlign: 'center',
   },
 });

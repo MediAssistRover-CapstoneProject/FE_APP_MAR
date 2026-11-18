@@ -134,6 +134,7 @@ export interface SosConfirmationMeta {
 export interface SosDecisionErrorInfo {
   status?: number;
   kind: 'FORBIDDEN' | 'CONFLICT' | 'TIMEOUT' | 'VALIDATION' | 'UNKNOWN';
+  code?: string;
   message: string;
   shouldRefreshIncident: boolean;
 }
@@ -349,7 +350,8 @@ export function getMediaViewerPolicyForAlertKind(kind: EmergencyAlertKind): Medi
 export function classifyCameraMonitorOpenError(
   err: unknown,
   sessions?: MediaSessionResponse[] | null,
-  targetRobotId?: string | null
+  targetRobotId?: string | null,
+  incident?: Pick<IncidentResponse, 'sosRoutingStatus' | 'sosResponderAccountId'> | null
 ): string {
   const anyErr = err as { status?: number; message?: string } | null;
   const status = typeof anyErr?.status === 'number' ? anyErr.status : undefined;
@@ -379,6 +381,12 @@ export function classifyCameraMonitorOpenError(
     return 'Dịch vụ camera trực tiếp trên máy chủ đang tạm tắt hoặc gián đoạn. Vui lòng thử lại.';
   }
   if (status === 403 || upper.includes('ACCESS') || upper.includes('FORBIDDEN') || upper.includes('RESPONDER')) {
+    if (incident?.sosRoutingStatus && incident.sosRoutingStatus !== 'ASSIGNED') {
+      return `Sự cố chưa có nhân viên trực phòng SOS được phân công (${incident.sosRoutingStatus}). Vui lòng check-in ca trực tại phòng SOS hoặc dùng tài khoản ADMIN.`;
+    }
+    if (incident?.sosResponderAccountId) {
+      return 'Chỉ nhân viên trực SOS được phân công hoặc ADMIN mới có quyền mở camera xác minh sự cố này.';
+    }
     return raw || 'Tài khoản Staff hiện tại không có quyền mở camera chỉ xem cho sự cố này.';
   }
   return raw || 'Camera robot hiện chưa khả dụng. Vui lòng bấm Thử lại.';
@@ -800,6 +808,21 @@ export function classifySosDecisionError(err: unknown): SosDecisionErrorInfo {
   const status = typeof anyErr?.status === 'number' ? anyErr.status : undefined;
   const rawMessage = (anyErr?.message || '').trim();
   const lower = rawMessage.toLowerCase();
+  const upper = rawMessage.toUpperCase();
+  const errCodeUpper = String(anyErr?.code || '').toUpperCase();
+
+  if (
+    upper.includes('MEDIA_FALL_REVIEW_NOT_ACTIVE') ||
+    errCodeUpper === 'MEDIA_FALL_REVIEW_NOT_ACTIVE'
+  ) {
+    return {
+      status: status ?? 409,
+      kind: 'VALIDATION',
+      code: 'MEDIA_FALL_REVIEW_NOT_ACTIVE',
+      message: 'Cần mở "Xem camera robot" và bấm "Xác nhận sự cố" ngay khi camera đang hiển thị hình ảnh trực tiếp.',
+      shouldRefreshIncident: true,
+    };
+  }
 
   if (status === 403) {
     return {

@@ -52,6 +52,7 @@ interface FallDetectionModalProps {
   onRequestCompleteSos?: () => void;
   onRetryCloseSos?: () => void;
   onOpenMapRoute?: () => void;
+  locationSummary?: string | null;
   location?: string;
   robotName?: string;
 }
@@ -83,6 +84,7 @@ export const FallDetectionModal: React.FC<FallDetectionModalProps> = ({
   onRequestCompleteSos,
   onRetryCloseSos,
   onOpenMapRoute,
+  locationSummary,
   location = 'Chưa có vị trí từ Backend',
   robotName = 'Robot chưa xác định',
 }) => {
@@ -159,7 +161,7 @@ export const FallDetectionModal: React.FC<FallDetectionModalProps> = ({
     {
       id: 4,
       icon: '🛡️',
-      title: 'Staff cần bấm "Xem camera robot" -> "Kết thúc xem" trước khi Xác nhận sự cố hoặc Báo nhầm',
+      title: 'Staff cần bấm "Xem camera robot" rồi bấm "Xác nhận sự cố" hoặc "Báo nhầm" ngay khi camera đang hiển thị',
       time: eventTimeStr,
       statusDot: '#10B981',
     },
@@ -270,21 +272,37 @@ export const FallDetectionModal: React.FC<FallDetectionModalProps> = ({
             {/* AI Metrics Row */}
             <View style={styles.metricsRow}>
               <View style={styles.metricCol}>
-                <Text style={styles.metricLabel}>THUẬT TOÁN</Text>
-                <Text style={styles.metricVal}>{algorithmName}</Text>
+                <Text style={styles.metricLabel}>NGUỒN / THUẬT TOÁN</Text>
+                <Text style={styles.metricVal} numberOfLines={1}>
+                  {dataJson?.source || algorithmName}
+                </Text>
               </View>
               <View style={styles.metricDivider} />
               <View style={styles.metricCol}>
-                <Text style={styles.metricLabel}>CHÂN HIỂN THỊ</Text>
-                <Text style={styles.metricVal}>{metrics?.visible_legs ?? 2}</Text>
+                <Text style={styles.metricLabel}>PHÂN LOẠI</Text>
+                <Text style={styles.metricVal} numberOfLines={1}>
+                  {dataJson?.detection_kind || (metrics?.visible_legs ?? '--')}
+                </Text>
               </View>
               <View style={styles.metricDivider} />
               <View style={styles.metricCol}>
-                <Text style={styles.metricLabel}>SUPPORT RATIO</Text>
-                <Text style={styles.metricVal}>{metrics?.support_ratio ?? 0.18}</Text>
+                <Text style={styles.metricLabel}>VỊ TRÍ RGB-D</Text>
+                <Text style={styles.metricVal} numberOfLines={1}>
+                  {dataJson?.patient_location_status ||
+                    dataJson?.location_basis ||
+                    (metrics?.support_ratio ?? '--')}
+                </Text>
               </View>
             </View>
           </View>
+
+          {locationSummary ? (
+            <View style={{ backgroundColor: '#F0F9FF', borderRadius: 12, padding: 12, borderWidth: 1, borderColor: '#BAE6FD', marginBottom: 12 }}>
+              <Text style={{ fontSize: 12, color: '#0369A1', fontWeight: '700' }}>
+                📍 {locationSummary}
+              </Text>
+            </View>
+          ) : null}
 
           {/* ===== BỘ NÚT ĐIỀU HÀNH XỬ LÝ SỰ CỐ TỰ ĐỘNG (CHỈ XEM CAMERA -> XÁC NHẬN -> KẾT THÚC -> ĐÓNG) ===== */}
           <View style={styles.actionButtonGroup}>
@@ -390,50 +408,68 @@ export const FallDetectionModal: React.FC<FallDetectionModalProps> = ({
                   </Text>
                 )}
               </>
-            ) : completedCameraView ? (
-              decisionPermission?.allowed ? (
-                <View style={styles.subActionRow}>
+            ) : (
+              <>
+                {onOpenMapRoute && (
                   <TouchableOpacity
-                    style={[styles.acknowledgeBtn, { flex: 1.25 }]}
-                    onPress={() => onConfirmIncident?.()}
-                    disabled={isSubmittingDecision}
-                    activeOpacity={0.85}
-                  >
-                    {isSubmittingDecision ? (
-                      <ActivityIndicator size="small" color="#FFFFFF" />
-                    ) : (
-                      <>
-                        <CheckCircle2 size={16} color="#FFFFFF" />
-                        <Text style={styles.acknowledgeBtnText}>Xác nhận sự cố</Text>
-                      </>
-                    )}
-                  </TouchableOpacity>
-
-                  <TouchableOpacity
-                    style={[styles.falseAlarmBtn, { flex: 0.9 }]}
+                    style={[styles.acknowledgeBtn, { backgroundColor: '#0369A1' }]}
                     onPress={() => {
                       onClose();
-                      onRequestFalseAlarm?.();
+                      onOpenMapRoute();
                     }}
-                    disabled={isSubmittingDecision}
-                    activeOpacity={0.8}
+                    activeOpacity={0.85}
                   >
-                    <XCircle size={16} color={Colors.danger} />
-                    <Text style={styles.falseAlarmBtnText}>Báo nhầm</Text>
+                    <Navigation size={18} color="#FFFFFF" />
+                    <Text style={styles.acknowledgeBtnText}>Xem vị trí trên bản đồ</Text>
                   </TouchableOpacity>
-                </View>
-              ) : (
-                <Text style={{ fontSize: 12, color: Colors.textSecondary, fontWeight: '600' }}>
-                  {decisionPermission?.reason ||
-                    'Chỉ ADMIN hoặc nhân viên được phân công xử lý SOS mới có quyền xác nhận sự cố.'}
-                </Text>
-              )
-            ) : (
-              <View style={{ backgroundColor: '#EFF6FF', borderRadius: 12, padding: 12, borderWidth: 1, borderColor: '#BFDBFE' }}>
-                <Text style={{ fontSize: 12, color: '#1E3A8A', fontWeight: '600', lineHeight: 18 }}>
-                  Bấm &quot;Xem camera robot&quot; (chỉ nhận hình ảnh, không có âm thanh), sau đó bấm &quot;Kết thúc xem&quot; để mở lựa chọn Xác nhận sự cố hoặc Báo nhầm.
-                </Text>
-              </View>
+                )}
+
+                {decisionPermission?.allowed ? (
+                  <View style={styles.subActionRow}>
+                    <TouchableOpacity
+                      style={[styles.acknowledgeBtn, { flex: 1.25 }]}
+                      onPress={() => onConfirmIncident?.()}
+                      disabled={isSubmittingDecision}
+                      activeOpacity={0.85}
+                    >
+                      {isSubmittingDecision ? (
+                        <ActivityIndicator size="small" color="#FFFFFF" />
+                      ) : (
+                        <>
+                          <CheckCircle2 size={16} color="#FFFFFF" />
+                          <Text style={styles.acknowledgeBtnText}>Xác nhận sự cố</Text>
+                        </>
+                      )}
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={[styles.falseAlarmBtn, { flex: 0.9 }]}
+                      onPress={() => {
+                        onClose();
+                        onRequestFalseAlarm?.();
+                      }}
+                      disabled={isSubmittingDecision}
+                      activeOpacity={0.8}
+                    >
+                      <XCircle size={16} color={Colors.danger} />
+                      <Text style={styles.falseAlarmBtnText}>Báo nhầm</Text>
+                    </TouchableOpacity>
+                  </View>
+                ) : (
+                  <Text style={{ fontSize: 12, color: Colors.textSecondary, fontWeight: '600' }}>
+                    {decisionPermission?.reason ||
+                      'Chỉ ADMIN hoặc nhân viên được phân công xử lý SOS mới có quyền xác nhận sự cố.'}
+                  </Text>
+                )}
+
+                {!completedCameraView && (
+                  <View style={{ backgroundColor: '#EFF6FF', borderRadius: 12, padding: 12, borderWidth: 1, borderColor: '#BFDBFE' }}>
+                    <Text style={{ fontSize: 12, color: '#1E3A8A', fontWeight: '600', lineHeight: 18 }}>
+                      Bấm &quot;Xem camera robot&quot; (chỉ nhận hình ảnh, không âm thanh) rồi bấm &quot;Xác nhận sự cố&quot; hoặc &quot;Báo nhầm&quot; ngay khi đang xem camera.
+                    </Text>
+                  </View>
+                )}
+              </>
             )}
           </View>
 

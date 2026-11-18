@@ -28,6 +28,7 @@ import {
   Video,
   Navigation,
   Clock,
+  MapPin,
 } from 'lucide-react-native';
 import { useIsFocused, useNavigation } from '@react-navigation/native';
 import { BottomTabNavigationProp } from '@react-navigation/bottom-tabs';
@@ -46,6 +47,7 @@ import { SOSCallModal } from '../../components/sos/SOSCallModal';
 import { SOSStreamModal } from '../../components/sos/SOSStreamModal';
 import { FallDetectionModal } from '../../components/sos/FallDetectionModal';
 import { MediaCallModal, MediaSessionEndPayload } from '../../components/media/MediaCallModal';
+import { formatFallLocationSummary } from '../../components/map/sosResponseRoute';
 import {
   buildSosScopeKey,
   canActOnSosCompletion,
@@ -131,6 +133,7 @@ export const AlertScreen: React.FC = () => {
   const handledSessionIdsRef = useRef<Set<string>>(new Set());
   const resolvingPopupAlertIdsRef = useRef<Set<string>>(new Set());
   const [callFeedbackByIncident, setCallFeedbackByIncident] = useState<Record<string, string>>({});
+  const [locationSummaryByIncident, setLocationSummaryByIncident] = useState<Record<string, string>>({});
 
   // Modal nhập lý do báo nhầm SOS
   const [falseAlarmTarget, setFalseAlarmTarget] = useState<{
@@ -251,6 +254,22 @@ export const AlertScreen: React.FC = () => {
     );
   });
 
+  const fetchIncidentLocationSummary = useCallback(async (incidentId: string) => {
+    if (!incidentId) return;
+    try {
+      const loc = await incidentApi.getIncidentLocation(incidentId);
+      const summary = formatFallLocationSummary(loc);
+      if (summary) {
+        setLocationSummaryByIncident((prev) => ({
+          ...prev,
+          [incidentId]: summary,
+        }));
+      }
+    } catch {
+      // Giữ nguyên nếu chưa có quyền hoặc BE chưa trả /location
+    }
+  }, []);
+
   // Luồng CAMERA CHỈ XEM (MONITOR, không audio) cho Phát hiện té ngã & Phát hiện SOS tự động (GESTURE_SOS / AI_GESTURE_SOS)
   const openViewOnlyCameraForAlert = async (
     alertItem: AlertResponse,
@@ -272,6 +291,7 @@ export const AlertScreen: React.FC = () => {
         : undefined;
 
       if (incidentId) {
+        void fetchIncidentLocationSummary(incidentId);
         try {
           const fresh = await incidentApi.getIncidentDetail(incidentId);
           if (fresh) {
@@ -316,30 +336,47 @@ export const AlertScreen: React.FC = () => {
         alertItem.dataJson?.robot ||
         `Robot ${targetRobotId.slice(0, 8)}`;
 
-      // Ghi nhận tiếp nhận OPEN -> ACKNOWLEDGED (tuyệt đối KHÔNG tự gọi startIncident hay confirm)
-      if (alertItem.status === 'OPEN') {
+      const isAdminActor = (currentUser?.role || '').toUpperCase().replace(/^ROLE_/, '') === 'ADMIN';
+      const isAuthorizedForAlertAck =
+        !currentIncident?.sosResponderAccountId ||
+        isAdminActor ||
+        currentIncident.sosResponderAccountId === currentUser?.accountId;
+
+      // Chỉ acknowledge alert nếu đúng người được phân công; KHÔNG gọi incidentApi.acknowledgeIncident sớm
+      // để tránh làm kẹt quyền khi POST /confirm trên BE (BE sẽ tự acknowledge cho đúng sosResponder)
+      if (alertItem.status === 'OPEN' && isAuthorizedForAlertAck) {
         await alertApi.acknowledgeAlert(alertItem.alertId).catch((err) => {
           console.log('Error acknowledging alert on view camera:', err);
         });
       }
-      if (incidentId && (!currentIncident || currentIncident.status === 'OPEN')) {
-        await incidentApi.acknowledgeIncident(incidentId).catch(() => null);
-      }
 
-      // Dùng phiên MONITOR hiện có của đúng Staff + robotId + incidentId (nếu còn mở), KHÔNG accept phiên ASSIST tự sinh
+      // Tìm phiên MONITOR hiện có của sự cố (ưu tiên đúng media_session_id hoặc phiên đang RINGING/ACTIVE)
       const sessions = await mediaSessionApi.getSessions().catch(() => []);
       const actorAccountId = currentUser?.accountId;
-      let targetSession = (sessions || []).find(
+      const hintedSessionId =
+        typeof alertItem.dataJson?.media_session_id === 'string'
+          ? alertItem.dataJson.media_session_id.trim()
+          : '';
+      const openMonitorSessions = (sessions || []).filter(
         (s) =>
           s.robotId === targetRobotId &&
           s.mode === 'MONITOR' &&
-          (!incidentId || s.incidentId === incidentId) &&
-          (!actorAccountId || !s.staffAccountId || s.staffAccountId === actorAccountId) &&
+          (!incidentId || !s.incidentId || s.incidentId === incidentId) &&
           (s.state === 'RINGING' ||
             s.state === 'CONNECTING' ||
             s.state === 'ACTIVE' ||
             s.state === 'RECONNECTING')
       );
+      let targetSession =
+        (hintedSessionId
+          ? openMonitorSessions.find((s) => s.sessionId === hintedSessionId)
+          : undefined) ||
+        openMonitorSessions.find(
+          (s) =>
+            !actorAccountId ||
+            !s.staffAccountId ||
+            s.staffAccountId === actorAccountId
+        );
 
       if (!targetSession) {
         try {
@@ -349,7 +386,12 @@ export const AlertScreen: React.FC = () => {
             mode: 'MONITOR',
           });
         } catch (createErr: any) {
-          const friendlyError = classifyCameraMonitorOpenError(createErr, sessions, targetRobotId);
+          const friendlyError = classifyCameraMonitorOpenError(
+            createErr,
+            sessions,
+            targetRobotId,
+            currentIncident
+          );
           if (incidentId) {
             setCallFeedbackByIncident((prev) => ({
               ...prev,
@@ -385,6 +427,38 @@ export const AlertScreen: React.FC = () => {
         return;
       }
 
+      // BẮT BUỘC gọi /accept khi phiên MONITOR ở trạng thái RINGING trước khi xin join-token (tránh lỗi 403 trên BE)
+      if (targetSession.state === 'RINGING') {
+        try {
+          targetSession = await mediaSessionApi.acceptSession(targetSession.sessionId);
+        } catch (acceptErr: any) {
+          const acceptErrMsg = classifyCameraMonitorOpenError(
+            acceptErr,
+            sessions,
+            targetRobotId,
+            currentIncident
+          );
+          if (incidentId) {
+            setCallFeedbackByIncident((prev) => ({
+              ...prev,
+              [incidentId]: acceptErrMsg,
+            }));
+          }
+          setActiveCall({
+            robotId: targetRobotId,
+            robotName: robotDisplayName,
+            mode: 'MONITOR',
+            incidentId,
+            alertId: alertItem.alertId,
+            sessionId: targetSession.sessionId,
+            startedAt: new Date().toISOString(),
+            externalError: acceptErrMsg,
+            alertItem,
+          });
+          return;
+        }
+      }
+
       let livekitUrl: string | undefined;
       let livekitToken: string | undefined;
       try {
@@ -393,8 +467,14 @@ export const AlertScreen: React.FC = () => {
         livekitToken = joinRes?.token;
       } catch (tokenErr: any) {
         const tokenErrMsg =
-          classifyCameraMonitorOpenError(tokenErr, sessions, targetRobotId) ||
+          classifyCameraMonitorOpenError(tokenErr, sessions, targetRobotId, currentIncident) ||
           'Máy chủ chưa cấp được vé LiveKit để xem camera robot.';
+        if (incidentId) {
+          setCallFeedbackByIncident((prev) => ({
+            ...prev,
+            [incidentId]: tokenErrMsg,
+          }));
+        }
         setActiveCall({
           robotId: targetRobotId,
           robotName: robotDisplayName,
@@ -940,17 +1020,17 @@ export const AlertScreen: React.FC = () => {
         linkedInc = (await refreshSingleIncident(alertItem.incidentId)) || undefined;
       }
       const kind = classifyEmergencyAlertKind(alertItem, linkedInc);
+      if (kind === 'AUTO_FALL' || kind === 'AUTO_GESTURE_SOS') {
+        await openViewOnlyCameraForAlert(alertItem);
+        return;
+      }
       await alertApi.acknowledgeAlert(alertItem.alertId);
       if (alertItem.incidentId) {
         await incidentApi.acknowledgeIncident(alertItem.incidentId).catch(() => null);
       }
       await fetchAlerts();
       await fetchIncidents();
-      if (kind === 'AUTO_FALL' || kind === 'AUTO_GESTURE_SOS') {
-        await openViewOnlyCameraForAlert(alertItem);
-      } else {
-        await handleAcceptSosCall(alertItem);
-      }
+      await handleAcceptSosCall(alertItem);
     } catch (err: any) {
       console.log('Error acknowledging alert:', err);
       Alert.alert('Lỗi', err?.message || 'Không thể tiếp nhận cảnh báo');
@@ -1033,7 +1113,7 @@ export const AlertScreen: React.FC = () => {
   );
 
   const handleConfirmRealSos = useCallback(
-    async (incident: IncidentResponse) => {
+    async (incident: IncidentResponse, opts?: { alertItem?: AlertResponse | null }) => {
       const incidentId = incident.incidentId;
       const perm = canActOnSosDecision(incident, currentUser);
       if (!perm.allowed) {
@@ -1055,13 +1135,40 @@ export const AlertScreen: React.FC = () => {
         upsertIncident(res.incident);
         await Promise.all([fetchIncidents(), fetchAlerts()]);
         Alert.alert(
-          'Đã xác nhận SOS thật',
+          'Đã xác nhận sự cố',
           'Sự cố đã chuyển sang Đang xử lý (IN_PROGRESS). Bạn có thể bấm "Xem đường đến SOS" để mở bản đồ tuyến đi bộ.'
         );
+      } else if (
+        res.error?.code === 'MEDIA_FALL_REVIEW_NOT_ACTIVE' &&
+        activeCallRef.current?.incidentId !== incidentId
+      ) {
+        await Promise.all([fetchIncidents(), fetchAlerts()]);
+        const matchedAlert =
+          opts?.alertItem || liveAlertsRef.current.find((a) => a.incidentId === incidentId);
+        if (matchedAlert) {
+          Alert.alert(
+            'Cần xác nhận khi đang xem camera',
+            'Máy chủ yêu cầu bấm "Xác nhận sự cố" ngay trong lúc camera đang hiển thị. Đang mở lại camera robot để bạn xác nhận.',
+            [
+              {
+                text: 'Mở camera',
+                onPress: () => {
+                  void openViewOnlyCameraForAlert(matchedAlert);
+                },
+              },
+            ]
+          );
+        } else {
+          Alert.alert(
+            'Chưa có phiên xem camera trực tiếp',
+            res.error?.message ||
+              'Cần mở "Xem camera robot" và bấm "Xác nhận sự cố" ngay khi camera đang hiển thị hình ảnh.'
+          );
+        }
       } else {
         await Promise.all([fetchIncidents(), fetchAlerts()]);
         Alert.alert(
-          'Không thể xác nhận SOS',
+          'Không thể xác nhận sự cố',
           res.error?.message || 'Đã làm mới trạng thái sự cố từ máy chủ. Vui lòng thử lại.'
         );
       }
@@ -1350,11 +1457,25 @@ export const AlertScreen: React.FC = () => {
     }
   };
 
+  // Khử trùng alert cùng incidentId (nếu BE cập nhật/gửi lại) để tránh nhân bản thẻ trên danh sách
+  const displayAlerts = React.useMemo(() => {
+    const seenIncidentIds = new Set<string>();
+    const result: AlertResponse[] = [];
+    for (const a of liveAlerts) {
+      if (a.incidentId) {
+        if (seenIncidentIds.has(a.incidentId)) continue;
+        seenIncidentIds.add(a.incidentId);
+      }
+      result.push(a);
+    }
+    return result;
+  }, [liveAlerts]);
+
   const activeAlertCount = React.useMemo(() => {
-    const unacknowledgedAlerts = liveAlerts.filter((a) => a.status === 'OPEN').length;
+    const unacknowledgedAlerts = displayAlerts.filter((a) => a.status === 'OPEN').length;
     const unacknowledgedIncidents = liveIncidents.filter((i) => i.status === 'OPEN').length;
     return Math.max(unacknowledgedAlerts, unacknowledgedIncidents);
-  }, [liveAlerts, liveIncidents]);
+  }, [displayAlerts, liveIncidents]);
 
   const getAlertTitle = (alertItem?: AlertResponse | null, incident?: IncidentResponse | null) => {
     const kind = getAlertKind(alertItem, incident);
@@ -1434,8 +1555,8 @@ export const AlertScreen: React.FC = () => {
           </View>
         </View>
 
-        {liveAlerts.length > 0 ? (
-          liveAlerts.map((alertItem) => {
+        {displayAlerts.length > 0 ? (
+          displayAlerts.map((alertItem) => {
             const linkedIncident = alertItem.incidentId
               ? liveIncidents.find((i) => i.incidentId === alertItem.incidentId)
               : undefined;
@@ -1517,9 +1638,14 @@ export const AlertScreen: React.FC = () => {
                   </View>
                   <View style={styles.cardTitleBox}>
                     <Text style={styles.cardTitle}>{getAlertTitle(alertItem, linkedIncident)}</Text>
-                    {isCameraViewOnly && data.algorithm ? (
+                    {isCameraViewOnly && (data.algorithm || data.source || data.detection_kind) ? (
                       <Text style={styles.fallSubBadge}>
-                        AI: {data.algorithm}
+                        {data.source === 'PATROL_VISION_AI'
+                          ? 'Nguồn: Tuần tra tự động'
+                          : data.source === 'CONTINUOUS_VISION_AI'
+                          ? 'Nguồn: Camera liên tục'
+                          : `AI: ${data.algorithm || 'VISION'}`}
+                        {data.detection_kind ? ` · ${data.detection_kind}` : ''}
                         {typeof data.confidence === 'number'
                           ? ` · ${(data.confidence * 100).toFixed(1)}%`
                           : ''}
@@ -1601,12 +1727,18 @@ export const AlertScreen: React.FC = () => {
                   <View style={styles.sampleAlertBanner}>
                     <Text style={styles.sampleAlertText}>
                       Lý do AI: {metrics.reason}
-                      {metrics.visible_legs !== undefined
-                        ? ` · Chân thấy: ${metrics.visible_legs}`
-                        : ''}
-                      {metrics.support_ratio !== undefined
-                        ? ` · Support: ${metrics.support_ratio}`
-                        : ''}
+                      {data.floor_evidence ? ` · Bằng chứng sàn: ${data.floor_evidence}` : ''}
+                    </Text>
+                  </View>
+                ) : null}
+
+                {isCameraViewOnly &&
+                alertItem.incidentId &&
+                locationSummaryByIncident[alertItem.incidentId] ? (
+                  <View style={styles.sosNoticeBanner}>
+                    <MapPin size={14} color="#0369A1" />
+                    <Text style={[styles.sosNoticeText, { color: '#0369A1' }]}>
+                      {locationSummaryByIncident[alertItem.incidentId]}
                     </Text>
                   </View>
                 ) : null}
@@ -1812,10 +1944,10 @@ export const AlertScreen: React.FC = () => {
                     ) : (
                       <>
                         {isCameraViewOnly ? (
-                          <View style={styles.btnRow}>
-                            {!completedCall && (
+                          <View style={{ gap: 8 }}>
+                            <View style={styles.btnRow}>
                               <TouchableOpacity
-                                style={[styles.cameraCheckBtn, { flex: 1.4 }]}
+                                style={[styles.cameraCheckBtn, { flex: 1.35 }]}
                                 onPress={() => void openViewOnlyCameraForAlert(alertItem)}
                                 activeOpacity={0.8}
                                 disabled={inFlightAlertId === alertItem.alertId}
@@ -1825,23 +1957,39 @@ export const AlertScreen: React.FC = () => {
                                 ) : (
                                   <>
                                     <Eye size={16} color="#FFFFFF" />
-                                    <Text style={styles.cameraCheckBtnText}>Xem camera robot</Text>
+                                    <Text style={styles.cameraCheckBtnText}>
+                                      {completedCall ? 'Xem lại camera robot' : 'Xem camera robot'}
+                                    </Text>
                                   </>
                                 )}
                               </TouchableOpacity>
-                            )}
 
-                            <TouchableOpacity
-                              style={[styles.tealBtn, { flex: 0.85 }]}
-                              onPress={() => {
-                                setSelectedAlert(alertItem);
-                                setShowFallDetail(true);
-                              }}
-                              activeOpacity={0.8}
-                            >
-                              <AlertTriangle size={15} color={Colors.tealDark} />
-                              <Text style={styles.tealBtnText}>Chi tiết AI</Text>
-                            </TouchableOpacity>
+                              <TouchableOpacity
+                                style={[styles.tealBtn, { flex: 0.85 }]}
+                                onPress={() => {
+                                  setSelectedAlert(alertItem);
+                                  if (alertItem.incidentId) {
+                                    void fetchIncidentLocationSummary(alertItem.incidentId);
+                                  }
+                                  setShowFallDetail(true);
+                                }}
+                                activeOpacity={0.8}
+                              >
+                                <AlertTriangle size={15} color={Colors.tealDark} />
+                                <Text style={styles.tealBtnText}>Chi tiết AI</Text>
+                              </TouchableOpacity>
+                            </View>
+
+                            {alertItem.incidentId ? (
+                              <TouchableOpacity
+                                style={styles.tealBtn}
+                                onPress={() => handleOpenSosRouteOnMap(alertItem.incidentId!)}
+                                activeOpacity={0.8}
+                              >
+                                <MapPin size={15} color={Colors.tealDark} />
+                                <Text style={styles.tealBtnText}>Xem vị trí trên bản đồ</Text>
+                              </TouchableOpacity>
+                            ) : null}
                           </View>
                         ) : (
                           isOpen &&
@@ -1873,12 +2021,14 @@ export const AlertScreen: React.FC = () => {
                           </View>
                         ) : null}
 
-                        {completedCall && linkedIncident ? (
+                        {((isCameraViewOnly && linkedIncident) || (completedCall && linkedIncident)) ? (
                           <View style={styles.sosDecisionBox}>
                             <Text style={styles.sosDecisionHeader}>
-                              {isCameraViewOnly
-                                ? `Đã kết thúc xem camera robot (Phiên ${completedCall.sessionId.slice(0, 8)})`
-                                : `Cuộc gọi ASSIST đã kết thúc (Phiên ${completedCall.sessionId.slice(0, 8)})`}
+                              {completedCall
+                                ? isCameraViewOnly
+                                  ? `Đã kết thúc xem camera robot (Phiên ${completedCall.sessionId.slice(0, 8)})`
+                                  : `Cuộc gọi ASSIST đã kết thúc (Phiên ${completedCall.sessionId.slice(0, 8)})`
+                                : 'Bấm "Xem camera robot" rồi bấm "Xác nhận sự cố" hoặc "Báo nhầm" ngay khi đang xem camera.'}
                             </Text>
                             {sosPermission?.allowed ? (
                               <View style={styles.btnRow}>
@@ -1887,7 +2037,7 @@ export const AlertScreen: React.FC = () => {
                                     styles.confirmSosBtn,
                                     isSubmittingDecision && { opacity: 0.6 },
                                   ]}
-                                  onPress={() => handleConfirmRealSos(linkedIncident)}
+                                  onPress={() => handleConfirmRealSos(linkedIncident, { alertItem })}
                                   disabled={isSubmittingDecision}
                                   activeOpacity={0.85}
                                 >
@@ -1924,26 +2074,21 @@ export const AlertScreen: React.FC = () => {
                             )}
                           </View>
                         ) : (
-                          (isCameraViewOnly || !isOpen) && (
+                          !isOpen &&
+                          !isCameraViewOnly && (
                             <View style={styles.sosNoticeBanner}>
                               <Clock size={14} color="#0369A1" />
                               <Text style={[styles.sosNoticeText, { color: '#0369A1' }]}>
-                                {isCameraViewOnly
-                                  ? 'Bấm "Xem camera robot" (chỉ hình ảnh, không âm thanh), sau đó bấm "Kết thúc xem" để mở Xác nhận sự cố / Báo nhầm.'
-                                  : 'Kết thúc phiên đàm thoại ASSIST để hiển thị lựa chọn Xác nhận SOS thật / Báo nhầm.'}
+                                Kết thúc phiên đàm thoại ASSIST để hiển thị lựa chọn Xác nhận SOS thật / Báo nhầm.
                               </Text>
                             </View>
                           )
                         )}
 
-                        {(completedCall || (!isCameraViewOnly && !isOpen)) && (
+                        {!isCameraViewOnly && (completedCall || !isOpen) && (
                           <TouchableOpacity
                             style={styles.tealBtn}
-                            onPress={() =>
-                              isCameraViewOnly
-                                ? void openViewOnlyCameraForAlert(alertItem)
-                                : void handleAcceptSosCall(alertItem)
-                            }
+                            onPress={() => void handleAcceptSosCall(alertItem)}
                             activeOpacity={0.8}
                             disabled={inFlightAlertId === alertItem.alertId}
                           >
@@ -1952,9 +2097,7 @@ export const AlertScreen: React.FC = () => {
                             ) : (
                               <>
                                 <Video size={15} color={Colors.textPrimary} />
-                                <Text style={styles.tealBtnText}>
-                                  {isCameraViewOnly ? 'Xem lại camera robot' : 'Vào lại đàm thoại'}
-                                </Text>
+                                <Text style={styles.tealBtnText}>Vào lại đàm thoại</Text>
                               </>
                             )}
                           </TouchableOpacity>
@@ -2119,6 +2262,11 @@ export const AlertScreen: React.FC = () => {
                 handleOpenSosRouteOnMap(selectedIncident.incidentId);
               }
             }}
+            locationSummary={
+              selectedAlert?.incidentId
+                ? locationSummaryByIncident[selectedAlert.incidentId] || null
+                : null
+            }
             location={getAlertLocation(selectedAlert)}
             robotName={selectedAlert ? `Robot ${getAlertRobot(selectedAlert)}` : 'Robot'}
             onAcknowledge={() => {
@@ -2129,35 +2277,92 @@ export const AlertScreen: React.FC = () => {
         );
       })()}
 
-      <MediaCallModal
-        visible={activeCall !== null}
-        onClose={() => {
-          setActiveCall(null);
-          fetchAlerts();
-          fetchIncidents();
-        }}
-        robotId={activeCall?.robotId}
-        robotName={activeCall?.robotName}
-        mode={activeCall?.mode || 'MONITOR'}
-        incidentId={activeCall?.incidentId}
-        existingSessionId={activeCall?.sessionId}
-        livekitUrl={activeCall?.livekitUrl}
-        livekitToken={activeCall?.livekitToken}
-        externalError={activeCall?.externalError}
-        isRetrying={isRetryingCamera}
-        endButtonLabel={getMediaViewerPolicyForMode(activeCall?.mode).endActionLabel}
-        onRetryCamera={() => {
-          const current = activeCallRef.current;
-          if (!current?.alertItem) return;
-          if (current.mode === 'ASSIST') {
-            setActiveCall(null);
-            void handleAcceptSosCall(current.alertItem);
-          } else {
-            return openViewOnlyCameraForAlert(current.alertItem, { isRetry: true });
-          }
-        }}
-        onSessionEnd={handleMediaCallSessionEnd}
-      />
+      {(() => {
+        const activeCallIncident = activeCall?.incidentId
+          ? getLinkedIncidentForAlert(activeCall.alertItem)
+          : undefined;
+        const activeCallPerm = activeCallIncident
+          ? canActOnSosDecision(activeCallIncident, currentUser)
+          : null;
+        const activeLocationSummary = activeCall?.incidentId
+          ? locationSummaryByIncident[activeCall.incidentId] || null
+          : null;
+        return (
+          <MediaCallModal
+            visible={activeCall !== null}
+            onClose={() => {
+              setActiveCall(null);
+              fetchAlerts();
+              fetchIncidents();
+            }}
+            robotId={activeCall?.robotId}
+            robotName={activeCall?.robotName}
+            mode={activeCall?.mode || 'MONITOR'}
+            incidentId={activeCall?.incidentId}
+            existingSessionId={activeCall?.sessionId}
+            livekitUrl={activeCall?.livekitUrl}
+            livekitToken={activeCall?.livekitToken}
+            externalError={activeCall?.externalError}
+            isRetrying={isRetryingCamera}
+            endButtonLabel={getMediaViewerPolicyForMode(activeCall?.mode).endActionLabel}
+            incidentStatus={activeCallIncident?.status || null}
+            canConfirmIncident={Boolean(activeCallIncident && activeCallPerm?.allowed)}
+            decisionPermissionReason={activeCallPerm?.reason || null}
+            isSubmittingDecision={Boolean(
+              activeCallIncident && decisionInFlightIncidentId === activeCallIncident.incidentId
+            )}
+            locationSummary={activeLocationSummary}
+            onConfirmWhileViewing={
+              activeCallIncident
+                ? async () => {
+                    await handleConfirmRealSos(activeCallIncident, {
+                      alertItem: activeCall?.alertItem,
+                    });
+                  }
+                : undefined
+            }
+            onFalseAlarmWhileViewing={
+              activeCallIncident && activeCall?.alertItem
+                ? () => {
+                    const current = activeCallRef.current;
+                    if (current?.sessionId) {
+                      void mediaSessionApi
+                        .endSession(current.sessionId, 'STAFF_ENDED_VIEW')
+                        .catch(() => null);
+                    }
+                    setActiveCall(null);
+                    handleOpenFalseAlarmModal(activeCallIncident, activeCall.alertItem);
+                  }
+                : undefined
+            }
+            onOpenMapRouteWhileViewing={
+              activeCallIncident
+                ? () => {
+                    const current = activeCallRef.current;
+                    if (current?.sessionId) {
+                      void mediaSessionApi
+                        .endSession(current.sessionId, 'STAFF_ENDED_VIEW')
+                        .catch(() => null);
+                    }
+                    setActiveCall(null);
+                    handleOpenSosRouteOnMap(activeCallIncident.incidentId);
+                  }
+                : undefined
+            }
+            onRetryCamera={() => {
+              const current = activeCallRef.current;
+              if (!current?.alertItem) return;
+              if (current.mode === 'ASSIST') {
+                setActiveCall(null);
+                void handleAcceptSosCall(current.alertItem);
+              } else {
+                return openViewOnlyCameraForAlert(current.alertItem, { isRetry: true });
+              }
+            }}
+            onSessionEnd={handleMediaCallSessionEnd}
+          />
+        );
+      })()}
 
       <Modal
         visible={falseAlarmTarget !== null}

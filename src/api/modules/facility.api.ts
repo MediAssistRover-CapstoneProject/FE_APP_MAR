@@ -27,6 +27,19 @@ async function getAllPages<T>(
   return content;
 }
 
+async function operationalRooms(): Promise<RoomDto[]> {
+  const rooms = await getAllPages((page, size) => apiClient.get<PageResponse<RoomDto>>(`${ENDPOINTS.FACILITY.ROOMS}?page=${page}&size=${size}`));
+  if (rooms.every(room => typeof room.operational === 'boolean')) return rooms.filter(room => room.active !== false && room.operational);
+  const [maps, points, floors] = await Promise.all([
+    getAllPages((page, size) => apiClient.get<PageResponse<MapResponse>>(`${ENDPOINTS.FACILITY.MAPS}?page=${page}&size=${size}`)),
+    getAllPages((page, size) => apiClient.get<PageResponse<EndpointResponse>>(`${ENDPOINTS.FACILITY.ENDPOINTS}?page=${page}&size=${size}`)),
+    getAllPages((page, size) => apiClient.get<PageResponse<FloorResponse>>(`${ENDPOINTS.FACILITY.FLOORS}?page=${page}&size=${size}`)),
+  ]);
+  return rooms.filter(room => room.active !== false && !floors.some(floor => floor.floorId === room.floorId && floor.active === false)
+    && points.some(point => point.roomId === room.roomId && point.active !== false
+      && maps.some(map => map.mapId === point.mapId && map.status === 'ACTIVE' && map.floorId === room.floorId)));
+}
+
 /**
  * Facility & Operations API Module (Staff Operations)
  * Truy vấn bản đồ, tầng, phòng, zone, tọa độ điểm đến (waypoints), nhóm điểm đến và sự kiện nhiệm vụ
@@ -81,9 +94,9 @@ export const facilityApi = {
 
   // 3. Phòng (Rooms)
   async getRooms(page = 0, size = 10): Promise<PageResponse<RoomDto>> {
-    return apiClient.get<PageResponse<RoomDto>>(
-      `${ENDPOINTS.FACILITY.ROOMS}?page=${page}&size=${size}`
-    );
+    const rooms = await operationalRooms();
+    return { content: rooms.slice(page * size, (page + 1) * size), page, size, totalElements: rooms.length,
+      totalPages: Math.ceil(rooms.length / size), first: page === 0, last: (page + 1) * size >= rooms.length };
   },
 
   async getRoomDetail(id: string): Promise<RoomDto> {
@@ -91,7 +104,7 @@ export const facilityApi = {
   },
 
   async getAllRooms(): Promise<RoomDto[]> {
-    return getAllPages((page, size) => this.getRooms(page, size));
+    return operationalRooms();
   },
 
   // 4. Phân khu (Zones)

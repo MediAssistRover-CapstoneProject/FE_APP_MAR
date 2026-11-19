@@ -358,10 +358,11 @@ export const MissionScreen: React.FC = () => {
 
   // Danh sách phòng trên bản đồ đang sử dụng cho Điểm giao hàng (B)
   const availableDeliveryRooms = React.useMemo(() => {
-    if (!activeMap) return [];
+    if (!activeMap || activeMap.status !== 'ACTIVE') return [];
     return rooms.filter((r) => {
-      if (activeMap.floorId && r.floorId === activeMap.floorId) return true;
-      return availableEndpoints.some((e) => e.roomId === r.roomId);
+      return r.active !== false && r.operational !== false
+        && (!r.floorId || r.floorId === activeMap.floorId)
+        && availableEndpoints.some((e) => e.mapId === activeMap.mapId && e.active !== false && e.roomId === r.roomId);
     });
   }, [activeMap, rooms, availableEndpoints]);
 
@@ -404,17 +405,13 @@ export const MissionScreen: React.FC = () => {
         for (const shift of activeShifts) {
           if (!shift.roomId) continue;
 
-          const matchedRoom = allRooms.find((r) => r.roomId === shift.roomId) || ({
-            roomId: shift.roomId,
-            roomCode: shift.roomCode || '',
-            roomName: shift.roomCode ? `Phòng ${shift.roomCode}` : 'Phòng trực',
-            floorId: map.floorId,
-          } as RoomDto);
+          const matchedRoom = allRooms.find((r) => r.roomId === shift.roomId && r.active !== false && r.operational !== false);
+          if (!matchedRoom) continue;
 
           const isRoomOnFloor = !matchedRoom.floorId || matchedRoom.floorId === map.floorId;
-          const hasEndpointOnMap = mapEndpoints.some((e) => e.roomId === shift.roomId);
+          const hasEndpointOnMap = mapEndpoints.some((e) => e.roomId === shift.roomId && e.mapId === map.mapId && e.active !== false);
 
-          if (isRoomOnFloor || hasEndpointOnMap) {
+          if (isRoomOnFloor && hasEndpointOnMap) {
             hasShiftOnMap = true;
             const ep = mapEndpoints.find(
               (e) => e.roomId === shift.roomId && e.active !== false
@@ -472,6 +469,12 @@ export const MissionScreen: React.FC = () => {
 
   // Chọn nhân viên trực -> Tự động điền phòng đang trực của người đó vào Điểm giao hàng (B)
   const handleStaffSelect = useCallback((staff: OnDutyStaffResponse) => {
+    const matchedRoom = availableDeliveryRooms.find(room => room.roomId === staff.roomId);
+    if (!matchedRoom) {
+      setDeliveryRoom(null); setDeliveryEndpoint(null);
+      setRoomDutyWarning('Phòng trực không còn thuộc bản đồ đang hoạt động. Vui lòng chọn lại người nhận.');
+      return;
+    }
     setSelectedReceiverStaff(staff);
     setReceiver(staff.fullName);
     setReceiverAccountId(staff.accountId);
@@ -480,16 +483,7 @@ export const MissionScreen: React.FC = () => {
     setRoomDutyWarning(null);
 
     if (staff.roomId) {
-      const matchedRoom = rooms.find((r) => r.roomId === staff.roomId);
-      if (matchedRoom) {
-        setDeliveryRoom(matchedRoom);
-      } else {
-        setDeliveryRoom({
-          roomId: staff.roomId,
-          roomCode: staff.roomCode || '',
-          roomName: staff.roomName || staff.roomCode || 'Phòng trực',
-        } as RoomDto);
-      }
+      setDeliveryRoom(matchedRoom);
 
       const ep =
         (staff.endpointId && availableEndpoints.find((e) => e.endpointId === staff.endpointId)) ||
@@ -497,7 +491,7 @@ export const MissionScreen: React.FC = () => {
         null;
       setDeliveryEndpoint(ep);
     }
-  }, [rooms, availableEndpoints]);
+  }, [availableDeliveryRooms, availableEndpoints]);
 
   const handleClearStaff = useCallback(() => {
     setSelectedReceiverStaff(null);

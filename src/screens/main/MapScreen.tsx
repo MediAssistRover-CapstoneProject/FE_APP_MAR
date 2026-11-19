@@ -515,24 +515,18 @@ export const MapScreen: React.FC = () => {
         facilityApi.getAllZones(),
         facilityApi.getAllRooms(),
       ]);
-      if (maps.length > 0) {
-        setAvailableMaps(maps);
+      const activeMaps = maps.filter(map => map.status === 'ACTIVE');
+      if (activeMaps.length > 0) {
+        setAvailableMaps(activeMaps);
         const primaryMap =
-          maps.find(
+          activeMaps.find(
             (map) =>
               map.status === 'ACTIVE' &&
               (map.mapId === 'e571fe71-d3ea-4aa5-a673-ffd857ac9f09' ||
                 (map.mapName || '').toLowerCase().includes('truong') ||
                 (map.mapName || '').toLowerCase().includes('final'))
           ) ||
-          maps.find((map) => map.mapId === 'e571fe71-d3ea-4aa5-a673-ffd857ac9f09') ||
-          maps.find(
-            (map) =>
-              (map.mapName || '').toLowerCase().includes('truong') ||
-              (map.mapName || '').toLowerCase().includes('final')
-          ) ||
-          maps.find((map) => map.status === 'ACTIVE') ||
-          maps[0];
+          activeMaps[0];
         setActiveMap(primaryMap);
       } else {
         setAvailableMaps([]);
@@ -949,10 +943,12 @@ export const MapScreen: React.FC = () => {
 
   const activeMapEndpoints = activeMap
     ? endpoints.filter((endpoint) => endpoint.mapId === activeMap.mapId)
-    : endpoints;
+    : [];
   const activeMapRooms = activeMap
-    ? backendRooms.filter((room) => !room.floorId || room.floorId === activeMap.floorId)
-    : backendRooms;
+    ? backendRooms.filter(room => room.active !== false && room.operational !== false
+      && (!room.floorId || room.floorId === activeMap.floorId)
+      && activeMapEndpoints.some(point => point.roomId === room.roomId && point.active !== false))
+    : [];
   const timelineDisplay = selectedTimelineJob
     ? getJobDisplayInfo(selectedTimelineJob, endpoints)
     : null;

@@ -101,6 +101,7 @@ export interface RobotBatteryResponse {
 
 // ----- 4. Room, Floor & Zone Types -----
 export interface RoomDto {
+  operational?: boolean;
   roomId: string;
   roomCode: string;
   roomName: string;

@@ -94,6 +94,13 @@ export function resolveAuthenticationMethod(mode?: string | null): DeliveryAuthe
   return 'QR_CODE';
 }
 
+export function deliveryStageAuthMethod(
+  phase: DeliveryPhase,
+  jobMethod: DeliveryAuthenticationMethod,
+): DeliveryAuthenticationMethod {
+  return phase === 'sender' ? 'QR_CODE' : jobMethod;
+}
+
 export function jobAuthenticationMethod(
   job?: JobResponse | null,
   delivery?: DeliveryResponse | null,
@@ -114,13 +121,22 @@ export function jobAuthenticationMethod(
     return resolveAuthenticationMethod(inputMethod);
   }
 
-  const authStepWithMethod = allJobSteps(job).find(
+  const authSteps = allJobSteps(job).filter(
     step =>
       step.stepTypeSnapshot === 'AUTHENTICATE' &&
       typeof step.resolvedInputsJson?.method === 'string',
   );
-  if (authStepWithMethod) {
-    return resolveAuthenticationMethod(String(authStepWithMethod.resolvedInputsJson?.method));
+  if (
+    authSteps.some(
+      step =>
+        resolveAuthenticationMethod(String(step.resolvedInputsJson?.method)) ===
+        'FACE_VERIFICATION',
+    )
+  ) {
+    return 'FACE_VERIFICATION';
+  }
+  if (authSteps.length > 0) {
+    return resolveAuthenticationMethod(String(authSteps[0].resolvedInputsJson?.method));
   }
 
   return 'QR_CODE';
@@ -136,9 +152,7 @@ export function getDeliveryStepLabel(
     case 'MOVE_SENDER':
       return '1. Robot di chuyển đến Điểm lấy hàng (A)';
     case 'AUTH_SENDER':
-      return isFace
-        ? '2. Camera Robot xác thực khuôn mặt người gửi (Mở Servo)'
-        : '2. Robot quét mã QR từ điện thoại người gửi (Mở Servo)';
+      return '2. Robot quét mã QR từ điện thoại người gửi (Mở Servo)';
     case 'UNLOCK_SENDER':
       return '3. Robot đang mở khóa Servo ngăn tủ (A)';
     case 'PAYLOAD_SENDER':
@@ -229,8 +243,9 @@ export function scanContext(
   const deliveryMatchesJob =
     !delivery?.request?.serviceRequestId || delivery.request.serviceRequestId === job.serviceRequestId;
   if (
-    (deliveryMatchesJob && delivery?.authenticationMethod === 'FACE_VERIFICATION') ||
-    job.inputJson?.authentication_method === 'FACE_VERIFICATION'
+    phase !== 'sender' &&
+    ((deliveryMatchesJob && delivery?.authenticationMethod === 'FACE_VERIFICATION') ||
+      job.inputJson?.authentication_method === 'FACE_VERIFICATION')
   ) {
     return;
   }
@@ -253,7 +268,16 @@ export function faceAuthContext(
 ): DeliveryFaceAuthContext | undefined {
   const step = selectedRunningStep(job);
   const phase = deliveryPhase(step);
-  if (!job || !step || !phase || !accountId || job.schemaVersion !== 3 || !job.beOrchestrated) return;
+  if (
+    !job ||
+    !step ||
+    phase !== 'receiver' ||
+    !accountId ||
+    job.schemaVersion !== 3 ||
+    !job.beOrchestrated
+  ) {
+    return;
+  }
   const deliveryMatchesJob =
     !delivery?.request?.serviceRequestId || delivery.request.serviceRequestId === job.serviceRequestId;
   if (
@@ -262,7 +286,7 @@ export function faceAuthContext(
   ) {
     return;
   }
-  const purpose = phase === 'sender' ? 'DELIVERY_SENDER' : 'DELIVERY_RECEIVER';
+  const purpose: AuthVerificationPurpose = 'DELIVERY_RECEIVER';
   if (
     step.stepTypeSnapshot !== 'AUTHENTICATE' ||
     step.resolvedInputsJson?.method !== 'FACE_VERIFICATION' ||
@@ -280,6 +304,38 @@ export function faceAuthContext(
     accountId,
     expiresAt,
   };
+}
+
+export function isCurrentStepFaceStage(
+  job?: JobResponse | null,
+  delivery?: DeliveryResponse | null,
+): boolean {
+  if (!job || jobAuthenticationMethod(job, delivery) !== 'FACE_VERIFICATION') {
+    return false;
+  }
+  const allSteps = allJobSteps(job);
+  const selectedStep =
+    (job.selectedJobStepId
+      ? allSteps.find(step => step.jobStepId === job.selectedJobStepId)
+      : undefined) || selectedRunningStep(job);
+
+  if (selectedStep) {
+    if (
+      selectedStep.stepTypeSnapshot === 'AUTHENTICATE' &&
+      selectedStep.resolvedInputsJson?.method === 'FACE_VERIFICATION'
+    ) {
+      return true;
+    }
+    const stepPhase = deliveryPhase(selectedStep);
+    if (stepPhase === 'sender') {
+      return false;
+    }
+    if (stepPhase === 'receiver' || selectedStep.stepCodeSnapshot === 'ANNOUNCE') {
+      return true;
+    }
+  }
+
+  return Boolean(delivery?.pickedUpAt);
 }
 
 export function verificationMatches(result: AuthVerificationResponse, context: DeliveryScanContext): boolean {
@@ -345,6 +401,25 @@ export function isAuthStepCompleted(
     }
   }
   return authStep.status === 'SUCCEEDED';
+}
+
+function enrollmentReasonDetail(reason?: string | null): string | null {
+  switch (String(reason || '').trim().toUpperCase()) {
+    case 'FACE_TOO_SMALL':
+      return 'Khuôn mặt trong ảnh quá nhỏ';
+    case 'FACE_TOO_BLURRY':
+      return 'Ảnh bị mờ hoặc mất nét';
+    case 'INVALID_FACE_FEATURE':
+      return 'Không trích xuất được đặc trưng khuôn mặt rõ nét';
+    case 'NO_FACE':
+      return 'Không phát hiện thấy khuôn mặt trong ảnh';
+    case 'MULTIPLE_FACES':
+      return 'Ảnh có nhiều hơn một khuôn mặt';
+    case 'LOW_QUALITY':
+      return 'Chất lượng ảnh chưa đạt (thiếu sáng hoặc bị che khuất)';
+    default:
+      return null;
+  }
 }
 
 export function evaluateStaffFaceParticipant(
@@ -424,6 +499,7 @@ export function evaluateStaffFaceParticipant(
     };
   }
 
+  const invalidReason = enrollmentReasonDetail(statusRes.reason);
   const statusMeta: Record<string, { label: string; guidance: string }> = {
     PENDING: {
       label: 'Chờ Admin duyệt',
@@ -435,7 +511,9 @@ export function evaluateStaffFaceParticipant(
     },
     INVALID: {
       label: 'Ảnh không đạt chuẩn',
-      guidance: `Ảnh đại diện của ${roleLabel.toLowerCase()}${revTag} không đạt kiểm tra AI (cần 1 khuôn mặt rõ, <= 2 MiB). Hãy tải ảnh mới và nhờ Admin duyệt lại.`,
+      guidance: invalidReason
+        ? `Ảnh đại diện của ${roleLabel.toLowerCase()}${revTag} không đạt (${invalidReason}). Hãy tải ảnh mới và nhờ Admin duyệt lại.`
+        : `Ảnh đại diện của ${roleLabel.toLowerCase()}${revTag} không đạt kiểm tra AI (cần 1 khuôn mặt rõ, <= 2 MiB). Hãy tải ảnh mới và nhờ Admin duyệt lại.`,
     },
     REJECTED: {
       label: 'Ảnh bị từ chối',
@@ -467,34 +545,24 @@ export function evaluateDeliveryFaceReadiness(input: {
   senderError?: string | null;
   receiverError?: string | null;
 }): DeliveryFaceReadinessEvaluation {
-  const sender = evaluateStaffFaceParticipant('sender', input.senderAccountId, input.senderStatus, input.senderError);
-  const receiver = evaluateStaffFaceParticipant('receiver', input.receiverAccountId, input.receiverStatus, input.receiverError);
+  const receiver = evaluateStaffFaceParticipant(
+    'receiver',
+    input.receiverAccountId,
+    input.receiverStatus,
+    input.receiverError,
+  );
 
-  const featureDisabled =
-    input.senderStatus?.enabled === false ||
-    input.receiverStatus?.enabled === false;
+  const featureDisabled = input.receiverStatus?.enabled === false;
   const enabled = !featureDisabled;
 
-  const senderMissingId = !input.senderAccountId || !UUID_PATTERN.test(input.senderAccountId.trim());
   const receiverMissingId = !input.receiverAccountId || !UUID_PATTERN.test(input.receiverAccountId.trim());
-
-  if (senderMissingId) {
-    return {
-      enabled,
-      ready: false,
-      sender,
-      receiver,
-      summaryMessage: 'Chưa xác định được tài khoản người gửi.',
-      blockingReason: 'Chưa xác định được tài khoản người gửi để kiểm tra trạng thái khuôn mặt.',
-    };
-  }
 
   if (receiverMissingId) {
     const reason = 'Chọn nhân viên nhận hàng đang trực để kiểm tra trạng thái khuôn mặt.';
     return {
       enabled,
       ready: false,
-      sender,
+      sender: null,
       receiver: null,
       summaryMessage: reason,
       blockingReason: reason,
@@ -507,38 +575,34 @@ export function evaluateDeliveryFaceReadiness(input: {
     return {
       enabled: false,
       ready: false,
-      sender,
+      sender: null,
       receiver,
       summaryMessage: reason,
       blockingReason: reason,
     };
   }
 
-  if (!sender || !receiver) {
-    const reason = 'Đang hoặc chưa tải đủ trạng thái khuôn mặt của người gửi và người nhận. Bấm làm mới để kiểm tra.';
+  if (!receiver) {
+    const reason = 'Đang hoặc chưa tải trạng thái khuôn mặt của người nhận. Bấm làm mới để kiểm tra.';
     return {
       enabled,
       ready: false,
-      sender,
-      receiver,
+      sender: null,
+      receiver: null,
       summaryMessage: reason,
       blockingReason: reason,
     };
   }
 
-  const issues: string[] = [];
-  if (!sender.ready) issues.push(`Người gửi (${sender.statusLabel})`);
-  if (!receiver.ready) issues.push(`Người nhận (${receiver.statusLabel})`);
-
-  if (issues.length > 0) {
+  if (!receiver.ready) {
     const blockingReason =
-      sender.status === 'ERROR' && !receiver.ready && receiver.status === 'ERROR'
-        ? `Không kiểm tra được trạng thái khuôn mặt từ máy chủ: ${sender.guidance}`
-        : `Chưa đủ điều kiện giao hàng khuôn mặt: ${issues.join(' · ')}. Cả hai bên phải có avatar READY do Admin duyệt.`;
+      receiver.status === 'ERROR'
+        ? `Không kiểm tra được trạng thái khuôn mặt người nhận từ máy chủ: ${receiver.guidance}`
+        : `Chưa đủ điều kiện giao hàng khuôn mặt: Người nhận (${receiver.statusLabel}). Chỉ người nhận cần avatar READY do Admin duyệt (người giao dùng mã QR).`;
     return {
-      enabled: sender.enabled && receiver.enabled,
+      enabled: receiver.enabled,
       ready: false,
-      sender,
+      sender: null,
       receiver,
       summaryMessage: blockingReason,
       blockingReason,
@@ -548,9 +612,10 @@ export function evaluateDeliveryFaceReadiness(input: {
   return {
     enabled: true,
     ready: true,
-    sender,
+    sender: null,
     receiver,
-    summaryMessage: 'Người gửi và người nhận đều đã được duyệt khuôn mặt (READY).',
+    summaryMessage:
+      'Người nhận đã được duyệt khuôn mặt (READY). Người giao sẽ hiển thị mã QR tại Điểm A; người nhận xác thực khuôn mặt tại Điểm B.',
     blockingReason: null,
   };
 }
@@ -572,40 +637,30 @@ export async function loadPairFaceReadiness(params: {
   const hasSender = UUID_PATTERN.test(senderId);
   const hasReceiver = UUID_PATTERN.test(receiverId);
 
-  const [senderRes, receiverRes] = await Promise.all([
-    hasSender
-      ? params.fetchFaceStatus(senderId).then(
-          data => ({ ok: true as const, data }),
-          err => ({ ok: false as const, error: (err as { message?: string })?.message || 'Không đọc được trạng thái khuôn mặt.' }),
-        )
-      : Promise.resolve(null),
-    hasReceiver
-      ? (hasSender && receiverId === senderId
-          ? null
-          : params.fetchFaceStatus(receiverId).then(
-              data => ({ ok: true as const, data }),
-              err => ({ ok: false as const, error: (err as { message?: string })?.message || 'Không đọc được trạng thái khuôn mặt.' }),
-            ))
-      : Promise.resolve(null),
-  ]);
+  const receiverRes = hasReceiver
+    ? await params.fetchFaceStatus(receiverId).then(
+        data => ({ ok: true as const, data }),
+        err => ({
+          ok: false as const,
+          error: (err as { message?: string })?.message || 'Không đọc được trạng thái khuôn mặt.',
+        }),
+      )
+    : null;
 
-  const effectiveReceiverRes = hasReceiver && hasSender && receiverId === senderId ? senderRes : receiverRes;
-  const senderStatus = senderRes && senderRes.ok ? senderRes.data : null;
-  const receiverStatus = effectiveReceiverRes && effectiveReceiverRes.ok ? effectiveReceiverRes.data : null;
-  const senderError = senderRes && !senderRes.ok ? senderRes.error : null;
-  const receiverError = effectiveReceiverRes && !effectiveReceiverRes.ok ? effectiveReceiverRes.error : null;
+  const receiverStatus = receiverRes && receiverRes.ok ? receiverRes.data : null;
+  const receiverError = receiverRes && !receiverRes.ok ? receiverRes.error : null;
 
   const evaluation = evaluateDeliveryFaceReadiness({
     senderAccountId: hasSender ? senderId : null,
     receiverAccountId: hasReceiver ? receiverId : null,
-    senderStatus,
+    senderStatus: null,
     receiverStatus,
-    senderError,
+    senderError: null,
     receiverError,
   });
 
   return {
-    senderStatus,
+    senderStatus: null,
     receiverStatus,
     evaluation,
     stale: !isCurrent(),
@@ -648,11 +703,17 @@ export function evaluateFaceAuthRuntimeState(input: {
   const delivery = input.delivery;
   const method = jobAuthenticationMethod(job, delivery);
 
-  if (!job || method !== 'FACE_VERIFICATION') {
+  if (
+    !job ||
+    method !== 'FACE_VERIFICATION' ||
+    (!input.trackedAuthStepId &&
+      input.trackedPurpose !== 'DELIVERY_RECEIVER' &&
+      !isCurrentStepFaceStage(job, delivery))
+  ) {
     return {
       stage: 'NOT_FACE_JOB',
-      phase: 'sender',
-      purpose: 'DELIVERY_SENDER',
+      phase: 'receiver',
+      purpose: 'DELIVERY_RECEIVER',
       expectedPersonName: '',
       myTurn: false,
       remainingSeconds: null,
@@ -667,25 +728,26 @@ export function evaluateFaceAuthRuntimeState(input: {
   const faceAuthSteps = allSteps.filter(
     step =>
       step.stepTypeSnapshot === 'AUTHENTICATE' &&
-      step.resolvedInputsJson?.method === 'FACE_VERIFICATION',
+      step.resolvedInputsJson?.method === 'FACE_VERIFICATION' &&
+      step.resolvedInputsJson?.purpose !== 'DELIVERY_SENDER',
   );
 
   let authStep: JobStepResponse | undefined;
   if (input.trackedAuthStepId) {
     authStep = allSteps.find(step => step.jobStepId === input.trackedAuthStepId);
   }
-  if (!authStep && runningStep?.stepTypeSnapshot === 'AUTHENTICATE' && runningStep.resolvedInputsJson?.method === 'FACE_VERIFICATION') {
+  if (
+    !authStep &&
+    runningStep?.stepTypeSnapshot === 'AUTHENTICATE' &&
+    runningStep.resolvedInputsJson?.method === 'FACE_VERIFICATION' &&
+    runningStep.resolvedInputsJson?.purpose !== 'DELIVERY_SENDER'
+  ) {
     authStep = runningStep;
   }
-  if (!authStep && input.trackedPurpose) {
-    authStep = faceAuthSteps.find(step => step.resolvedInputsJson?.purpose === input.trackedPurpose);
-  }
   if (!authStep) {
-    const runningPhase = deliveryPhase(runningStep);
-    if (runningPhase) {
-      const targetPurpose = runningPhase === 'receiver' ? 'DELIVERY_RECEIVER' : 'DELIVERY_SENDER';
-      authStep = faceAuthSteps.find(step => step.resolvedInputsJson?.purpose === targetPurpose);
-    }
+    authStep = faceAuthSteps.find(
+      step => step.resolvedInputsJson?.purpose === 'DELIVERY_RECEIVER',
+    );
   }
   if (!authStep) {
     authStep =
@@ -695,30 +757,16 @@ export function evaluateFaceAuthRuntimeState(input: {
       faceAuthSteps[faceAuthSteps.length - 1];
   }
 
-  const phase: DeliveryPhase =
-    deliveryPhase(authStep) ||
-    deliveryPhase(runningStep) ||
-    (input.trackedPurpose === 'DELIVERY_RECEIVER'
-      ? 'receiver'
-      : input.trackedPurpose === 'DELIVERY_SENDER'
-      ? 'sender'
-      : delivery?.pickedUpAt
-      ? 'receiver'
-      : 'sender');
-  const purpose: AuthVerificationPurpose = phase === 'receiver' ? 'DELIVERY_RECEIVER' : 'DELIVERY_SENDER';
+  const phase: DeliveryPhase = 'receiver';
+  const purpose: AuthVerificationPurpose = 'DELIVERY_RECEIVER';
 
   const expectedAccountId = expectedDeliveryAccount(job, phase, delivery);
   const myTurn =
     !expectedAccountId ||
     Boolean(input.currentAccountId && expectedAccountId === input.currentAccountId.toLowerCase());
-  const expectedPersonName =
-    phase === 'receiver'
-      ? myTurn
-        ? 'Bạn (Người nhận hàng)'
-        : delivery?.recipientName || 'Nhân viên nhận hàng'
-      : myTurn
-      ? 'Bạn (Người gửi hàng)'
-      : 'Nhân viên gửi hàng';
+  const expectedPersonName = myTurn
+    ? 'Bạn (Người nhận hàng)'
+    : delivery?.recipientName || 'Nhân viên nhận hàng';
 
   const expiresAt = typeof authStep?.resultJson?.expires_at === 'string' ? authStep.resultJson.expires_at : null;
   const expiresMs = expiresAt ? Date.parse(expiresAt) : NaN;
@@ -758,10 +806,7 @@ export function evaluateFaceAuthRuntimeState(input: {
       expiresAt,
       remainingSeconds,
       reasonCode,
-      title:
-        phase === 'sender'
-          ? 'Đã xác thực khuôn mặt người gửi'
-          : 'Đã xác thực khuôn mặt người nhận',
+      title: 'Đã xác thực khuôn mặt người nhận',
       message: 'Máy chủ đã xác nhận khuôn mặt khớp và cấp quyền mở khóa ngăn hàng.',
       canRetryRefresh: true,
     };
@@ -868,7 +913,7 @@ export function evaluateFaceAuthRuntimeState(input: {
         remainingSeconds,
         reasonCode,
         title: `Đang chờ ${expectedPersonName} xác thực khuôn mặt`,
-        message: `Camera robot tại ${phase === 'sender' ? 'Điểm lấy hàng (A)' : 'Điểm giao hàng (B)'} đang chờ đúng ${expectedPersonName} đứng trước robot để xác thực.`,
+        message: `Camera robot tại Điểm giao hàng (B) đang chờ đúng ${expectedPersonName} đứng trước robot để xác thực.`,
         canRetryRefresh: true,
       };
     }
@@ -924,9 +969,7 @@ export function evaluateFaceAuthRuntimeState(input: {
       remainingSeconds,
       reasonCode,
       title: `Camera Robot đang chờ quét khuôn mặt (${expectedPersonName})`,
-      message: `Hãy để ${expectedPersonName} đứng yên trước Camera của Robot tại ${
-        phase === 'sender' ? 'Điểm lấy hàng (A)' : 'Điểm giao hàng (B)'
-      }. Sau khi máy chủ xác thực thành công, Servo mới mở khóa (không dùng QR).`,
+      message: `Hãy để ${expectedPersonName} đứng yên trước Camera của Robot tại Điểm giao hàng (B). Sau khi máy chủ xác thực thành công, Servo mới mở khóa (không dùng QR).`,
       canRetryRefresh: true,
     };
   }
@@ -942,10 +985,7 @@ export function evaluateFaceAuthRuntimeState(input: {
     expiresAt,
     remainingSeconds,
     reasonCode,
-    title:
-      phase === 'sender'
-        ? 'Chờ Robot tới Điểm A để bật Camera xác thực khuôn mặt'
-        : 'Chờ Robot tới Điểm B để bật Camera xác thực khuôn mặt',
+    title: 'Chờ Robot tới Điểm B để bật Camera xác thực khuôn mặt',
     message: `Người cần đứng trước Camera Robot ở chặng này: ${expectedPersonName}. Đơn sử dụng xác thực khuôn mặt (không mở quét QR).`,
     canRetryRefresh: true,
   };

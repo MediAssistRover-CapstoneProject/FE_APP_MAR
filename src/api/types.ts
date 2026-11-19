@@ -433,6 +433,7 @@ export interface StaffFaceStatusResponse {
   status: StaffFaceStatusValue;
   avatarUrl?: string | null;
   enabled: boolean;
+  reason?: string | null;
 }
 
 export interface StaffFaceReviewRequest {

@@ -445,7 +445,7 @@ export function formatOwnFaceEnrollmentStatus(input: {
       isReadyForFaceDelivery: beConfirmed,
       needsAdminReview: !beConfirmed,
       description: beConfirmed
-        ? `Ảnh đại diện${revTag} đã được Admin duyệt và tạo mẫu sinh trắc học thành công trên máy chủ. Bạn có thể tạo và nhận đơn giao hàng bằng khuôn mặt.`
+        ? `Ảnh đại diện${revTag} đã được Admin duyệt và tạo mẫu sinh trắc học thành công trên máy chủ. Bạn có thể nhận đơn giao hàng xác thực khuôn mặt (người giao dùng mã QR).`
         : `Đang đồng bộ trạng thái sẵn sàng từ máy chủ${revTag}. Bấm Làm mới trạng thái để xác nhận.`,
       adminReviewGuidance:
         'Nếu bạn đổi ảnh đại diện mới, mẫu cũ sẽ tự động hủy và cần quản trị viên duyệt lại phiên bản mới.',

@@ -2,6 +2,7 @@ import { apiClient } from '../client';
 import { ENDPOINTS } from '../endpoints';
 import {
   StaffMeResponse,
+  StaffFaceStatusResponse,
   ShiftResponse,
   ShiftQueryParams,
   PageResponse,
@@ -16,6 +17,28 @@ export const staffApi = {
    */
   async getStaffMe(): Promise<StaffMeResponse> {
     return apiClient.get<StaffMeResponse>(ENDPOINTS.STAFF.ME);
+  },
+
+  /**
+   * Trạng thái sẵn sàng xác thực khuôn mặt & avatar revision của nhân viên
+   * Endpoint: GET /api/v1/staff/{accountId}/face-status
+   */
+  async getFaceStatus(accountId: string): Promise<StaffFaceStatusResponse> {
+    return apiClient.get<StaffFaceStatusResponse>(ENDPOINTS.STAFF.FACE_STATUS(accountId));
+  },
+
+  /**
+   * Tải ảnh đại diện của Staff lên BE/S3 (POST /api/v1/staff/me/avatar, field `file`)
+   */
+  async uploadMyAvatar(formData: FormData): Promise<StaffMeResponse> {
+    return apiClient.postMultipart<StaffMeResponse>(ENDPOINTS.STAFF.AVATAR, formData);
+  },
+
+  /**
+   * Xóa ảnh đại diện của Staff (DELETE /api/v1/staff/me/avatar)
+   */
+  async deleteMyAvatar(): Promise<StaffMeResponse> {
+    return apiClient.delete<StaffMeResponse>(ENDPOINTS.STAFF.AVATAR);
   },
 
   /**

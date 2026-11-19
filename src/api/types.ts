@@ -418,6 +418,27 @@ export interface EmergencyIncidentDto extends Partial<IncidentResponse> {
 // ----- 6. Mission & Job Types -----
 export type SecurityLevel = 'none' | 'qr' | 'face';
 export type PriorityLevel = 'high' | 'normal' | 'low';
+export type DeliveryAuthenticationMethod = 'QR_CODE' | 'FACE_VERIFICATION';
+export type StaffFaceStatusValue =
+  | 'READY'
+  | 'PENDING'
+  | 'MISSING'
+  | 'INVALID'
+  | 'REJECTED'
+  | string;
+
+export interface StaffFaceStatusResponse {
+  accountId: string;
+  avatarVersion?: string | null;
+  status: StaffFaceStatusValue;
+  avatarUrl?: string | null;
+  enabled: boolean;
+}
+
+export interface StaffFaceReviewRequest {
+  avatarVersion: string;
+  approve: boolean;
+}
 
 export interface JobDto {
   jobId: string;
@@ -477,6 +498,7 @@ export interface DeliveryResponse {
   pickupPayloadConfirmedAt?: string;
   deliveryPayloadConfirmedAt?: string;
   deliveryNote?: string;
+  authenticationMethod?: DeliveryAuthenticationMethod;
   items?: DeliveryItemResponse[];
 }
 
@@ -492,6 +514,7 @@ export interface CreateDeliveryPayload {
   deliveryDeadline?: string;
   requiresConfirmation?: boolean;
   deliveryNote?: string;
+  authenticationMethod?: DeliveryAuthenticationMethod;
   items: DeliveryItemResponse[];
 }
 
@@ -521,7 +544,7 @@ export interface AuthVerificationResponse {
   authJobStepId: string;
   actorAccountId?: string;
   usedByJobStepId?: string;
-  method: 'QR_CODE' | 'STAFF_CONFIRMATION';
+  method: 'QR_CODE' | 'FACE_VERIFICATION' | 'STAFF_CONFIRMATION';
   purpose: 'DELIVERY_SENDER' | 'DELIVERY_RECEIVER';
   requiredPermission?: string;
   issuedAt?: string;
@@ -616,8 +639,11 @@ export interface StaffProfileSummary {
   departmentCode: string;
   jobTitle: string;
   contactExtension?: string | null;
+  url?: string | null;
   active: boolean;
   createdAt: string;
+  faceStatus?: StaffFaceStatusValue | null;
+  faceAvatarVersion?: string | null;
   updatedAt: string;
 }
 

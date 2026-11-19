@@ -1,5 +1,12 @@
 import { apiClient } from '../client';
-import { PageResponse, ServiceRequestResponse, ServiceRequestStatus } from '../types';
+import {
+  DeliveryAuthenticationMethod,
+  PageResponse,
+  ServiceRequestResponse,
+  ServiceRequestStatus,
+} from '../types';
+
+export type { DeliveryAuthenticationMethod };
 
 // ========================================================
 // 1. DELIVERY REQUEST INTERFACES
@@ -35,6 +42,7 @@ export interface DeliveryCreateRequest {
   priority: number;
   note?: string;
   data?: Record<string, any>;
+  authenticationMethod?: DeliveryAuthenticationMethod;
   items: DeliveryItemRequest[];
 }
 
@@ -69,6 +77,7 @@ export interface DeliveryResponse {
   deliveryPayloadConfirmedAt?: string;
   deliveryNote?: string;
   rowVersion: number;
+  authenticationMethod?: DeliveryAuthenticationMethod;
   items: DeliveryItemResponse[];
 }
 
@@ -90,7 +99,7 @@ export interface AuthVerificationResponse {
   authJobStepId: string;
   actorAccountId: string;
   usedByJobStepId?: string;
-  method: 'QR_CODE' | 'STAFF_CONFIRMATION';
+  method: 'QR_CODE' | 'FACE_VERIFICATION' | 'STAFF_CONFIRMATION';
   purpose: AuthVerificationPurpose;
   requiredPermission: string;
   issuedAt: string;

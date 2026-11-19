@@ -7,7 +7,27 @@ import { ApiError } from './types';
  * Hỗ trợ tự động gắn Token Bearer, Timeout, bắt lỗi mạng và format dữ liệu.
  */
 
-class ApiClient {
+/**
+ * Nhận diện payload multipart (`FormData` chuẩn Web/Node hoặc `FormData` của React Native)
+ * để không gắn `Content-Type: application/json` hay gọi `JSON.stringify`.
+ */
+export function isMultipartFormData(body: unknown): body is FormData {
+  if (!body || typeof body !== 'object') return false;
+  if (typeof FormData !== 'undefined' && body instanceof FormData) {
+    return true;
+  }
+  const candidate = body as {
+    append?: unknown;
+    _parts?: unknown;
+    constructor?: { name?: string };
+  };
+  return (
+    typeof candidate.append === 'function' &&
+    (Array.isArray(candidate._parts) || candidate.constructor?.name === 'FormData')
+  );
+}
+
+export class ApiClient {
   private customBaseUrl: string | null = null;
   private token: string | null = null;
   private refreshToken: string | null = null;
@@ -59,23 +79,33 @@ class ApiClient {
   ): Promise<T> {
     const baseUrl = this.getBaseUrl();
     const url = endpoint.startsWith('http') ? endpoint : `${baseUrl}${endpoint}`;
+    const multipart = isMultipartFormData(options.body);
+
+    const callerHeaders: Record<string, string> = {};
+    if (options.headers && typeof options.headers === 'object' && !(options.headers instanceof Headers)) {
+      for (const [k, v] of Object.entries(options.headers as Record<string, string>)) {
+        if (multipart && k.toLowerCase() === 'content-type') continue;
+        if (v !== undefined) callerHeaders[k] = v;
+      }
+    }
 
     const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
+      ...(multipart ? {} : { 'Content-Type': 'application/json' }),
       Accept: 'application/json',
-      ...(options.headers as Record<string, string>),
+      ...callerHeaders,
     };
 
     if (this.token) {
       headers['Authorization'] = `Bearer ${this.token}`;
     }
 
-    // Thiết lập timeout tự ngắt nếu mạng đơ
+    // Thiết lập timeout tự ngắt nếu mạng đơ (tải tệp multipart cần thời gian lâu hơn JSON)
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), API_CONFIG.TIMEOUT_MS);
+    const timeoutMs = multipart ? Math.max(API_CONFIG.TIMEOUT_MS, 45_000) : API_CONFIG.TIMEOUT_MS;
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
-      if (__DEV__) {
+      if (typeof __DEV__ !== 'undefined' && __DEV__) {
         console.log(`[API REQUEST] ${options.method || 'GET'} ${url}`);
       }
 
@@ -89,7 +119,7 @@ class ApiClient {
 
       const responseData = await response.json().catch(() => null);
 
-      if (__DEV__) {
+      if (typeof __DEV__ !== 'undefined' && __DEV__) {
         // Responses may contain access tokens, QR proofs or authorization grants.
         console.log(`[API RESPONSE] ${response.status} ${url}`);
       }
@@ -121,7 +151,7 @@ class ApiClient {
     } catch (err: any) {
       clearTimeout(timeoutId);
 
-      if (err.name === 'AbortError') {
+      if (err?.name === 'AbortError' || controller.signal.aborted) {
         const timeoutError: ApiError = {
           status: 408,
           message: 'Kết nối mạng bị quá hạn (Timeout). Vui lòng thử lại!',
@@ -129,12 +159,30 @@ class ApiClient {
         throw timeoutError;
       }
 
-      // Lỗi mạng hoặc server không phản hồi
-      if (!err.status) {
+      // Lỗi đọc/đóng gói request trên client (ví dụ FormDataPart không đọc được bytes) hoặc lỗi mạng
+      if (!err?.status) {
+        if (typeof __DEV__ !== 'undefined' && __DEV__) {
+          console.warn('[API ERROR]', endpoint, err?.message || err);
+        }
+        if (
+          multipart &&
+          /Unsupported FormDataPart|Unsupported BodyInit|cannot be read|no such file|ENOENT/i.test(
+            String(err?.message || '')
+          )
+        ) {
+          const clientError: ApiError = {
+            status: 0,
+            code: 'CLIENT_REQUEST_ERROR',
+            message:
+              'Không thể đọc hoặc đóng gói tệp ảnh trên thiết bị. Vui lòng chọn hoặc chụp lại ảnh.',
+            details: err?.message,
+          };
+          throw clientError;
+        }
         const networkError: ApiError = {
           status: 0,
           message: 'Không thể kết nối đến máy chủ. Vui lòng kiểm tra lại mạng!',
-          details: err.message,
+          details: err?.message,
         };
         throw networkError;
       }
@@ -182,12 +230,26 @@ class ApiClient {
     return this.request<T>(endpoint, { method: 'GET', headers });
   }
 
-  // POST
+  // POST (hỗ trợ cả JSON mặc định và multipart/form-data khi body là FormData)
   public post<T>(endpoint: string, body?: any, headers?: Record<string, string>): Promise<T> {
+    const multipart = isMultipartFormData(body);
     return this.request<T>(endpoint, {
       method: 'POST',
       headers,
-      body: body ? JSON.stringify(body) : undefined,
+      body: body === undefined ? undefined : multipart ? body : JSON.stringify(body),
+    });
+  }
+
+  // POST multipart/form-data (tự để fetch tạo Content-Type và boundary)
+  public postMultipart<T>(
+    endpoint: string,
+    formData: FormData,
+    headers?: Record<string, string>
+  ): Promise<T> {
+    return this.request<T>(endpoint, {
+      method: 'POST',
+      headers,
+      body: formData,
     });
   }
 

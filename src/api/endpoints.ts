@@ -16,6 +16,9 @@ export const ENDPOINTS = {
   // 2. Thông tin nhân viên & Ca trực (Staff Profile & Shifts)
   STAFF: {
     ME: '/staff/me',
+    AVATAR: '/staff/me/avatar',
+    FACE_STATUS: (accountId: string) => `/staff/${accountId}/face-status`,
+    ADMIN_FACE_REVIEW: (accountId: string) => `/admin/staff/${accountId}/face-review`,
     SHIFTS: '/staff/shifts',
     SHIFT_DETAIL: (shiftId: string) => `/staff/shifts/${shiftId}`,
     SHIFT_CHECK_IN: (shiftId: string) => `/staff/shifts/${shiftId}/check-in`,

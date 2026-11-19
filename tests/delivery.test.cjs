@@ -520,15 +520,32 @@ test('F2: Staff face-status uses accountId, reflects READY/PENDING/MISSING/INVAL
     enabled: true,
   };
 
-  // Both READY + enabled -> ready: true
-  const bothReady = h.evaluateDeliveryFaceReadiness({
+  // Receiver READY + enabled -> ready: true EVEN WHEN sender has no READY face (sender uses QR at Point A)
+  const senderMissing = {
+    accountId: actor,
+    avatarVersion: null,
+    status: 'MISSING',
+    avatarUrl: null,
+    enabled: true,
+  };
+  const receiverOnlyReady = h.evaluateDeliveryFaceReadiness({
     senderAccountId: actor,
     receiverAccountId: receiverA,
-    senderStatus: senderReady,
+    senderStatus: senderMissing,
     receiverStatus: receiverReady,
   });
-  assert.equal(bothReady.ready, true);
-  assert.equal(bothReady.blockingReason, null);
+  assert.equal(receiverOnlyReady.ready, true);
+  assert.equal(receiverOnlyReady.blockingReason, null);
+
+  // Without sender status at all -> still ready: true
+  assert.equal(
+    h.evaluateDeliveryFaceReadiness({
+      senderAccountId: actor,
+      receiverAccountId: receiverA,
+      receiverStatus: receiverReady,
+    }).ready,
+    true,
+  );
 
   // Switch receiver to B with PENDING / MISSING / INVALID / REJECTED -> ready: false with BE-accurate reason
   for (const [status, regex] of [
@@ -547,14 +564,18 @@ test('F2: Staff face-status uses accountId, reflects READY/PENDING/MISSING/INVAL
         status,
         avatarUrl: status === 'MISSING' ? null : 'https://cdn.example/b.jpg',
         enabled: true,
+        reason: status === 'INVALID' ? 'FACE_TOO_SMALL' : null,
       },
     });
     assert.equal(evalRes.ready, false);
     assert.match(evalRes.receiver.statusLabel, regex);
+    if (status === 'INVALID') {
+      assert.match(evalRes.receiver.guidance, /Khuôn mặt trong ảnh quá nhỏ/);
+    }
   }
 
-  // Avatar change produces new avatarVersion + PENDING -> immediately invalidates readiness
-  const afterAvatarUpload = h.evaluateDeliveryFaceReadiness({
+  // Receiver avatar change -> PENDING immediately invalidates readiness; sender change -> PENDING does NOT block
+  const afterSenderAvatarUpload = h.evaluateDeliveryFaceReadiness({
     senderAccountId: actor,
     receiverAccountId: receiverA,
     senderStatus: {
@@ -564,14 +585,26 @@ test('F2: Staff face-status uses accountId, reflects READY/PENDING/MISSING/INVAL
     },
     receiverStatus: receiverReady,
   });
-  assert.equal(afterAvatarUpload.ready, false);
-  assert.equal(afterAvatarUpload.sender.status, 'PENDING');
+  assert.equal(afterSenderAvatarUpload.ready, true);
 
-  // FACE_ENABLED=false blocks face delivery
+  const afterReceiverAvatarUpload = h.evaluateDeliveryFaceReadiness({
+    senderAccountId: actor,
+    receiverAccountId: receiverA,
+    senderStatus: senderReady,
+    receiverStatus: {
+      ...receiverReady,
+      avatarVersion: '9999ffff-9999-4999-8999-999999999999',
+      status: 'PENDING',
+    },
+  });
+  assert.equal(afterReceiverAvatarUpload.ready, false);
+  assert.equal(afterReceiverAvatarUpload.receiver.status, 'PENDING');
+
+  // FACE_ENABLED=false on receiver blocks face delivery
   const featureDisabled = h.evaluateDeliveryFaceReadiness({
     senderAccountId: actor,
     receiverAccountId: receiverA,
-    senderStatus: { ...senderReady, enabled: false },
+    senderStatus: senderReady,
     receiverStatus: { ...receiverReady, enabled: false },
   });
   assert.equal(featureDisabled.enabled, false);
@@ -588,35 +621,51 @@ test('F2: Staff face-status uses accountId, reflects READY/PENDING/MISSING/INVAL
   assert.equal(mismatchedAccount.ready, false);
   assert.equal(mismatchedAccount.receiver.status, 'ACCOUNT_MISMATCH');
 
-  // Concurrent loadPairFaceReadiness detects stale caller state when receiver switched mid-flight
+  // Concurrent loadPairFaceReadiness ONLY fetches receiver face-status and detects stale caller state
   let current = true;
+  const fetchedIds = [];
   const stalePair = await h.loadPairFaceReadiness({
     senderAccountId: actor,
     receiverAccountId: receiverA,
     fetchFaceStatus: async (id) => {
+      fetchedIds.push(id);
       if (id === receiverA) current = false;
-      return id === actor ? senderReady : receiverReady;
+      return receiverReady;
     },
     stillCurrent: () => current,
   });
+  assert.deepEqual(fetchedIds, [receiverA]);
   assert.equal(stalePair.stale, true);
 });
 
-test('F3 & F4: Face step never opens QR actions, and verification success comes strictly from BE (never timer or local flag)', () => {
+test('F3 & F4: Sender shows QR on Face deliveries while Receiver strictly uses Face with BE-only verification', () => {
   const receiverId = '66666666-6666-4666-8666-666666666666';
+  const authReceiverStepId = '77777777-7777-4777-8777-777777777777';
   const authSenderStep = {
     jobStepId: stepId,
     stepCodeSnapshot: 'AUTH_SENDER',
     stepTypeSnapshot: 'AUTHENTICATE',
     status: 'RUNNING',
-    resolvedInputsJson: { method: 'FACE_VERIFICATION', purpose: 'DELIVERY_SENDER' },
+    resolvedInputsJson: { method: 'QR_CODE', purpose: 'DELIVERY_SENDER' },
     resultJson: {
-      action: 'AWAIT_FACE_VERIFICATION',
+      action: 'AWAIT_STAFF_VERIFICATION',
       job_step_id: stepId,
       expires_at: '2026-11-19T12:02:00Z',
     },
   };
-  const faceJob = {
+  const authReceiverStep = {
+    jobStepId: authReceiverStepId,
+    stepCodeSnapshot: 'AUTH_RECEIVER',
+    stepTypeSnapshot: 'AUTHENTICATE',
+    status: 'PENDING',
+    resolvedInputsJson: { method: 'FACE_VERIFICATION', purpose: 'DELIVERY_RECEIVER' },
+    resultJson: {
+      action: 'AWAIT_FACE_VERIFICATION',
+      job_step_id: authReceiverStepId,
+      expires_at: '2026-11-19T12:02:00Z',
+    },
+  };
+  const senderLegFaceJob = {
     jobId,
     status: 'RUNNING',
     selectedJobStepId: stepId,
@@ -628,7 +677,28 @@ test('F3 & F4: Face step never opens QR actions, and verification success comes 
       expected_sender_account_id: actor,
       expected_receiver_account_id: receiverId,
     },
-    steps: [authSenderStep],
+    steps: [authSenderStep, authReceiverStep],
+  };
+  const receiverLegFaceJob = {
+    jobId,
+    status: 'RUNNING',
+    selectedJobStepId: authReceiverStepId,
+    schemaVersion: 3,
+    beOrchestrated: true,
+    serviceRequestId: requestId,
+    inputJson: {
+      authentication_method: 'FACE_VERIFICATION',
+      expected_sender_account_id: actor,
+      expected_receiver_account_id: receiverId,
+    },
+    steps: [
+      {
+        ...authSenderStep,
+        status: 'SUCCEEDED',
+        resultJson: { verified: true, purpose: 'DELIVERY_SENDER', actor_account_id: actor },
+      },
+      { ...authReceiverStep, status: 'RUNNING' },
+    ],
   };
   const faceDelivery = {
     request: { serviceRequestId: requestId, requestType: 'DELIVERY', status: 'RUNNING' },
@@ -638,92 +708,145 @@ test('F3 & F4: Face step never opens QR actions, and verification success comes 
     authenticationMethod: 'FACE_VERIFICATION',
   };
 
-  // F3: scanContext MUST stay undefined on Face jobs; faceAuthContext binds exact step/account/purpose
-  assert.equal(h.scanContext(faceJob, actor, faceDelivery), undefined);
-  assert.deepEqual(h.faceAuthContext(faceJob, actor, faceDelivery), {
+  // Hybrid step inference without inputJson/delivery still recognizes FACE_VERIFICATION job
+  assert.equal(
+    h.jobAuthenticationMethod({
+      ...senderLegFaceJob,
+      inputJson: { expected_sender_account_id: actor, expected_receiver_account_id: receiverId },
+    }),
+    'FACE_VERIFICATION',
+  );
+
+  // At AUTH_SENDER on a Face job: Sender gets QR scanContext, NOT Face context
+  assert.deepEqual(h.scanContext(senderLegFaceJob, actor, faceDelivery), {
     jobId,
     stepId,
     purpose: 'DELIVERY_SENDER',
-    phase: 'sender',
     accountId: actor,
+  });
+  assert.equal(h.scanContext(senderLegFaceJob, receiverId, faceDelivery), undefined);
+  assert.equal(h.faceAuthContext(senderLegFaceJob, actor, faceDelivery), undefined);
+  assert.equal(h.isCurrentStepFaceStage(senderLegFaceJob, faceDelivery), false);
+  assert.equal(
+    h.evaluateFaceAuthRuntimeState({
+      job: senderLegFaceJob,
+      delivery: faceDelivery,
+      currentAccountId: actor,
+    }).stage,
+    'NOT_FACE_JOB',
+  );
+
+  // F3: At AUTH_RECEIVER on a Face job: scanContext MUST stay undefined (zero QR fallback); faceAuthContext binds strictly to receiver
+  assert.equal(h.scanContext(receiverLegFaceJob, receiverId, faceDelivery), undefined);
+  assert.equal(h.scanContext(receiverLegFaceJob, actor, faceDelivery), undefined);
+  assert.equal(h.faceAuthContext(receiverLegFaceJob, actor, faceDelivery), undefined);
+  assert.equal(h.isCurrentStepFaceStage(receiverLegFaceJob, faceDelivery), true);
+  assert.deepEqual(h.faceAuthContext(receiverLegFaceJob, receiverId, faceDelivery), {
+    jobId,
+    stepId: authReceiverStepId,
+    purpose: 'DELIVERY_RECEIVER',
+    phase: 'receiver',
+    accountId: receiverId,
     expiresAt: '2026-11-19T12:02:00Z',
   });
 
-  // F4: While RUNNING or NO_MATCH, isAuthStepCompleted MUST remain false
+  // F4: While RUNNING or NO_MATCH at receiver leg, isAuthStepCompleted MUST remain false
   assert.equal(
-    h.isAuthStepCompleted(faceJob, stepId, 'DELIVERY_SENDER', 'FACE_VERIFICATION', actor),
+    h.isAuthStepCompleted(receiverLegFaceJob, authReceiverStepId, 'DELIVERY_RECEIVER', 'FACE_VERIFICATION', receiverId),
     false,
   );
   const awaiting = h.evaluateFaceAuthRuntimeState({
-    job: faceJob,
+    job: receiverLegFaceJob,
     delivery: faceDelivery,
-    currentAccountId: actor,
-    trackedAuthStepId: stepId,
-    trackedPurpose: 'DELIVERY_SENDER',
+    currentAccountId: receiverId,
+    trackedAuthStepId: authReceiverStepId,
+    trackedPurpose: 'DELIVERY_RECEIVER',
     nowMs: Date.parse('2026-11-19T12:00:30Z'),
   });
   assert.equal(awaiting.stage, 'AWAITING_CAMERA_SCAN');
   assert.equal(awaiting.remainingSeconds, 90);
-  assert.equal(h.scanContext(faceJob, actor, faceDelivery), undefined);
+  assert.equal(h.scanContext(receiverLegFaceJob, receiverId, faceDelivery), undefined);
 
   // Mismatch (NO_MATCH) stays FACE_VERIFICATION with clear message & zero QR fallback
   const mismatchJob = {
-    ...faceJob,
-    steps: [{ ...authSenderStep, resultJson: { ...authSenderStep.resultJson, verified: false, reason: 'NO_MATCH' } }],
+    ...receiverLegFaceJob,
+    steps: [
+      receiverLegFaceJob.steps[0],
+      {
+        ...authReceiverStep,
+        status: 'RUNNING',
+        resultJson: { ...authReceiverStep.resultJson, verified: false, reason: 'NO_MATCH' },
+      },
+    ],
   };
   const mismatchState = h.evaluateFaceAuthRuntimeState({
     job: mismatchJob,
     delivery: faceDelivery,
-    currentAccountId: actor,
+    currentAccountId: receiverId,
     nowMs: Date.parse('2026-11-19T12:00:40Z'),
   });
   assert.equal(mismatchState.stage, 'MISMATCH');
   assert.match(mismatchState.message, /không tự chuyển sang QR/);
-  assert.equal(h.scanContext(mismatchJob, actor, faceDelivery), undefined);
+  assert.equal(h.scanContext(mismatchJob, receiverId, faceDelivery), undefined);
 
-  // Expired window stays non-verified and keeps Face method
+  // Expired window stays non-verified and keeps Face method for receiver
   const expiredState = h.evaluateFaceAuthRuntimeState({
-    job: { ...faceJob, status: 'FAILED', errorCode: 'FACE_SESSION_EXPIRED_OR_CHANGED', steps: [{ ...authSenderStep, status: 'FAILED' }] },
+    job: {
+      ...receiverLegFaceJob,
+      status: 'FAILED',
+      errorCode: 'FACE_SESSION_EXPIRED_OR_CHANGED',
+      steps: [receiverLegFaceJob.steps[0], { ...authReceiverStep, status: 'FAILED' }],
+    },
     delivery: faceDelivery,
-    currentAccountId: actor,
+    currentAccountId: receiverId,
     nowMs: Date.parse('2026-11-19T12:03:00Z'),
   });
   assert.equal(expiredState.stage, 'EXPIRED');
-  assert.equal(h.isAuthStepCompleted({ ...faceJob, steps: [{ ...authSenderStep, status: 'FAILED' }] }, stepId, 'DELIVERY_SENDER', 'FACE_VERIFICATION', actor), false);
+  assert.equal(
+    h.isAuthStepCompleted(
+      { ...receiverLegFaceJob, steps: [receiverLegFaceJob.steps[0], { ...authReceiverStep, status: 'FAILED' }] },
+      authReceiverStepId,
+      'DELIVERY_RECEIVER',
+      'FACE_VERIFICATION',
+      receiverId,
+    ),
+    false,
+  );
 
-  // Only BE SUCCEEDED result grants VERIFIED
+  // Only BE SUCCEEDED result on receiver grants VERIFIED
   const succeededJob = {
-    ...faceJob,
-    selectedJobStepId: 'unlock-sender-step',
+    ...receiverLegFaceJob,
+    selectedJobStepId: 'unlock-receiver-step',
     steps: [
+      receiverLegFaceJob.steps[0],
       {
-        ...authSenderStep,
+        ...authReceiverStep,
         status: 'SUCCEEDED',
         resultJson: {
           verified: true,
-          purpose: 'DELIVERY_SENDER',
-          actor_account_id: actor,
+          purpose: 'DELIVERY_RECEIVER',
+          actor_account_id: receiverId,
         },
       },
-      { jobStepId: 'unlock-sender-step', stepCodeSnapshot: 'UNLOCK_SENDER', stepTypeSnapshot: 'CONTROL_HARDWARE', status: 'RUNNING' },
+      { jobStepId: 'unlock-receiver-step', stepCodeSnapshot: 'UNLOCK_RECEIVER', stepTypeSnapshot: 'CONTROL_HARDWARE', status: 'RUNNING' },
     ],
   };
   assert.equal(
-    h.isAuthStepCompleted(succeededJob, stepId, 'DELIVERY_SENDER', 'FACE_VERIFICATION', actor),
+    h.isAuthStepCompleted(succeededJob, authReceiverStepId, 'DELIVERY_RECEIVER', 'FACE_VERIFICATION', receiverId),
     true,
   );
   assert.equal(
     h.evaluateFaceAuthRuntimeState({
       job: succeededJob,
       delivery: faceDelivery,
-      currentAccountId: actor,
-      trackedAuthStepId: stepId,
-      trackedPurpose: 'DELIVERY_SENDER',
+      currentAccountId: receiverId,
+      trackedAuthStepId: authReceiverStepId,
+      trackedPurpose: 'DELIVERY_RECEIVER',
     }).stage,
     'VERIFIED',
   );
 
-  // UI & Modal static guards: FaceScanModal has no 2200ms timer or confirm simulation; MissionScreen has no faceVerified local flag and blocks QR UI for isFaceJob
+  // UI & Modal static guards: FaceScanModal has no 2200ms timer or confirm simulation; MissionScreen enforces policy & hybrid sender QR / receiver Face
   const faceModalSrc = fs.readFileSync(path.resolve(__dirname, '../src/components/scanning/FaceScanModal.tsx'), 'utf8');
   assert.equal(faceModalSrc.includes('2200'), false);
   assert.equal(faceModalSrc.includes('useCameraPermissions'), false);
@@ -736,8 +859,10 @@ test('F3 & F4: Face step never opens QR actions, and verification success comes 
   assert.equal(/const\s+\[\s*faceVerified\b/.test(missionSrc), false);
   assert.equal(missionSrc.includes('staffApi.getFaceStatus'), true);
   assert.equal(missionSrc.includes('authenticationMethod: targetMethod'), true);
-  assert.equal(missionSrc.includes('{scan && !isFaceJob && ('), true);
-  assert.equal(missionSrc.includes('{!isFaceJob && qrContext && ('), true);
+  assert.equal(missionSrc.includes("sensitive: targetMethod === 'FACE_VERIFICATION'"), true);
+  assert.equal(missionSrc.includes('isCurrentStepFaceStage'), true);
+  assert.equal(missionSrc.includes('{scan && ('), true);
+  assert.equal(missionSrc.includes('{qrContext && ('), true);
 });
 
 test('F5 & F6: Sender face auth never unlocks Receiver step, and PAYLOAD -> DOOR_CLOSED -> LOCK_CHECKED run in strict order', () => {
@@ -766,7 +891,7 @@ test('F5 & F6: Sender face auth never unlocks Receiver step, and PAYLOAD -> DOOR
       stepCodeSnapshot: 'AUTH_SENDER',
       stepTypeSnapshot: 'AUTHENTICATE',
       status: 'SUCCEEDED',
-      resolvedInputsJson: { method: 'FACE_VERIFICATION', purpose: 'DELIVERY_SENDER' },
+      resolvedInputsJson: { method: 'QR_CODE', purpose: 'DELIVERY_SENDER' },
       resultJson: { verified: true, purpose: 'DELIVERY_SENDER', actor_account_id: actor },
       ...overrides[authSenderStepId],
     },
@@ -1394,7 +1519,17 @@ test('A5: Post-upload BE status rendering, cache sync with MissionScreen readine
   assert.equal(storeSnap.staffMe?.staffProfile?.faceAvatarVersion, 'rev-new-002');
   assert.equal(storeSnap.faceStatus?.status, 'PENDING');
 
-  const receiverReady = {
+  // When uploaded staff (`actor`) is RECEIVER, PENDING blocks readiness until Admin approves -> READY;
+  // when `actor` (`PENDING`) is SENDER and receiver (`other`) is READY, readiness is true (sender uses QR).
+  const senderReady = {
+    accountId: other,
+    avatarVersion: 'rev-sender-1',
+    status: 'MISSING',
+    enabled: true,
+    ready: false,
+    templatePresent: false,
+  };
+  const receiverReadyOther = {
     accountId: other,
     avatarUrl: 'https://s3/rx.jpg',
     avatarVersion: 'rev-rx-1',
@@ -1403,21 +1538,29 @@ test('A5: Post-upload BE status rendering, cache sync with MissionScreen readine
     ready: true,
     templatePresent: true,
   };
-  const blockedReadiness = h.evaluateDeliveryFaceReadiness({
+  const blockedAsReceiver = h.evaluateDeliveryFaceReadiness({
+    senderAccountId: other,
+    receiverAccountId: actor,
+    senderStatus: senderReady,
+    receiverStatus: storeSnap.faceStatus,
+  });
+  assert.equal(blockedAsReceiver.ready, false);
+
+  const readyAsReceiver = h.evaluateDeliveryFaceReadiness({
+    senderAccountId: other,
+    receiverAccountId: actor,
+    senderStatus: senderReady,
+    receiverStatus: { ...pendingAfterUpload, status: 'READY', ready: true, templatePresent: true },
+  });
+  assert.equal(readyAsReceiver.ready, true);
+
+  const readyWhenSenderPending = h.evaluateDeliveryFaceReadiness({
     senderAccountId: actor,
     receiverAccountId: other,
     senderStatus: storeSnap.faceStatus,
-    receiverStatus: receiverReady,
+    receiverStatus: receiverReadyOther,
   });
-  assert.equal(blockedReadiness.ready, false);
-
-  const readyReadiness = h.evaluateDeliveryFaceReadiness({
-    senderAccountId: actor,
-    receiverAccountId: other,
-    senderStatus: { ...pendingAfterUpload, status: 'READY', ready: true, templatePresent: true },
-    receiverStatus: receiverReady,
-  });
-  assert.equal(readyReadiness.ready, true);
+  assert.equal(readyWhenSenderPending.ready, true);
 
   // StaffHeader.tsx wiring invariants: camera permissions, ExpoFile.pickFileAsync, executeStaffAvatarUpload, uploadMyAvatar, NO admin face-review call
   const headerSrc = fs.readFileSync(path.resolve(__dirname, '../src/components/common/StaffHeader.tsx'), 'utf8');

@@ -10,8 +10,11 @@ export async function loadDeliveryAttempt(scope: string): Promise<DeliveryAttemp
   const raw = await AsyncStorage.getItem(keyFor(scope));
   if (!raw) return null;
   const value = JSON.parse(raw) as DeliveryAttempt;
+  const method = value?.payload?.authenticationMethod;
+  const invalidMethod =
+    method !== undefined && method !== 'QR_CODE' && method !== 'FACE_VERIFICATION';
   if (!value || typeof value.key !== 'string' || !value.payload || !UUID_PATTERN.test(value.payload.mapId) ||
-      !Array.isArray(value.payload.items) || (value.requestId && !UUID_PATTERN.test(value.requestId))) {
+      !Array.isArray(value.payload.items) || invalidMethod || (value.requestId && !UUID_PATTERN.test(value.requestId))) {
     throw new Error('Không đọc được yêu cầu đang chờ. Kiểm tra lịch sử delivery trước khi tạo yêu cầu mới.');
   }
   return value;

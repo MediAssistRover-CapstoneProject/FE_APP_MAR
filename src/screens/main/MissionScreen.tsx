@@ -33,6 +33,7 @@ import {
   OnDutyStaffResponse,
   RoomDto,
   ShiftResponse,
+  StaffFaceStatusResponse,
   StaffMeResponse,
   UserProfileResponse,
 } from '../../api/types';
@@ -76,14 +77,25 @@ import {
 import {
   continueDeliverySubmission,
   deliveryPhase,
+  evaluateDeliveryFaceReadiness,
+  evaluateFaceAuthRuntimeState,
   expectedDeliveryAccount,
+  faceAuthContext,
+  getDeliveryStepLabel,
   handoffResponse,
   handoffResponseKey,
+  isAuthStepCompleted,
+  jobAuthenticationMethod,
+  loadPairFaceReadiness,
+  prepareDeliveryAttempt,
+  resolveAuthenticationMethod,
   scanContext,
   selectedRunningStep,
+  shouldDiscardAttemptForMethodChange,
   UUID_PATTERN,
   verificationMatches,
   type DeliveryAttempt,
+  type DeliveryFaceAuthContext,
   type DeliveryScanContext,
 } from './deliveryHandoff';
 import { robotDeliveryProof } from './robotDeliveryProof';
@@ -233,12 +245,17 @@ export const MissionScreen: React.FC = () => {
     endpoint: EndpointResponse;
   }
 
+  const staffProfile = useStaffProfileStore((s) => s.staffMe?.staffProfile);
+
   const [authMode, setAuthMode] = useState<DeliveryAuthMode>('qr');
   const [showAuthModeSheet, setShowAuthModeSheet] = useState(false);
   const [showAuthGuideDetail, setShowAuthGuideDetail] = useState(false);
   const [showMapSheet, setShowMapSheet] = useState(false);
-  const [showFaceScan, setShowFaceScan] = useState(false);
-  const [faceVerified, setFaceVerified] = useState(false);
+  const [senderFaceStatus, setSenderFaceStatus] = useState<StaffFaceStatusResponse | null>(null);
+  const [receiverFaceStatus, setReceiverFaceStatus] = useState<StaffFaceStatusResponse | null>(null);
+  const [senderFaceError, setSenderFaceError] = useState<string | null>(null);
+  const [receiverFaceError, setReceiverFaceError] = useState<string | null>(null);
+  const [isLoadingFaceStatus, setIsLoadingFaceStatus] = useState(false);
   const [selectedTasks, setSelectedTasks] = useState<TaskType[]>(['van_chuyen_thuoc']);
   const [itemName, setItemName] = useState('Thuốc theo toa / Vật tư y tế');
   const [quantity, setQuantity] = useState('1');
@@ -281,7 +298,13 @@ export const MissionScreen: React.FC = () => {
   const [isSendingStepResponse, setIsSendingStepResponse] = useState(false);
   const [respondedStepId, setRespondedStepId] = useState('');
   const [scan, setScan] = useState<DeliveryScanContext | null>(null);
+  const [faceMonitorContext, setFaceMonitorContext] = useState<DeliveryFaceAuthContext | null>(null);
   const [recentQrVerified, setRecentQrVerified] = useState<{
+    jobId: string;
+    purpose: AuthVerificationPurpose;
+    at: number;
+  } | null>(null);
+  const [recentFaceVerified, setRecentFaceVerified] = useState<{
     jobId: string;
     purpose: AuthVerificationPurpose;
     at: number;
@@ -291,6 +314,7 @@ export const MissionScreen: React.FC = () => {
   const [attemptReady, setAttemptReady] = useState(false);
   const selectedJobId = useRef<string | null>(null);
   const jobReadRevision = useRef(0);
+  const faceStatusReqIdRef = useRef(0);
   const stepInFlight = useRef(false);
   const submitInFlight = useRef(false);
   const attemptRef = useRef<DeliveryAttempt | null>(null);
@@ -653,7 +677,9 @@ export const MissionScreen: React.FC = () => {
     if (selectedJobId.current !== target) {
       selectedJobId.current = target;
       setScan(null);
+      setFaceMonitorContext(null);
       setRecentQrVerified(null);
+      setRecentFaceVerified(null);
       setSnapshot(null);
       setRespondedStepId('');
     }
@@ -673,6 +699,8 @@ export const MissionScreen: React.FC = () => {
     (job: JobResponse) => {
       const d = job.serviceRequestId ? deliveriesMap[job.serviceRequestId] : undefined;
       const input = (job.inputJson || {}) as Record<string, any>;
+      const authMethod = jobAuthenticationMethod(job, d);
+      const authMethodLabel = authMethod === 'FACE_VERIFICATION' ? 'Khuôn mặt' : 'Mã QR';
 
       // 1. Tên hàng hoặc loại giao hàng
       let title = 'Nhiệm vụ giao hàng';
@@ -768,6 +796,8 @@ export const MissionScreen: React.FC = () => {
         statusLabel,
         statusColor,
         statusBg,
+        authMethod,
+        authMethodLabel,
       };
     },
     [deliveriesMap, rooms, allEndpoints]
@@ -953,9 +983,85 @@ export const MissionScreen: React.FC = () => {
     }
   }, [currentSenderAccount?.accountId, user?.accountId, roomsById, endpointsById]);
 
+  const senderAccountId = (currentSenderAccount?.accountId || user?.accountId || '').trim().toLowerCase();
+  const normalizedReceiverId = receiverAccountId.trim().toLowerCase();
+
+  const faceReadiness = useMemo(
+    () =>
+      evaluateDeliveryFaceReadiness({
+        senderAccountId,
+        receiverAccountId: normalizedReceiverId,
+        senderStatus: senderFaceStatus,
+        receiverStatus: receiverFaceStatus,
+        senderError: senderFaceError,
+        receiverError: receiverFaceError,
+      }),
+    [
+      senderAccountId,
+      normalizedReceiverId,
+      senderFaceStatus,
+      receiverFaceStatus,
+      senderFaceError,
+      receiverFaceError,
+    ]
+  );
+
+  const refreshFaceReadiness = useCallback(
+    async (forceProfileRefresh = false) => {
+      const reqId = ++faceStatusReqIdRef.current;
+      const requestScope = scopeRef.current;
+      let effectiveSenderId = (currentSenderAccount?.accountId || user?.accountId || '').trim().toLowerCase();
+      const effectiveReceiverId = receiverAccountId.trim().toLowerCase();
+
+      setIsLoadingFaceStatus(true);
+      setSenderFaceError(null);
+      setReceiverFaceError(null);
+
+      if (forceProfileRefresh) {
+        try {
+          const profileRes = await useStaffProfileStore.getState().ensureLoaded(true);
+          const refreshedSenderId = profileRes?.staffMe?.account?.accountId;
+          if (refreshedSenderId) {
+            effectiveSenderId = refreshedSenderId.trim().toLowerCase();
+          }
+        } catch {
+          // Giữ nguyên accountId hiện tại nếu không làm mới được staff/me
+        }
+      }
+
+      try {
+        const result = await loadPairFaceReadiness({
+          senderAccountId: effectiveSenderId,
+          receiverAccountId: effectiveReceiverId,
+          fetchFaceStatus: (accountId) => staffApi.getFaceStatus(accountId),
+          stillCurrent: () =>
+            scopeRef.current === requestScope && faceStatusReqIdRef.current === reqId,
+        });
+
+        if (result.stale) return null;
+
+        setSenderFaceStatus(result.senderStatus);
+        setReceiverFaceStatus(result.receiverStatus);
+        setSenderFaceError(
+          result.evaluation.sender?.status === 'ERROR' ? result.evaluation.sender.guidance : null
+        );
+        setReceiverFaceError(
+          result.evaluation.receiver?.status === 'ERROR' ? result.evaluation.receiver.guidance : null
+        );
+        return result.evaluation;
+      } finally {
+        if (scopeRef.current === requestScope && faceStatusReqIdRef.current === reqId) {
+          setIsLoadingFaceStatus(false);
+        }
+      }
+    },
+    [currentSenderAccount?.accountId, user?.accountId, receiverAccountId]
+  );
+
   useEffect(() => {
     selectedJobId.current = null;
     attemptRef.current = null;
+    faceStatusReqIdRef.current += 1;
     deliveriesMapRef.current = {};
     verifiedJobsMapRef.current = {};
     notificationInFlightRef.current = false;
@@ -966,7 +1072,9 @@ export const MissionScreen: React.FC = () => {
     stepInFlight.current = false;
     setSnapshot(null);
     setScan(null);
+    setFaceMonitorContext(null);
     setRecentQrVerified(null);
+    setRecentFaceVerified(null);
     setRecentJobs([]);
     setManualJobIdInput('');
     setJobError('');
@@ -978,9 +1086,17 @@ export const MissionScreen: React.FC = () => {
     setReceiver('');
     setSelectedReceiverStaff(null);
     setUseManualReceiver(false);
+    setSenderFaceStatus(null);
+    setReceiverFaceStatus(null);
+    setSenderFaceError(null);
+    setReceiverFaceError(null);
+    setIsLoadingFaceStatus(false);
     void loadDeliveryAttempt(scope).then(attempt => {
       if (scopeRef.current !== scope) return;
       attemptRef.current = attempt;
+      if (attempt?.payload?.authenticationMethod) {
+        setAuthMode(attempt.payload.authenticationMethod === 'FACE_VERIFICATION' ? 'face' : 'qr');
+      }
       setPendingDeliveryLabel(attempt ? attempt.submitted ? 'Tìm lại Job' : attempt.requestId ? 'Gửi lại yêu cầu đã tạo' : 'Thử lại yêu cầu' : '');
       setAttemptReady(true);
     }).catch(error => {
@@ -989,6 +1105,24 @@ export const MissionScreen: React.FC = () => {
     void loadRecentJobsAndDetail();
     void loadDeliveryNotifications();
   }, [scope, user?.accountId, loadRecentJobsAndDetail, loadDeliveryNotifications]);
+
+  // Kiểm tra trạng thái khuôn mặt khi chọn chế độ Face, đổi người nhận, đổi avatar hoặc tài khoản
+  useEffect(() => {
+    if (authMode !== 'face' || !isFocused || appState !== 'active') return;
+    void refreshFaceReadiness(false);
+  }, [
+    authMode,
+    isFocused,
+    appState,
+    scope,
+    senderAccountId,
+    normalizedReceiverId,
+    selectedReceiverStaff?.avatarUrl,
+    staffProfile?.faceAvatarVersion,
+    staffProfile?.url,
+    staffProfile?.faceStatus,
+    refreshFaceReadiness,
+  ]);
 
   // Kiểm tra lại thông báo giao hàng & danh sách nhiệm vụ khi mở lại tab Nhiệm vụ hoặc app quay lại foreground
   useEffect(() => {
@@ -1000,8 +1134,11 @@ export const MissionScreen: React.FC = () => {
     if (isFocused && appState === 'active' && (becameFocused || becameForeground)) {
       void loadDeliveryNotifications();
       void loadRecentJobsAndDetail(selectedJobId.current || undefined);
+      if (authMode === 'face') {
+        void refreshFaceReadiness(true);
+      }
     }
-  }, [isFocused, appState, loadDeliveryNotifications, loadRecentJobsAndDetail]);
+  }, [isFocused, appState, authMode, loadDeliveryNotifications, loadRecentJobsAndDetail, refreshFaceReadiness]);
 
   const notificationPollingPlan = getDeliveryNotificationPollingPlan({ isFocused, appState });
   useEffect(() => {
@@ -1012,13 +1149,23 @@ export const MissionScreen: React.FC = () => {
     return () => clearInterval(timer);
   }, [notificationPollingPlan.active, notificationPollingPlan.intervalMs, loadDeliveryNotifications]);
 
+  const activeJobMethod = jobAuthenticationMethod(activeJob, snapshot?.delivery);
+  const isFaceJob = activeJobMethod === 'FACE_VERIFICATION';
   const currentStep = activeJob?.steps?.find(step => step.jobStepId === activeJob.selectedJobStepId);
   const currentStepCode = currentStep?.stepCodeSnapshot;
   const runningStep = selectedRunningStep(activeJob);
   const phase = deliveryPhase(runningStep);
   const assignedAccount = expectedDeliveryAccount(activeJob, phase, snapshot?.delivery);
   const myTurn = !assignedAccount || !user?.accountId || assignedAccount === user.accountId.toLowerCase();
-  const qrContext = scanContext(activeJob, user?.accountId, snapshot?.delivery);
+  const qrContext = isFaceJob ? undefined : scanContext(activeJob, user?.accountId, snapshot?.delivery);
+  const faceContext = isFaceJob ? faceAuthContext(activeJob, user?.accountId, snapshot?.delivery) : undefined;
+  const faceRuntimeState = isFaceJob
+    ? evaluateFaceAuthRuntimeState({
+        job: activeJob,
+        delivery: snapshot?.delivery,
+        currentAccountId: user?.accountId,
+      })
+    : null;
   const response = myTurn
     ? handoffResponse(runningStep)
     : undefined;
@@ -1028,8 +1175,11 @@ export const MissionScreen: React.FC = () => {
     appState,
     jobStatus: activeJob?.status,
     stepCode: currentStepCode,
-    isQrModalOpen: Boolean(scan),
-    hasRecentQrVerified: Boolean(recentQrVerified && activeJob && recentQrVerified.jobId === activeJob.jobId),
+    isQrModalOpen: Boolean(scan || faceMonitorContext),
+    hasRecentQrVerified: Boolean(
+      (recentQrVerified && activeJob && recentQrVerified.jobId === activeJob.jobId) ||
+      (recentFaceVerified && activeJob && recentFaceVerified.jobId === activeJob.jobId)
+    ),
     hasPendingResponseButton: Boolean(response),
   });
 
@@ -1082,6 +1232,20 @@ export const MissionScreen: React.FC = () => {
     [refreshSelectedJob, scrollToHandoffControls]
   );
 
+  const handleFaceVerifiedRedirect = useCallback(
+    (verifiedFace: DeliveryFaceAuthContext) => {
+      setFaceMonitorContext(null);
+      setRecentFaceVerified({
+        jobId: verifiedFace.jobId,
+        purpose: verifiedFace.purpose,
+        at: Date.now(),
+      });
+      void refreshSelectedJob(verifiedFace.jobId).catch(() => {});
+      scrollToHandoffControls();
+    },
+    [refreshSelectedJob, scrollToHandoffControls]
+  );
+
   useEffect(() => {
     if (!recentQrVerified) return;
     if (
@@ -1096,14 +1260,59 @@ export const MissionScreen: React.FC = () => {
   }, [recentQrVerified, activeJob, currentStepCode]);
 
   useEffect(() => {
+    if (!recentFaceVerified) return;
     if (
-      recentQrVerified &&
-      activeJob?.jobId === recentQrVerified.jobId &&
-      response
+      !activeJob ||
+      activeJob.jobId !== recentFaceVerified.jobId ||
+      activeJob.status !== 'RUNNING' ||
+      currentStepCode === 'MOVE_RECEIVER' ||
+      (currentStepCode === 'AUTH_RECEIVER' && recentFaceVerified.purpose === 'DELIVERY_SENDER')
     ) {
+      setRecentFaceVerified(null);
+    }
+  }, [recentFaceVerified, activeJob, currentStepCode]);
+
+  // Đồng bộ banner đã xác thực khuôn mặt khi BE tự chuyển bước AUTH_* -> SUCCEEDED lúc staff đang mở tab Nhiệm vụ
+  useEffect(() => {
+    if (!activeJob || !isFaceJob || activeJob.status !== 'RUNNING' || activeJob.cancelRequestedAt) return;
+    if (!currentStepCode || !phase) return;
+    if (!['UNLOCK_SENDER', 'PAYLOAD_SENDER', 'CLOSE_SENDER', 'UNLOCK_RECEIVER', 'PAYLOAD_RECEIVER', 'CLOSE_RECEIVER'].includes(currentStepCode)) {
+      return;
+    }
+    const targetPurpose: AuthVerificationPurpose =
+      phase === 'receiver' ? 'DELIVERY_RECEIVER' : 'DELIVERY_SENDER';
+    const matchingAuthStep = (activeJob.steps || []).find(
+      (s) =>
+        s.stepTypeSnapshot === 'AUTHENTICATE' &&
+        s.resolvedInputsJson?.method === 'FACE_VERIFICATION' &&
+        s.resolvedInputsJson?.purpose === targetPurpose
+    );
+    if (
+      matchingAuthStep &&
+      isAuthStepCompleted(activeJob, matchingAuthStep.jobStepId, targetPurpose, 'FACE_VERIFICATION')
+    ) {
+      setRecentFaceVerified((prev) => {
+        if (prev && prev.jobId === activeJob.jobId && prev.purpose === targetPurpose) return prev;
+        return { jobId: activeJob.jobId, purpose: targetPurpose, at: Date.now() };
+      });
+    }
+  }, [activeJob, isFaceJob, currentStepCode, phase]);
+
+  useEffect(() => {
+    const activeVerified =
+      (recentQrVerified && activeJob?.jobId === recentQrVerified.jobId) ||
+      (recentFaceVerified && activeJob?.jobId === recentFaceVerified.jobId);
+    if (activeVerified && response) {
       scrollToHandoffControls();
     }
-  }, [recentQrVerified, activeJob?.jobId, response?.responseType, runningStep?.jobStepId, scrollToHandoffControls]);
+  }, [
+    recentQrVerified,
+    recentFaceVerified,
+    activeJob?.jobId,
+    response?.responseType,
+    runningStep?.jobStepId,
+    scrollToHandoffControls,
+  ]);
 
   const verifyDeliveryQr = async (context: DeliveryScanContext, raw: string) => {
     const proof = robotDeliveryProof(raw, context);
@@ -1163,7 +1372,14 @@ export const MissionScreen: React.FC = () => {
   const quantityCheck = validateQuantity(quantity);
 
   const submitValidationMessage = useMemo(() => {
-    if (attemptRef.current) return null;
+    const activePendingMethod = resolveAuthenticationMethod(authMode);
+    if (
+      attemptRef.current &&
+      pendingDeliveryLabel &&
+      !shouldDiscardAttemptForMethodChange(attemptRef.current, activePendingMethod)
+    ) {
+      return null;
+    }
     if (!activeMap) return 'Chưa chọn bản đồ hoạt động.';
     if (senderDutyReason) return senderDutyReason;
     if (!selectedPickupDuty || !pickupEndpoint) {
@@ -1187,8 +1403,16 @@ export const MissionScreen: React.FC = () => {
     if (!quantityCheck.valid) {
       return quantityCheck.error || 'Vui lòng nhập số lượng hợp lệ.';
     }
-    if (authMode === 'face' && !faceVerified) {
-      return 'Nhiệm vụ này cần chụp / xác nhận khuôn mặt người nhận trước khi tạo.';
+    if (authMode === 'face') {
+      if (isLoadingFaceStatus && !faceReadiness.ready) {
+        return 'Đang kiểm tra trạng thái khuôn mặt trên máy chủ...';
+      }
+      if (!faceReadiness.ready) {
+        return (
+          faceReadiness.blockingReason ||
+          'Cả người gửi và người nhận đều phải có ảnh đại diện READY được Admin duyệt trước khi tạo đơn khuôn mặt.'
+        );
+      }
     }
     return null;
   }, [
@@ -1204,10 +1428,19 @@ export const MissionScreen: React.FC = () => {
     quantityCheck.valid,
     quantityCheck.error,
     authMode,
-    faceVerified,
+    pendingDeliveryLabel,
+    isLoadingFaceStatus,
+    faceReadiness.ready,
+    faceReadiness.blockingReason,
   ]);
 
-  const canSubmit = attemptRef.current
+  const hasMatchingPendingAttempt = Boolean(
+    attemptRef.current &&
+      pendingDeliveryLabel &&
+      !shouldDiscardAttemptForMethodChange(attemptRef.current, resolveAuthenticationMethod(authMode))
+  );
+
+  const canSubmit = hasMatchingPendingAttempt
     ? !isSubmitting && attemptReady
     : !isSubmitting && !isLoadingFacility && attemptReady && !submitValidationMessage;
 
@@ -1219,6 +1452,12 @@ export const MissionScreen: React.FC = () => {
 
   const handleSelectAuthMode = useCallback((mode: DeliveryAuthMode) => {
     setAuthMode(mode);
+    const nextMethod = resolveAuthenticationMethod(mode);
+    if (shouldDiscardAttemptForMethodChange(attemptRef.current, nextMethod)) {
+      attemptRef.current = null;
+      setPendingDeliveryLabel('');
+      void saveDeliveryAttempt(scopeRef.current, null).catch(() => {});
+    }
     if (mode === 'no_auth') {
       setSelectedTasks(['van_chuyen_tai_lieu']);
       setItemName('Tài liệu y tế / Hồ sơ bệnh án');
@@ -1231,12 +1470,20 @@ export const MissionScreen: React.FC = () => {
     }
   }, []);
 
+  const handleDiscardPendingAttempt = useCallback(() => {
+    attemptRef.current = null;
+    setPendingDeliveryLabel('');
+    void saveDeliveryAttempt(scopeRef.current, null).catch(() => {});
+  }, []);
+
   const sendDelivery = async (attempt: DeliveryAttempt) => {
     if (submitInFlight.current || scopeRef.current !== scope) return;
     submitInFlight.current = true;
     attemptRef.current = attempt;
     setIsSubmitting(true);
     const current = () => scopeRef.current === scope && attemptRef.current === attempt;
+    const isFaceAttempt =
+      resolveAuthenticationMethod(attempt.payload?.authenticationMethod) === 'FACE_VERIFICATION';
     try {
       await saveDeliveryAttempt(scope, attempt);
       const job = await continueDeliverySubmission(attempt, submissionApi, current, () => saveDeliveryAttempt(scope, attempt));
@@ -1251,7 +1498,13 @@ export const MissionScreen: React.FC = () => {
       void followJob(job.jobId);
       Alert.alert(
         'Đã tạo nhiệm vụ giao hàng thành công! 🎉',
-        `Nhiệm vụ: ${itemName || 'Giao hàng y tế'}\n\nLộ trình: ${fromRoom} → ${toRoom}\n\nRobot đang di chuyển đến điểm lấy hàng. Khi robot đến nơi và kích hoạt bước xác thực, bạn hãy mở mã QR để quét mở khóa Servo.`,
+        `Nhiệm vụ: ${itemName || 'Giao hàng y tế'}\nPhương thức: ${
+          isFaceAttempt ? 'Xác thực khuôn mặt' : 'Mã QR'
+        }\n\nLộ trình: ${fromRoom} → ${toRoom}\n\n${
+          isFaceAttempt
+            ? 'Robot đang di chuyển đến điểm lấy hàng. Khi đến bước xác thực khuôn mặt, người được phân công đứng trước Camera Robot để mở khóa Servo.'
+            : 'Robot đang di chuyển đến điểm lấy hàng. Khi robot đến nơi và kích hoạt bước xác thực, bạn hãy mở mã QR để quét mở khóa Servo.'
+        }`,
         [
           { text: 'Đóng', style: 'cancel' },
           {
@@ -1286,9 +1539,16 @@ export const MissionScreen: React.FC = () => {
 
   const handleSubmit = async () => {
     if (submitInFlight.current || !attemptReady) return;
+    const targetMethod = resolveAuthenticationMethod(authMode);
     if (attemptRef.current) {
-      void sendDelivery(attemptRef.current);
-      return;
+      if (shouldDiscardAttemptForMethodChange(attemptRef.current, targetMethod)) {
+        attemptRef.current = null;
+        setPendingDeliveryLabel('');
+        await saveDeliveryAttempt(scope, null).catch(() => {});
+      } else {
+        void sendDelivery(attemptRef.current);
+        return;
+      }
     }
     if (!activeMap) {
       Alert.alert('Chưa chọn bản đồ', 'Vui lòng chọn bản đồ đang sử dụng.');
@@ -1335,16 +1595,17 @@ export const MissionScreen: React.FC = () => {
       Alert.alert('Thiếu thông tin giao hàng', 'Vui lòng nhập đầy đủ tên hàng và người nhận.');
       return;
     }
-    if (authMode === 'face' && !faceVerified) {
-      Alert.alert(
-        'Yêu cầu xác nhận khuôn mặt ⚠️',
-        'Nhiệm vụ này ở chế độ "Xác nhận khuôn mặt". Bạn cần chụp ảnh / quét khuôn mặt người nhận trước khi tạo nhiệm vụ!',
-        [
-          { text: 'Hủy', style: 'cancel' },
-          { text: 'Chụp khuôn mặt ngay', onPress: () => setShowFaceScan(true) },
-        ]
-      );
-      return;
+    if (authMode === 'face') {
+      const latestReadiness = await refreshFaceReadiness(false);
+      if (!latestReadiness || !latestReadiness.ready) {
+        Alert.alert(
+          'Chưa đủ điều kiện xác thực khuôn mặt',
+          latestReadiness?.blockingReason ||
+            faceReadiness.blockingReason ||
+            'Cần ảnh đại diện của cả người gửi và người nhận ở trạng thái READY do Admin duyệt trước khi tạo đơn khuôn mặt.'
+        );
+        return;
+      }
     }
 
     // Kiểm tra lại ca trực của người nhận trước khi gửi
@@ -1380,7 +1641,7 @@ export const MissionScreen: React.FC = () => {
         ? '[CHẾ ĐỘ: KHÔNG CẦN XÁC NHẬN - GIAO MỞ TỰ DO]'
         : authMode === 'qr'
         ? '[CHẾ ĐỘ: CẦN XÁC NHẬN QR - MỞ KHÓA SERVO]'
-        : `[CHẾ ĐỘ: XÁC NHẬN KHUÔN MẶT (FACE ID) - ĐÃ XÁC THỰC (${receiver.trim()})]`;
+        : `[CHẾ ĐỘ: XÁC THỰC KHUÔN MẶT QUA CAMERA ROBOT (${receiver.trim()})]`;
     const deliveryNote = notes.trim() ? `${modeTag} ${notes.trim()}` : modeTag;
 
     const payload = {
@@ -1395,6 +1656,7 @@ export const MissionScreen: React.FC = () => {
       receiverShiftId: receiverShiftId || selectedReceiverStaff?.shiftId || undefined,
       recipientName: receiver.trim(),
       requiresConfirmation: true,
+      authenticationMethod: targetMethod,
       priority: { high: 80, normal: 50, low: 20 }[priority],
       deliveryNote,
       items: [
@@ -1411,24 +1673,29 @@ export const MissionScreen: React.FC = () => {
 
     const modeName =
       authMode === 'no_auth'
-        ? '🔓 Không cần xác nhận (Giao mở tự do)'
+        ? '🔓 Giao mở / Mặc định QR theo BE'
         : authMode === 'qr'
         ? '🛡️ Cần xác nhận QR (Khóa Servo)'
-        : '👤 Xác nhận khuôn mặt (Face ID)';
+        : '👤 Xác thực khuôn mặt (Camera Robot)';
 
     Alert.alert(
       'Xác nhận tạo nhiệm vụ giao hàng',
-      `Phương thức: ${modeName}\nLộ trình: ${fromRoom} → ${toRoom}\nVật phẩm: ${itemName.trim()} × ${itemQuantity}\nNgười nhận: ${receiver.trim()} (${receiverId})`,
+      `Phương thức: ${modeName} (${targetMethod})\nLộ trình: ${fromRoom} → ${toRoom}\nVật phẩm: ${itemName.trim()} × ${itemQuantity}\nNgười nhận: ${receiver.trim()} (${receiverId})`,
       [
         { text: 'Hủy', style: 'cancel' },
         {
           text: 'Tạo & gửi',
           onPress: () => {
-            if (attemptRef.current || submitInFlight.current || scopeRef.current !== scope) return;
-            const key =
-              globalThis.crypto?.randomUUID?.() ||
-              'delivery-' + Date.now() + '-' + Math.random().toString(36).slice(2);
-            void sendDelivery({ key, payload });
+            if (submitInFlight.current || scopeRef.current !== scope) return;
+            if (attemptRef.current && !shouldDiscardAttemptForMethodChange(attemptRef.current, targetMethod)) return;
+            const nextAttempt = prepareDeliveryAttempt(
+              null,
+              payload,
+              () =>
+                globalThis.crypto?.randomUUID?.() ||
+                'delivery-' + Date.now() + '-' + Math.random().toString(36).slice(2)
+            );
+            void sendDelivery(nextAttempt);
           },
         },
       ]
@@ -1441,7 +1708,10 @@ export const MissionScreen: React.FC = () => {
     : 'Đã kiểm tra thùng khóa chắc';
   const canRespond = !!response && !!runningStep && !jobError && respondedStepId !== runningStep.jobStepId;
   const isVerifiedForActiveJob = Boolean(
-    activeJob && recentQrVerified && recentQrVerified.jobId === activeJob.jobId
+    !isFaceJob && activeJob && recentQrVerified && recentQrVerified.jobId === activeJob.jobId
+  );
+  const isFaceVerifiedForActiveJob = Boolean(
+    isFaceJob && activeJob && recentFaceVerified && recentFaceVerified.jobId === activeJob.jobId
   );
 
   return (
@@ -1454,7 +1724,7 @@ export const MissionScreen: React.FC = () => {
       >
         <Text style={styles.eyebrow}>GIAO NHẬN HÀNG</Text>
         <Text style={styles.title}>Nhiệm vụ của bạn</Text>
-        <Text style={styles.muted}>Theo dõi robot, quét mã tại điểm gửi và điểm nhận, xác nhận từng bước bàn giao.</Text>
+        <Text style={styles.muted}>Theo dõi robot, xác thực tại điểm gửi và điểm nhận, xác nhận từng bước bàn giao.</Text>
 
         <View
           style={styles.card}
@@ -1565,6 +1835,25 @@ export const MissionScreen: React.FC = () => {
                       </View>
                       <View
                         style={[
+                          styles.jobItemMethodBadge,
+                          info.authMethod === 'FACE_VERIFICATION'
+                            ? styles.jobItemMethodBadgeFace
+                            : styles.jobItemMethodBadgeQr,
+                        ]}
+                      >
+                        <Text
+                          style={[
+                            styles.jobItemMethodBadgeText,
+                            info.authMethod === 'FACE_VERIFICATION'
+                              ? styles.jobItemMethodBadgeTextFace
+                              : styles.jobItemMethodBadgeTextQr,
+                          ]}
+                        >
+                          {info.authMethodLabel}
+                        </Text>
+                      </View>
+                      <View
+                        style={[
                           styles.jobItemStatusBadge,
                           { backgroundColor: info.statusBg },
                         ]}
@@ -1597,7 +1886,9 @@ export const MissionScreen: React.FC = () => {
               <View style={styles.jobHeaderRow}>
                 <View style={styles.flex}>
                   <Text style={styles.heading}>{getJobDisplayInfo(activeJob).title}</Text>
-                  <Text style={styles.small}>{getJobDisplayInfo(activeJob).route}</Text>
+                  <Text style={styles.small}>
+                    {getJobDisplayInfo(activeJob).route} · Phương thức: {getJobDisplayInfo(activeJob).authMethodLabel}
+                  </Text>
                 </View>
                 <View style={[
                   styles.statusBadge,
@@ -1626,6 +1917,8 @@ export const MissionScreen: React.FC = () => {
                     <Clock size={16} color="#D97706" />
                   ) : activeJob.status === 'SUCCEEDED' ? (
                     <CheckCircle2 size={16} color="#059669" />
+                  ) : faceContext ? (
+                    <Camera size={16} color="#B45309" />
                   ) : qrContext ? (
                     <QrCode size={16} color="#0284C7" />
                   ) : (
@@ -1639,7 +1932,11 @@ export const MissionScreen: React.FC = () => {
                       : activeJob.cancelRequestedAt
                       ? 'Đang xử lý yêu cầu hủy'
                       : currentStep
-                      ? STEP_LABELS[currentStep.stepCodeSnapshot || ''] || currentStep.stepTypeSnapshot
+                      ? getDeliveryStepLabel(
+                          currentStep.stepCodeSnapshot,
+                          activeJobMethod,
+                          currentStep.stepTypeSnapshot
+                        )
                       : 'Đang trong hàng đợi điều phối Robot'}
                   </Text>
                 </View>
@@ -1647,11 +1944,19 @@ export const MissionScreen: React.FC = () => {
                   {activeJob.status === 'QUEUED'
                     ? 'Robot đang offline hoặc chưa nhận nhiệm vụ. Khi Robot sẵn sàng, hệ thống sẽ tự động điều phối Robot chạy tới Điểm A.'
                     : currentStep?.stepCodeSnapshot === 'MOVE_SENDER'
-                    ? 'Robot đang tự hành di chuyển đến Điểm lấy hàng A. Vui lòng đợi Robot tới nơi, nút hiện mã QR sẽ tự động kích hoạt.'
+                    ? isFaceJob
+                      ? 'Robot đang tự hành di chuyển đến Điểm lấy hàng A. Khi tới nơi, camera robot sẽ bật xác thực khuôn mặt người gửi.'
+                      : 'Robot đang tự hành di chuyển đến Điểm lấy hàng A. Vui lòng đợi Robot tới nơi, nút hiện mã QR sẽ tự động kích hoạt.'
                     : currentStep?.stepCodeSnapshot === 'AUTH_SENDER'
-                    ? '🟢 Robot đã đến Điểm lấy hàng A! Hãy bấm nút "Hiện mã QR" bên dưới để đưa cho Robot quét mở ngăn tủ.'
+                    ? isFaceJob
+                      ? `🟢 Robot đã đến Điểm lấy hàng A! ${
+                          faceRuntimeState?.expectedPersonName || 'Người gửi'
+                        } vui lòng đứng trước Camera Robot để xác thực khuôn mặt mở khóa Servo.`
+                      : '🟢 Robot đã đến Điểm lấy hàng A! Hãy bấm nút "Hiện mã QR" bên dưới để đưa cho Robot quét mở ngăn tủ.'
                     : currentStep?.stepCodeSnapshot === 'UNLOCK_SENDER'
-                    ? '🔓 Quét QR thành công! Robot đang mở khóa Servo ngăn tủ để bạn đặt hàng vào...'
+                    ? isFaceJob
+                      ? '🔓 Xác thực khuôn mặt thành công! Robot đang mở khóa Servo ngăn tủ để bạn đặt hàng vào...'
+                      : '🔓 Quét QR thành công! Robot đang mở khóa Servo ngăn tủ để bạn đặt hàng vào...'
                     : currentStep?.stepCodeSnapshot === 'PAYLOAD_SENDER'
                     ? '📦 Hãy đặt đủ hàng vào thùng rồi bấm nút "Xác nhận đã bỏ hàng vào thùng" bên dưới.'
                     : currentStep?.stepCodeSnapshot === 'CLOSE_SENDER'
@@ -1661,11 +1966,19 @@ export const MissionScreen: React.FC = () => {
                     : currentStep?.stepCodeSnapshot === 'VERIFY_SENDER'
                     ? '✅ Hãy kiểm tra nắp tủ đã khóa chắc chắn và bấm xác nhận bên dưới.'
                     : currentStep?.stepCodeSnapshot === 'MOVE_RECEIVER'
-                    ? 'Robot đang vận chuyển hàng đến Điểm giao hàng B...'
+                    ? isFaceJob
+                      ? 'Robot đang vận chuyển hàng đến Điểm giao hàng B. Khi tới nơi, camera robot sẽ bật xác thực khuôn mặt người nhận.'
+                      : 'Robot đang vận chuyển hàng đến Điểm giao hàng B...'
                     : currentStep?.stepCodeSnapshot === 'AUTH_RECEIVER'
-                    ? '🟢 Robot đã đến Điểm B! Người nhận bấm nút bên dưới để hiện mã QR cho Robot quét mở tủ lấy hàng.'
+                    ? isFaceJob
+                      ? `🟢 Robot đã đến Điểm B! ${
+                          faceRuntimeState?.expectedPersonName || 'Người nhận'
+                        } vui lòng đứng trước Camera Robot để xác thực khuôn mặt mở tủ lấy hàng.`
+                      : '🟢 Robot đã đến Điểm B! Người nhận bấm nút bên dưới để hiện mã QR cho Robot quét mở tủ lấy hàng.'
                     : currentStep?.stepCodeSnapshot === 'UNLOCK_RECEIVER'
-                    ? '🔓 Quét QR thành công! Robot đang mở khóa Servo ngăn tủ để bạn lấy hàng...'
+                    ? isFaceJob
+                      ? '🔓 Xác thực khuôn mặt người nhận thành công! Robot đang mở khóa Servo ngăn tủ để bạn lấy hàng...'
+                      : '🔓 Quét QR thành công! Robot đang mở khóa Servo ngăn tủ để bạn lấy hàng...'
                     : currentStep?.stepCodeSnapshot === 'PAYLOAD_RECEIVER'
                     ? '📦 Hãy lấy hàng khỏi thùng rồi bấm nút "Xác nhận đã lấy / giao hàng" bên dưới.'
                     : currentStep?.stepCodeSnapshot === 'CLOSE_RECEIVER'
@@ -1698,12 +2011,16 @@ export const MissionScreen: React.FC = () => {
               }}
               style={styles.handoffControlAnchor}
             >
-              {isVerifiedForActiveJob && (
+              {(isVerifiedForActiveJob || isFaceVerifiedForActiveJob) && (
                 <View style={styles.qrVerifiedBanner}>
                   <CheckCircle2 size={18} color="#16A34A" />
                   <View style={styles.flex}>
                     <Text style={styles.qrVerifiedBannerTitle}>
-                      {recentQrVerified?.purpose === 'DELIVERY_SENDER'
+                      {isFaceVerifiedForActiveJob
+                        ? recentFaceVerified?.purpose === 'DELIVERY_SENDER'
+                          ? 'Đã xác thực khuôn mặt người gửi thành công'
+                          : 'Đã xác thực khuôn mặt người nhận thành công'
+                        : recentQrVerified?.purpose === 'DELIVERY_SENDER'
                         ? 'Đã quét QR nhận hàng thành công'
                         : 'Đã quét QR giao hàng thành công'}
                     </Text>
@@ -1716,7 +2033,72 @@ export const MissionScreen: React.FC = () => {
                 </View>
               )}
 
-              {qrContext && (
+              {/* Nhánh FACE_VERIFICATION: không hiển thị nút QR */}
+              {isFaceJob && !response && faceRuntimeState && faceRuntimeState.stage !== 'VERIFIED' && (
+                <View
+                  style={[
+                    styles.faceRuntimeCard,
+                    (faceRuntimeState.stage === 'MISMATCH' ||
+                      faceRuntimeState.stage === 'EXPIRED' ||
+                      faceRuntimeState.stage === 'FAILED') &&
+                      styles.faceRuntimeCardWarn,
+                  ]}
+                >
+                  <View style={styles.faceRuntimeHeader}>
+                    <Camera
+                      size={18}
+                      color={
+                        faceRuntimeState.stage === 'MISMATCH' ||
+                        faceRuntimeState.stage === 'EXPIRED' ||
+                        faceRuntimeState.stage === 'FAILED'
+                          ? '#DC2626'
+                          : '#0369A1'
+                      }
+                    />
+                    <Text style={styles.faceRuntimeTitle}>{faceRuntimeState.title}</Text>
+                  </View>
+                  <Text style={styles.faceRuntimeActor}>
+                    Người cần đứng trước Camera Robot: {faceRuntimeState.expectedPersonName}
+                  </Text>
+                  <Text style={styles.faceRuntimeMessage}>{faceRuntimeState.message}</Text>
+                  {faceRuntimeState.remainingSeconds !== null && (
+                    <Text style={styles.faceRuntimeTimer}>
+                      {faceRuntimeState.remainingSeconds > 0
+                        ? `Thời gian cửa sổ quét khuôn mặt còn: ${faceRuntimeState.remainingSeconds}s`
+                        : 'Cửa sổ quét khuôn mặt đã hết hạn.'}
+                    </Text>
+                  )}
+                  <View style={styles.faceRuntimeActions}>
+                    {faceContext && (
+                      <TouchableOpacity
+                        style={[styles.button, styles.quickQrButton, styles.qrButtonActive, { flex: 1 }]}
+                        onPress={() => {
+                          setFaceMonitorContext(faceContext);
+                        }}
+                        activeOpacity={0.85}
+                      >
+                        <Camera size={18} color="#FFFFFF" />
+                        <Text style={styles.quickQrButtonText}>
+                          Theo dõi quét khuôn mặt
+                        </Text>
+                      </TouchableOpacity>
+                    )}
+                    <TouchableOpacity
+                      style={[styles.smallButton, { minHeight: 44, paddingHorizontal: 14 }]}
+                      onPress={() => {
+                        void refreshSelectedJob(activeJob.jobId).catch(() => {});
+                      }}
+                      activeOpacity={0.8}
+                    >
+                      <RefreshCw size={15} color={Colors.primary} />
+                      <Text style={styles.link}>Làm mới BE</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              )}
+
+              {/* Nhánh QR_CODE: chỉ hiển thị khi không phải đơn Face */}
+              {!isFaceJob && qrContext && (
                 <TouchableOpacity
                   style={[
                     styles.button,
@@ -1735,7 +2117,7 @@ export const MissionScreen: React.FC = () => {
                 </TouchableOpacity>
               )}
 
-              {!qrContext && !response && (
+              {!isFaceJob && !qrContext && !response && (
                 <TouchableOpacity
                   style={[
                     styles.button,
@@ -1800,7 +2182,11 @@ export const MissionScreen: React.FC = () => {
                 </TouchableOpacity>
               </View>}
             </View>
-            <Text style={styles.small}>Xác thực QR và phản hồi cơ cấu mở khóa là hai bước riêng. Hãy thực hiện theo hướng dẫn đang hiển thị.</Text>
+            <Text style={styles.small}>
+              {isFaceJob
+                ? 'Xác thực khuôn mặt qua Camera Robot và phản hồi đặt/lấy hàng, đóng nắp, khóa Servo là các bước riêng trên máy chủ.'
+                : 'Xác thực QR và phản hồi cơ cấu mở khóa là hai bước riêng. Hãy thực hiện theo hướng dẫn đang hiển thị.'}
+            </Text>
           </> : <Text style={styles.muted}>Chọn nhiệm vụ hoặc nhập Job ID để xem bước giao nhận.</Text>}
         </View>
 
@@ -1814,14 +2200,22 @@ export const MissionScreen: React.FC = () => {
             </Text>
           </View>
 
-          {!!pendingDeliveryLabel && (
+          {!!pendingDeliveryLabel && hasMatchingPendingAttempt && (
             <View style={styles.statusBox}>
               <Text style={styles.muted}>
-                Một yêu cầu đang chờ kết quả từ máy chủ. Các lần thử lại giữ nguyên nội dung ban đầu đã gửi.
+                Một yêu cầu đang chờ kết quả từ máy chủ ({resolveAuthenticationMethod(attemptRef.current?.payload?.authenticationMethod)}). Các lần thử lại giữ nguyên nội dung ban đầu đã gửi.
               </Text>
               <Text selectable style={styles.small}>
                 {attemptRef.current?.requestId || 'Đang xác định kết quả tạo yêu cầu...'}
               </Text>
+              <TouchableOpacity
+                style={[styles.smallButton, { alignSelf: 'flex-start' }]}
+                onPress={handleDiscardPendingAttempt}
+                disabled={isSubmitting}
+              >
+                <X size={14} color={Colors.danger} />
+                <Text style={[styles.link, { color: Colors.danger }]}>Hủy thử lại / Tạo đơn mới</Text>
+              </TouchableOpacity>
             </View>
           )}
 
@@ -1863,14 +2257,14 @@ export const MissionScreen: React.FC = () => {
                     ? '1. Giao mở tự do (Không cần xác nhận)'
                     : authMode === 'qr'
                     ? '2. Bảo mật quét mã QR (Khuyên dùng)'
-                    : '3. Xác thực khuôn mặt (Face ID)'}
+                    : '3. Xác thực khuôn mặt (Camera Robot)'}
                 </Text>
                 <Text style={styles.authModeSelectorSub}>
                   {authMode === 'no_auth'
                     ? 'Robot tự động mở hộc khi đến phòng nhận'
                     : authMode === 'qr'
                     ? 'Khóa Servo · Robot quét mã QR từ điện thoại'
-                    : 'Sinh trắc học · Nhận diện người nhận'}
+                    : 'Sinh trắc học · Đối chiếu avatar READY trên camera robot'}
                 </Text>
               </View>
               <ChevronDown size={20} color={Colors.textSecondary} />
@@ -1879,10 +2273,10 @@ export const MissionScreen: React.FC = () => {
             {/* Câu hướng dẫn chính */}
             <Text style={styles.authModeGuideShort}>
               {authMode === 'no_auth'
-                ? '• Phù hợp: Văn thư, hồ sơ bệnh án, đồ dùng không nhạy cảm. Robot sẽ tự mở nắp hộc khi đến nơi.'
+                ? '• Phù hợp: Văn thư, hồ sơ bệnh án, đồ dùng không nhạy cảm.'
                 : authMode === 'qr'
                 ? '• Phù hợp: Thuốc theo toa, vật tư y tế, mẫu bệnh phẩm. Robot quét mã QR từ điện thoại để mở ngăn tủ.'
-                : '• Phù hợp: Thuốc đặc trị, mẫu máu khẩn. Robot nhận diện khuôn mặt người nhận trước khi mở khóa.'}
+                : '• Phù hợp: Thuốc đặc trị, mẫu máu khẩn. Cả người gửi và người nhận cần avatar được Admin duyệt (READY) để robot nhận diện tại Điểm A và Điểm B.'}
             </Text>
 
             {/* Nút Xem chi tiết hướng dẫn (Toggle) */}
@@ -1900,44 +2294,103 @@ export const MissionScreen: React.FC = () => {
               <View style={styles.authGuideDetailBox}>
                 <Text style={styles.authGuideDetailText}>
                   {authMode === 'no_auth'
-                    ? '• Robot di chuyển đến phòng nhận và tự động mở nắp hộc chứa hàng.\n• Bất kỳ nhân viên nào tại phòng cũng có thể nhận mà không cần quét mã.\n• Không yêu cầu thao tác bảo mật bổ sung.'
+                    ? '• Hệ thống mặc định gửi phương thức QR nếu không chọn khuôn mặt.\n• Thực hiện xác nhận theo từng bước hiển thị trên ứng dụng.'
                     : authMode === 'qr'
-                    ? '• Hộc chứa hàng được robot khóa chặt bằng chốt Servo điện tử.\n• Sau khi tạo nhiệm vụ hoặc khi robot đến nơi, Staff App sẽ hiển thị mã QR trên màn hình.\n• Đưa mã QR trước camera robot để mở khóa Servo và lấy hàng.'
-                    : '• Mức độ bảo mật cao nhất: Camera robot sẽ nhận diện khuôn mặt người nhận đã đăng ký trước khi mở hộc.\n• Đảm bảo bàn giao chính xác người được phân công trực tiếp.'}
+                    ? '• Hộc chứa hàng được robot khóa chặt bằng chốt Servo điện tử.\n• Khi robot đến nơi, Staff App sẽ hiển thị mã QR trên màn hình.\n• Đưa mã QR trước camera robot để mở khóa Servo và lấy hàng.'
+                    : '• Cả người gửi và người nhận phải có ảnh đại diện được Admin duyệt (READY).\n• Khi robot tới Điểm A (người gửi) và Điểm B (người nhận), người được phân công đứng trước Camera Robot để mở khóa Servo (1–1 với avatar BE chọn).'}
                 </Text>
               </View>
             )}
 
-            {/* Box chụp / xác minh khuôn mặt người nhận khi chọn mode face */}
+            {/* Trạng thái sẵn sàng khuôn mặt từ BE (GET /api/v1/staff/{accountId}/face-status) */}
             {authMode === 'face' && (
               <View style={styles.faceVerificationBox}>
-                {faceVerified ? (
-                  <View style={styles.faceVerifiedSuccess}>
-                    <CheckCircle2 size={20} color="#059669" />
+                <View style={styles.faceReadinessPanel}>
+                  <View style={styles.faceReadinessHeader}>
                     <View style={styles.flex}>
-                      <Text style={styles.faceVerifiedTitle}>Đã xác minh khuôn mặt người nhận</Text>
-                      <Text style={styles.faceVerifiedSub}>
-                        {receiver ? `Người nhận: ${receiver}` : 'Đã đăng ký nhận diện khuôn mặt cho chuyến giao này'}
+                      <Text style={styles.faceReadinessHeading}>Trạng thái khuôn mặt (BE Face Status)</Text>
+                      <Text style={styles.faceReadinessSub}>
+                        Cả người gửi và người nhận cần trạng thái READY trước khi tạo đơn
                       </Text>
                     </View>
                     <TouchableOpacity
-                      style={styles.retakeButton}
-                      onPress={() => setShowFaceScan(true)}
-                      activeOpacity={0.8}
+                      style={styles.smallButton}
+                      disabled={isLoadingFaceStatus}
+                      onPress={() => {
+                        void refreshFaceReadiness(true);
+                      }}
                     >
-                      <Text style={styles.retakeButtonText}>Chụp lại</Text>
+                      {isLoadingFaceStatus ? (
+                        <ActivityIndicator size="small" color={Colors.primary} />
+                      ) : (
+                        <RefreshCw size={15} color={Colors.primary} />
+                      )}
+                      <Text style={styles.link}>Làm mới</Text>
                     </TouchableOpacity>
                   </View>
-                ) : (
-                  <TouchableOpacity
-                    style={styles.faceScanButton}
-                    onPress={() => setShowFaceScan(true)}
-                    activeOpacity={0.85}
+
+                  {[
+                    { title: 'Người gửi (Điểm A)', item: faceReadiness.sender },
+                    { title: 'Người nhận (Điểm B)', item: faceReadiness.receiver },
+                  ].map((row) => (
+                    <View key={row.title} style={styles.faceParticipantRow}>
+                      <View style={styles.faceParticipantTop}>
+                        <Text style={styles.faceParticipantRole}>{row.title}</Text>
+                        <View
+                          style={[
+                            styles.faceStatusPill,
+                            row.item?.ready
+                              ? styles.faceStatusPillReady
+                              : row.item
+                              ? styles.faceStatusPillWarn
+                              : styles.faceStatusPillMuted,
+                          ]}
+                        >
+                          <Text
+                            style={[
+                              styles.faceStatusPillText,
+                              row.item?.ready
+                                ? styles.faceStatusPillTextReady
+                                : row.item
+                                ? styles.faceStatusPillTextWarn
+                                : styles.faceStatusPillTextMuted,
+                            ]}
+                          >
+                            {row.item ? `${row.item.statusLabel} · ${row.item.status}` : 'Chưa chọn'}
+                          </Text>
+                        </View>
+                      </View>
+                      <Text style={styles.faceParticipantGuidance}>
+                        {row.item
+                          ? row.item.guidance
+                          : 'Vui lòng chọn nhân viên nhận hàng ở Nhóm 3 để kiểm tra trạng thái khuôn mặt.'}
+                      </Text>
+                    </View>
+                  ))}
+
+                  <View
+                    style={[
+                      styles.faceReadinessBanner,
+                      faceReadiness.ready
+                        ? styles.faceVerifiedSuccess
+                        : styles.submitWarningBox,
+                    ]}
                   >
-                    <Camera size={18} color="#FFFFFF" />
-                    <Text style={styles.faceScanButtonText}>Chụp ảnh / Quét khuôn mặt người nhận</Text>
-                  </TouchableOpacity>
-                )}
+                    {faceReadiness.ready ? (
+                      <CheckCircle2 size={18} color="#059669" />
+                    ) : (
+                      <AlertCircle size={16} color="#D97706" />
+                    )}
+                    <Text
+                      style={[
+                        faceReadiness.ready ? styles.faceVerifiedTitle : styles.submitWarningText,
+                        { flex: 1 },
+                      ]}
+                    >
+                      {faceReadiness.summaryMessage}
+                    </Text>
+                  </View>
+                </View>
               </View>
             )}
           </View>
@@ -2203,7 +2656,7 @@ export const MissionScreen: React.FC = () => {
             </View>
 
             {/* Dòng cảnh báo nếu form chưa hợp lệ */}
-            {!attemptRef.current && !!submitValidationMessage && (
+            {!hasMatchingPendingAttempt && !!submitValidationMessage && (
               <View style={styles.submitWarningBox}>
                 <AlertCircle size={14} color="#D97706" />
                 <Text style={styles.submitWarningText}>{submitValidationMessage}</Text>
@@ -2228,10 +2681,9 @@ export const MissionScreen: React.FC = () => {
                 <>
                   <ArrowRight size={18} color="#FFFFFF" strokeWidth={2.5} />
                   <Text style={styles.submitButtonText}>
-                    {pendingDeliveryLabel ||
-                      (attemptRef.current
-                        ? 'Thử lại yêu cầu'
-                        : 'Tạo nhiệm vụ giao hàng')}
+                    {hasMatchingPendingAttempt
+                      ? pendingDeliveryLabel || 'Thử lại yêu cầu'
+                      : 'Tạo nhiệm vụ giao hàng'}
                   </Text>
                 </>
               )}
@@ -2239,7 +2691,7 @@ export const MissionScreen: React.FC = () => {
           </View>
         </View>
       </ScrollView>
-      {scan && (
+      {scan && !isFaceJob && (
         <QRScannerModal
           key={scan.jobId + scan.stepId + scan.accountId}
           jobId={scan.jobId}
@@ -2258,15 +2710,30 @@ export const MissionScreen: React.FC = () => {
           onVerify={raw => verifyDeliveryQr(scan, raw)}
         />
       )}
-      <FaceScanModal
-        visible={showFaceScan}
-        receiverName={receiver || 'Người nhận'}
-        onClose={() => setShowFaceScan(false)}
-        onConfirm={() => {
-          setFaceVerified(true);
-          setShowFaceScan(false);
-        }}
-      />
+      {faceMonitorContext && (
+        <FaceScanModal
+          visible={Boolean(faceMonitorContext)}
+          jobId={faceMonitorContext.jobId}
+          jobCode={activeJob?.jobCode || faceMonitorContext.jobId}
+          stepId={faceMonitorContext.stepId}
+          purpose={faceMonitorContext.purpose}
+          assignedAccountId={faceMonitorContext.accountId}
+          personName={faceRuntimeState?.expectedPersonName}
+          receiverName={snapshot?.delivery?.recipientName || receiver || 'Nhân viên được phân công'}
+          jobSnapshot={activeJob}
+          deliverySnapshot={snapshot?.delivery}
+          onRefreshJob={async (id) => {
+            await refreshSelectedJob(id);
+          }}
+          onClose={() => {
+            setFaceMonitorContext(null);
+            if (activeJob?.jobId) {
+              void refreshSelectedJob(activeJob.jobId).catch(() => {});
+            }
+          }}
+          onFaceVerified={() => handleFaceVerifiedRedirect(faceMonitorContext)}
+        />
+      )}
 
       {/* Bottom Sheet chọn phương thức giao nhận */}
       <MobileBottomSheet
@@ -2295,8 +2762,8 @@ export const MissionScreen: React.FC = () => {
             },
             {
               id: 'face' as const,
-              title: '3. Xác thực khuôn mặt (Face ID)',
-              sub: 'Bảo mật sinh trắc học cao nhất. Robot nhận diện khuôn mặt người nhận trước khi mở khóa.',
+              title: '3. Xác thực khuôn mặt (Camera Robot)',
+              sub: 'Sinh trắc học 1–1 qua camera robot cho người gửi và người nhận (yêu cầu avatar READY).',
               icon: Camera,
               color: '#D97706',
               bg: Colors.warningSurface,
@@ -3523,5 +3990,133 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     borderWidth: 1.5,
     borderColor: '#D4D4D8',
+  },
+  jobItemMethodBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 10,
+  },
+  jobItemMethodBadgeFace: {
+    backgroundColor: Colors.warningSurface,
+  },
+  jobItemMethodBadgeQr: {
+    backgroundColor: Colors.primaryLight,
+  },
+  jobItemMethodBadgeText: {
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  jobItemMethodBadgeTextFace: {
+    color: '#B45309',
+  },
+  jobItemMethodBadgeTextQr: {
+    color: '#0369A1',
+  },
+  faceRuntimeCard: {
+    backgroundColor: '#F0F9FF',
+    borderWidth: 1.5,
+    borderColor: '#7DD3FC',
+    borderRadius: 14,
+    padding: 14,
+    gap: 8,
+  },
+  faceRuntimeCardWarn: {
+    backgroundColor: '#FEF2F2',
+    borderColor: '#FCA5A5',
+  },
+  faceRuntimeHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  faceRuntimeTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: Colors.textPrimary,
+    flex: 1,
+  },
+  faceRuntimeActor: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#0369A1',
+  },
+  faceRuntimeMessage: {
+    fontSize: 12,
+    lineHeight: 18,
+    color: Colors.textSecondary,
+  },
+  faceRuntimeTimer: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#B45309',
+  },
+  faceRuntimeActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 4,
+  },
+  faceReadinessPanel: {
+    backgroundColor: Colors.surfaceMuted,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    padding: 14,
+    gap: 10,
+  },
+  faceReadinessHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  faceReadinessHeading: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: Colors.textPrimary,
+  },
+  faceReadinessSub: {
+    fontSize: 11,
+    color: Colors.textSecondary,
+    marginTop: 2,
+  },
+  faceParticipantRow: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    padding: 10,
+    gap: 4,
+  },
+  faceParticipantTop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  faceParticipantRole: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: Colors.textPrimary,
+  },
+  faceStatusPill: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 999,
+  },
+  faceStatusPillReady: { backgroundColor: Colors.successSurface },
+  faceStatusPillWarn: { backgroundColor: Colors.warningSurface },
+  faceStatusPillMuted: { backgroundColor: Colors.surfaceMuted },
+  faceStatusPillText: { fontSize: 10, fontWeight: '700' },
+  faceStatusPillTextReady: { color: Colors.successText },
+  faceStatusPillTextWarn: { color: '#B45309' },
+  faceStatusPillTextMuted: { color: Colors.textSecondary },
+  faceParticipantGuidance: {
+    fontSize: 11,
+    color: Colors.textSecondary,
+    lineHeight: 16,
+  },
+  faceReadinessBanner: {
+    marginTop: 2,
   },
 });
